@@ -23,8 +23,9 @@ function fixture() {
     CREATE TABLE indents(id INTEGER PRIMARY KEY, site_name TEXT, raised_by_name TEXT, created_by INTEGER, indent_number TEXT);
     CREATE TABLE item_master(id INTEGER PRIMARY KEY, item_name TEXT, item_code TEXT, type TEXT, department TEXT, uom TEXT, size TEXT, specification TEXT);
     CREATE TABLE indent_items(id INTEGER PRIMARY KEY, indent_id INTEGER, item_master_id INTEGER, item_type TEXT, description TEXT, unit TEXT, quantity REAL, rate REAL);
-    CREATE TABLE vendor_pos(id INTEGER PRIMARY KEY, indent_id INTEGER);
-    CREATE TABLE vendor_po_items(id INTEGER PRIMARY KEY, vendor_po_id INTEGER, indent_item_id INTEGER);
+    CREATE TABLE vendor_pos(id INTEGER PRIMARY KEY, indent_id INTEGER, cancelled INTEGER DEFAULT 0);
+    CREATE TABLE vendor_po_items(id INTEGER PRIMARY KEY, vendor_po_id INTEGER, indent_item_id INTEGER, rate REAL DEFAULT 0);
+    CREATE TABLE indent_item_rates(id INTEGER PRIMARY KEY, indent_item_id INTEGER, final_rate REAL, status TEXT);
     CREATE TABLE delivery_notes(id INTEGER PRIMARY KEY AUTOINCREMENT, indent_id INTEGER, vendor_po_id INTEGER, source TEXT, document_type TEXT DEFAULT 'challan', is_draft INTEGER DEFAULT 0, status TEXT DEFAULT 'pending', items_json TEXT, delivery_date TEXT, document_number TEXT);
     CREATE TABLE tools(id INTEGER PRIMARY KEY, item_master_id INTEGER, tool_code TEXT UNIQUE, serial_no TEXT, name TEXT, category TEXT, quantity REAL CHECK(quantity > 0), unit TEXT, purchase_price REAL, purchase_date TEXT, status TEXT, condition TEXT, current_site_id INTEGER REFERENCES sites(id), current_user_id INTEGER REFERENCES users(id), created_by INTEGER, notes TEXT);
     CREATE TABLE tool_movements(id INTEGER PRIMARY KEY, tool_id INTEGER REFERENCES tools(id), action TEXT, to_site_id INTEGER, to_user_id INTEGER, condition_at_action TEXT, notes TEXT, created_by INTEGER);
@@ -33,8 +34,8 @@ function fixture() {
     INSERT INTO indents VALUES(1,'Site A','Engineer',1,'IND-1');
     INSERT INTO item_master VALUES(1,'Drill','R001','RGP','ELE','Nos',NULL,NULL),(2,'Cable','C002','CONSUMABLE','ELE','Mtr',NULL,NULL);
     INSERT INTO indent_items VALUES(1,1,1,'RGP','Drill','Nos',10,125),(2,1,2,'CONSUMABLE','Cable','Mtr',20,10);
-    INSERT INTO vendor_pos VALUES(1,1);
-    INSERT INTO vendor_po_items VALUES(1,1,1);
+    INSERT INTO vendor_pos(id,indent_id) VALUES(1,1);
+    INSERT INTO vendor_po_items(id,vendor_po_id,indent_item_id) VALUES(1,1,1);
   `);
   return db;
 }
@@ -168,5 +169,66 @@ test('a failed movement insert rolls back tool creation and can safely retry', (
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tools').get().n, 0);
   db.exec('DROP TRIGGER fail_issue');
   assert.equal(drainRgpToolsSync(db, { retry: true }).imported, 1);
+  db.close();
+});
+
+test('zero-rate RGP gate pass imports using its exact purchase line and retries without duplicates', () => {
+  const db = fixture();
+  db.exec('UPDATE indent_items SET rate=0; UPDATE vendor_po_items SET rate=1600');
+  challan(db);
+  initializeRgpToolsSync(db);
+  assert.equal(drainRgpToolsSync(db).imported, 1);
+  const tool = db.prepare('SELECT * FROM tools').get();
+  assert.equal(tool.purchase_price, 4800);
+  assert.match(tool.notes, /Vendor PO rate: 1600/);
+  assert.equal(drainRgpToolsSync(db, { retry: true }).imported, 1);
+  db.close();
+});
+
+test('purchase-rate correction automatically queues an unresolved challan', () => {
+  const db = fixture(); initializeRgpToolsSync(db);
+  db.exec('UPDATE indent_items SET rate=0'); challan(db);
+  assert.equal(drainRgpToolsSync(db).imported, 0);
+  db.exec('UPDATE vendor_po_items SET rate=1600');
+  assert.equal(drainRgpToolsSync(db).imported, 1);
+  db.exec('UPDATE vendor_po_items SET rate=1700');
+  drainRgpToolsSync(db);
+  assert.equal(db.prepare('SELECT purchase_price FROM tools').get().purchase_price, 4800);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM tool_movements').get().n, 1);
+  db.close();
+});
+
+test('finalized rates support challans without a purchase order, but quotations do not', () => {
+  const db = fixture(); initializeRgpToolsSync(db);
+  db.exec("UPDATE indent_items SET rate=0; DELETE FROM vendor_po_items; INSERT INTO indent_item_rates VALUES(1,1,150,'quoted')");
+  challan(db);
+  assert.equal(drainRgpToolsSync(db).imported, 0);
+  db.exec("UPDATE indent_item_rates SET status='finalized'");
+  assert.equal(drainRgpToolsSync(db).imported, 1);
+  assert.match(db.prepare('SELECT notes FROM tools').get().notes, /Finalized vendor rate: 150/);
+  db.close();
+});
+
+test('conflicting purchase prices require an explicit PO link and cancelled POs are excluded', () => {
+  const db = fixture(); initializeRgpToolsSync(db);
+  db.exec('UPDATE indent_items SET rate=0; UPDATE vendor_po_items SET rate=100; INSERT INTO vendor_pos VALUES(2,1,0); INSERT INTO vendor_po_items VALUES(2,2,1,200)');
+  const id = challan(db);
+  assert.match(drainRgpToolsSync(db).review[0].reason, /ambiguous/);
+  db.prepare('UPDATE delivery_notes SET vendor_po_id=1 WHERE id=?').run(id);
+  assert.equal(drainRgpToolsSync(db).imported, 1);
+  assert.equal(db.prepare('SELECT purchase_price FROM tools').get().purchase_price, 300);
+  db.exec('UPDATE vendor_pos SET cancelled=1 WHERE id=2');
+  challan(db, { document_number: 'RGP/2' });
+  assert.equal(drainRgpToolsSync(db).imported, 2);
+  db.close();
+});
+
+test('deployment retries historical missing-cost reviews using the purchase rate', () => {
+  const db = fixture(); initializeRgpToolsSync(db);
+  db.exec('UPDATE indent_items SET rate=0; UPDATE vendor_po_items SET rate=1600');
+  const id = challan(db);
+  db.prepare("UPDATE rgp_tool_sync SET state='review',reason='Line 1: recorded asset cost is missing; fill the indent rate' WHERE delivery_note_id=?").run(id);
+  initializeRgpToolsSync(db);
+  assert.equal(drainRgpToolsSync(db).imported, 1);
   db.close();
 });

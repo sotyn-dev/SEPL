@@ -38,7 +38,42 @@ function initializeRgpToolsSync(db) {
     // Older deployments held distinct challans when their item already existed.
     // A challan line is the import identity, not the item-master entry.
     db.exec("UPDATE rgp_tool_sync SET state='pending', reason=NULL WHERE state='review' AND reason LIKE 'Possible existing asset (%'");
+    // A purchase rate can be finalized after the gate pass was created. Queue
+    // unresolved documents when their dependencies change, not only on DN edits.
+    for (const table of ['indent_items', 'indent_item_rates', 'vendor_po_items', 'vendor_pos', 'indents', 'sites', 'users']) {
+      for (const event of ['INSERT', 'UPDATE', 'DELETE']) {
+        db.exec(`CREATE TRIGGER IF NOT EXISTS rgp_tools_${table}_${event.toLowerCase()}
+          AFTER ${event} ON ${table} BEGIN
+            UPDATE rgp_tool_sync SET state='pending', reason=NULL
+            WHERE state='review' AND NOT EXISTS (
+              SELECT 1 FROM rgp_tool_links l WHERE l.delivery_note_id=rgp_tool_sync.delivery_note_id);
+          END;`);
+      }
+    }
+    db.exec(`UPDATE rgp_tool_sync SET state='pending', reason=NULL
+      WHERE state='review' AND reason LIKE '%recorded asset cost is missing%'
+      AND NOT EXISTS (SELECT 1 FROM rgp_tool_links l WHERE l.delivery_note_id=rgp_tool_sync.delivery_note_id)`);
   })();
+}
+
+function recordedCost(db, dn, line, item) {
+  if (positive(line.rate)) return { rate: Number(line.rate), rate_source: 'Challan rate' };
+  if (positive(item.rate)) return { rate: Number(item.rate), rate_source: 'Indent rate' };
+  // Follow exact indent-item links; never price historical assets from today's
+  // master price or choose arbitrarily between differently priced purchases.
+  const purchases = db.prepare(`SELECT vpi.rate FROM vendor_po_items vpi
+    JOIN vendor_pos vp ON vp.id=vpi.vendor_po_id
+    WHERE vpi.indent_item_id=? AND COALESCE(vp.cancelled,0)=0
+      AND (? IS NULL OR vp.id=?)`).all(item.id, dn.vendor_po_id || null, dn.vendor_po_id || null);
+  const rates = [...new Set(purchases.map(p => Number(p.rate)))];
+  if (rates.length === 1 && positive(rates[0])) return { rate: rates[0], rate_source: 'Vendor PO rate' };
+  if (purchases.length) throw new Error('Purchase cost is missing or ambiguous; check the linked Vendor PO rates');
+  const finalized = db.prepare(`SELECT final_rate, status FROM indent_item_rates
+    WHERE indent_item_id=? ORDER BY id DESC LIMIT 1`).get(item.id);
+  if (finalized?.status === 'finalized' && positive(finalized.final_rate)) {
+    return { rate: Number(finalized.final_rate), rate_source: 'Finalized vendor rate' };
+  }
+  throw new Error('recorded asset cost is missing; finalize the vendor rate or fill the indent rate');
 }
 
 function resolveLines(db, dn) {
@@ -82,10 +117,10 @@ function resolveLines(db, dn) {
     if (!item.item_master_id || norm(item.master_type) !== 'rgp') throw new Error(`Line ${index + 1}: link the indent item to an RGP Item Master entry`);
     if (!clean(indent.site_name) || sites.length !== 1) throw new Error('Indent site is missing or matches multiple sites');
     if (!clean(indent.raised_by_name) || users.length !== 1) throw new Error('Indent Raised By is missing or matches multiple employees');
-    // RGP challans intentionally carry a zero billing rate. Use the recorded
-    // indent cost in that case, never today's item-master price for old assets.
-    const rate = positive(line.rate) ? Number(line.rate) : Number(item.rate);
-    if (!positive(rate)) throw new Error(`Line ${index + 1}: recorded asset cost is missing; fill the indent rate`);
+    let cost;
+    try { cost = recordedCost(db, dn, line, item); }
+    catch (error) { throw new Error(`Line ${index + 1}: ${error.message}`); }
+    const { rate, rate_source } = cost;
     if (!Number.isFinite(quantity * rate)) throw new Error(`Line ${index + 1}: invalid asset value`);
     const unit = clean(line.unit || item.unit || item.uom);
     if (!unit || (clean(item.unit) && norm(unit) !== norm(item.unit))) throw new Error(`Line ${index + 1}: check dispatch unit against indent unit`);
@@ -95,7 +130,7 @@ function resolveLines(db, dn) {
       site_id: sites[0].id, user_id: users[0].id, created_by: indent.created_by,
       date: dn.delivery_date || null, indent_number: indent.indent_number,
       document_number: dn.document_number, raised_by: indent.raised_by_name,
-      site_name: indent.site_name, rate_source: positive(line.rate) ? 'Challan rate' : 'Indent rate', rate });
+      site_name: indent.site_name, rate_source, rate });
   }
   return result;
 }
