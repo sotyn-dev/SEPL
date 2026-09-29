@@ -234,6 +234,59 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
 table {
   @apply w-full text-sm;
 }
+
+/* Keep every delegation column on laptop screens; narrow screens can scroll
+   from the top of the list without visiting its last row. */
+.delegation-task-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 900px;
+}
+.delegation-task-table th,
+.delegation-task-table td {
+  padding: 10px 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.delegation-task-table th {
+  letter-spacing: 0;
+}
+.delegation-task-table td :is(span, a, button, div) {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.delegation-task-table td .flex {
+  flex-wrap: wrap;
+}
+.delegation-task-table td svg {
+  flex-shrink: 0;
+}
+.delegation-task-table td:nth-child(7) > span {
+  display: inline-flex;
+  padding: 2px 4px;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.delegation-task-table td .whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+.delegation-top-scroll {
+  height: 18px;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+.delegation-top-scroll::-webkit-scrollbar {
+  height: 14px;
+}
+.delegation-top-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+.delegation-top-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border: 2px solid #f1f5f9;
+  border-radius: 8px;
+}
 thead {
   @apply bg-gradient-to-r from-gray-50 to-gray-100/50;
 }

@@ -37,6 +37,24 @@ export default function Delegation() {
   // for anyone.
   const isEA = isAdmin() || canApprove('delegations');
   const [view, setView] = useState('list'); // 'list' | 'dashboard'
+  const taskScrollRef = useRef(null);
+  const taskTopScrollRef = useRef(null);
+  const [taskTableWidth, setTaskTableWidth] = useState(0);
+  const [taskTableOverflows, setTaskTableOverflows] = useState(false);
+  useEffect(() => {
+    const container = taskScrollRef.current;
+    if (!container) return;
+    const measure = () => {
+      setTaskTableWidth(container.scrollWidth);
+      setTaskTableOverflows(container.scrollWidth > container.clientWidth + 1);
+      if (taskTopScrollRef.current) taskTopScrollRef.current.scrollLeft = container.scrollLeft;
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    observer.observe(container.querySelector('table'));
+    measure();
+    return () => observer.disconnect();
+  }, [view]);
   const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
   // Several statuses at once (mam 2026-09-12) — e.g. Pending + Rejected is
@@ -671,10 +689,22 @@ export default function Delegation() {
           Due / Status / Upload Proof / Extension / Actions.
           Shown on ALL screen sizes per mam's request (2026-04-23). On phones
           the parent scrolls horizontally so every column stays accessible. */}
-      {/* Reverted to the original 10-column table per mam
-          (2026-05-21: "not change delegation like previous"). */}
-      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
-        <table className="text-sm min-w-[1050px]">
+      <div
+        ref={taskTopScrollRef}
+        className={`delegation-top-scroll overflow-x-auto overflow-y-hidden ${taskTableOverflows ? '' : 'hidden'}`}
+        role="region"
+        aria-label="Scroll delegation columns horizontally"
+        tabIndex={0}
+        onScroll={e => { if (taskScrollRef.current) taskScrollRef.current.scrollLeft = e.currentTarget.scrollLeft; }}
+      >
+        <div style={{ width: taskTableWidth, height: 1 }} />
+      </div>
+      <div ref={taskScrollRef} className="card p-0 table-responsive max-h-[70vh] overflow-auto"
+        onScroll={e => { if (taskTopScrollRef.current) taskTopScrollRef.current.scrollLeft = e.currentTarget.scrollLeft; }}>
+        <table className="delegation-task-table text-sm">
+          <colgroup>
+            {[4, 7, 18, 8, 9, 11, 8, 10, 8, 11, 6].map((width, i) => <col key={i} style={{ width: `${width}%` }} />)}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -693,7 +723,7 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+            {visibleTasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
             {tasksPager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
@@ -703,7 +733,7 @@ export default function Delegation() {
                 <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
                   <td className="text-center text-xs text-gray-500 font-medium">{(tasksPager.page - 1) * tasksPager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
-                  <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
+                  <td className="align-top">
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
                       {cleanDesc(t.description || t.title)}
                     </div>
@@ -722,7 +752,7 @@ export default function Delegation() {
                         type="text"
                         defaultValue={t.project_name || ''}
                         placeholder="— add —"
-                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-32 focus:outline-none"
+                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-full min-w-0 focus:outline-none"
                         onBlur={e => saveProject(t, e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = t.project_name || ''; e.target.blur(); } }}
                         title="Click to edit project"
@@ -833,7 +863,7 @@ export default function Delegation() {
                         defaultValue={t.followup_remarks || ''}
                         placeholder="— add note —"
                         rows={2}
-                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-40 resize-y focus:outline-none align-top"
+                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-full min-w-0 resize-y focus:outline-none align-top"
                         onBlur={e => saveFollowup(t, e.target.value)}
                         onKeyDown={e => { if (e.key === 'Escape') { e.target.value = t.followup_remarks || ''; e.target.blur(); } }}
                         title="EA followup note for MD — does not affect task status"
@@ -843,7 +873,7 @@ export default function Delegation() {
                     )}
                   </td>
                   <td>
-                    <div className="flex gap-1 items-center">
+                    <div className="flex flex-wrap gap-1 items-center">
                       {isAdmin() && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
