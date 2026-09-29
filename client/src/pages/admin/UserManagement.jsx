@@ -12,6 +12,10 @@ import DataCompletion from '../../components/DataCompletion';
 import StaffTypeFilter from '../../components/StaffTypeFilter';
 import { STAFF_TYPES, staffTypeLabel, matchesStaffType } from '../../utils/staffType';
 
+const passwordChangedLabel = value => value
+  ? new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+  : 'No change recorded';
+
 export default function UserManagement() {
   const { user: me, markTotpEnabled } = useAuth();
   const [users, setUsers] = useState([]);
@@ -362,7 +366,14 @@ export default function UserManagement() {
                 <div>
                   <span className="text-[9px] uppercase text-gray-400 block">Department</span>
                   <span className="font-medium truncate block">{u.department || '—'}</span>
-                  <span className="text-xs text-gray-500 block">{staffTypeLabel(u.staff_type)}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase text-gray-400 block">Staff Type</span>
+                  <span className="font-medium">{staffTypeLabel(u.staff_type)}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase text-gray-400 block">Password changed</span>
+                  <span>{passwordChangedLabel(u.password_changed_at)}</span>
                 </div>
                 {u.phone && (
                   <div className="col-span-2">
@@ -422,7 +433,7 @@ export default function UserManagement() {
         <div className="hidden md:block overflow-x-auto">
           <table>
             <thead>
-              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department / Staff Type</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
+              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Staff Type</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th title="Future password changes only. Passwords are securely hashed and cannot be viewed.">Password changed</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {pg.rows.map(u => (
@@ -451,9 +462,11 @@ export default function UserManagement() {
                       )) : <span className="text-xs text-gray-400">No roles</span>}
                     </div>
                   </td>
-                  <td>{u.department}<div className="text-xs text-gray-500">{staffTypeLabel(u.staff_type)}</div></td>
+                  <td>{u.department}</td>
+                  <td><span className={`badge ${u.staff_type === 'blue_collar' ? 'badge-blue' : 'badge-gray'} whitespace-nowrap`}>{staffTypeLabel(u.staff_type)}</span></td>
                   <td><HrIdentity rec={u} variant="stacked" /></td>
                   <td>{u.active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
+                  <td className="text-xs" title="Future changes are recorded here. Use Reset password to issue a new password.">{passwordChangedLabel(u.password_changed_at)}</td>
                   <td>
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(u)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>

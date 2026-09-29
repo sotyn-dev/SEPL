@@ -326,6 +326,7 @@ router.get('/users', authMiddleware, (req, res) => {
   // name-match fallback, so an unlinked person surfaces as blank (a cleanup signal).
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.staff_type, u.active, u.avatar_url,
+           ${req.user.role === 'admin' ? 'u.password_changed_at' : 'NULL'} AS password_changed_at,
            COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
            COALESCE((SELECT enabled FROM user_totp WHERE user_id = u.id), 0) as totp_enabled,
            COALESCE((SELECT required FROM user_totp WHERE user_id = u.id), 0) as totp_required,

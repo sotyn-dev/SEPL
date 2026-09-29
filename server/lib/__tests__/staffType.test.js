@@ -4,16 +4,30 @@ const Database = require('better-sqlite3');
 const Module = require('module');
 const express = require('express');
 const { ensureStaffTypeColumn, normalizeStaffType } = require('../staffType');
+const { ensurePasswordChangeMetadata } = require('../passwordChangeMetadata');
+const bcrypt = require('bcryptjs');
+
+test('existing explicit staff types survive the unspecified-user backfill', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec("CREATE TABLE users(id INTEGER PRIMARY KEY,staff_type TEXT); INSERT INTO users VALUES(1,'blue_collar'),(2,'white_collar'),(3,NULL),(4,'')");
+    ensureStaffTypeColumn(db);
+    assert.deepEqual(db.prepare('SELECT staff_type FROM users ORDER BY id').all().map(r=>r.staff_type), ['blue_collar','white_collar','white_collar','white_collar']);
+  } finally { db.close(); }
+});
 
 test('staff-type migration preserves existing users and is repeatable', () => {
   const db = new Database(':memory:');
   try {
     db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, role TEXT); INSERT INTO users VALUES (1,'Existing','admin')");
     ensureStaffTypeColumn(db);
-    assert.deepEqual(db.prepare('SELECT * FROM users').get(), { id: 1, name: 'Existing', role: 'admin', staff_type: null });
+    assert.deepEqual(db.prepare('SELECT * FROM users').get(), { id: 1, name: 'Existing', role: 'admin', staff_type: 'white_collar' });
     db.prepare('UPDATE users SET staff_type=?').run('blue_collar');
     ensureStaffTypeColumn(db);
     assert.equal(db.prepare('SELECT staff_type FROM users').get().staff_type, 'blue_collar');
+    db.prepare('UPDATE users SET staff_type=NULL').run();
+    ensureStaffTypeColumn(db);
+    assert.equal(db.prepare('SELECT staff_type FROM users').get().staff_type, null);
     assert.throws(() => db.prepare('UPDATE users SET staff_type=?').run('admin'));
     for (const value of [undefined, null, '']) assert.equal(normalizeStaffType(value), null);
     for (const value of ['admin', 'constructor', {}, [], 7]) assert.throws(() => normalizeStaffType(value));
@@ -30,6 +44,7 @@ test('admin can create, change and clear staff type; omitted type and permission
     INSERT INTO users(id,name,email,role) VALUES(1,'Admin','admin@example.test','admin');
     INSERT INTO roles VALUES(5,'Test role');`);
   ensureStaffTypeColumn(db);
+  ensurePasswordChangeMetadata(db);
   const original = Module._load;
   Module._load = function(name, parent, ...rest) {
     if (parent && /(?:middleware|routes)[\\/]auth\.js$/.test(parent.filename) && name === '../db/schema') return { getDb: () => db };
@@ -72,5 +87,12 @@ test('admin can create, change and clear staff type; omitted type and permission
     token = auth.generateToken(db.prepare('SELECT * FROM users WHERE id=?').get(id));
     assert.equal((await call('PUT', `/users/${id}`, { ...edit, staff_type: 'blue_collar' })).status, 403);
     assert.equal((await call('POST', '/register', { ...form, email: 'forbidden@example.test' })).status, 403);
+    assert.equal((await call('POST', '/change-password', { current_password: 'wrong', new_password: 'New-test-password!' })).status, 401);
+    assert.equal(db.prepare('SELECT password_changed_at FROM users WHERE id=?').get(id).password_changed_at, null);
+    assert.equal((await call('POST', '/change-password', { current_password: form.password, new_password: 'New-test-password!' })).status, 200);
+    const changed = db.prepare('SELECT password,password_changed_at FROM users WHERE id=?').get(id);
+    assert.ok(changed.password_changed_at);
+    assert.notEqual(changed.password, 'New-test-password!');
+    assert.ok(bcrypt.compareSync('New-test-password!', changed.password));
   } finally { await new Promise(resolve => server.close(resolve)); db.close(); }
 });
