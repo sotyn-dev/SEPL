@@ -5,7 +5,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2, FiDownload, FiUpload } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2, FiDownload, FiUpload, FiLink, FiPaperclip, FiExternalLink, FiX } from 'react-icons/fi';
 
 // Price Required — workflow:
 //   1. Site engineer raises a request for a new item not yet in Item Master.
@@ -25,7 +25,13 @@ export default function PriceRequired() {
 
   const [createModal, setCreateModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
+  const [form, setForm] = useState({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '', sheet_url: '' });
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [existingAttachment, setExistingAttachment] = useState(null);
+  const [removeAttachment, setRemoveAttachment] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const fileInputRef = useRef(null);
+
   // Distinct departments pulled from Item Master so the dropdown matches the
   // catalog (CIVIL / ELE / FF / GEN / etc.). Auto-fetched when the page loads.
   const [departments, setDepartments] = useState([]);
@@ -41,8 +47,8 @@ export default function PriceRequired() {
   };
   useEffect(() => {
     load();
-    api.get('/procurement/vendors').then(r => setVendors((r.data || []).map(v => ({ ...v, label: v.name })))).catch(() => {});
-    api.get('/collections/sites').then(r => setSites((r.data || []).map(s => ({ ...s, label: s.name })))).catch(() => {});
+    api.get('/procurement/vendors').then(r => setVendors((r.data || []).map(v => ({ ...v, label: v.name })))).catch(() => { });
+    api.get('/collections/sites').then(r => setSites((r.data || []).map(s => ({ ...s, label: s.name })))).catch(() => { });
     // Pull every distinct department from Item Master and offer them as
     // options. New entries can also be typed (the input is a datalist combo).
     api.get('/item-master/dropdown').then(r => {
@@ -91,19 +97,43 @@ export default function PriceRequired() {
   const submit = async (e) => {
     e.preventDefault();
     if (!form.item_name || !form.item_name.trim()) return toast.error('Item name is required');
+    if (!form.department || !form.department.trim()) return toast.error('Department is required');
+    setSubmitting(true);
     try {
+      const fd = new FormData();
+      Object.keys(form).forEach(k => {
+        if (form[k] !== undefined && form[k] !== null) {
+          fd.append(k, form[k]);
+        }
+      });
+      if (selectedFile) {
+        fd.append('file', selectedFile);
+      }
+      if (removeAttachment) {
+        fd.append('remove_attachment', 'true');
+      }
+
+      const config = { headers: { 'Content-Type': 'multipart/form-data' } };
       if (editingId) {
-        await api.put(`/price-requests/${editingId}`, form);
+        await api.put(`/price-requests/${editingId}`, fd, config);
         toast.success('Price request updated');
       } else {
-        await api.post('/price-requests', form);
+        await api.post('/price-requests', fd, config);
         toast.success('Price request raised — purchase team will quote it');
       }
       setCreateModal(false);
       setEditingId(null);
-      setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
+      setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '', sheet_url: '' });
+      setSelectedFile(null);
+      setExistingAttachment(null);
+      setRemoveAttachment(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const openEdit = (r) => {
@@ -118,13 +148,22 @@ export default function PriceRequired() {
       item_type: r.item_type || 'PO',
       department: r.department || '',
       notes: r.notes || '',
+      sheet_url: r.sheet_url || '',
     });
+    setSelectedFile(null);
+    setExistingAttachment(r.attachment_url ? { url: r.attachment_url, name: r.attachment_name || 'Attached file' } : null);
+    setRemoveAttachment(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setCreateModal(true);
   };
 
   const openNew = () => {
     setEditingId(null);
-    setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
+    setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '', sheet_url: '' });
+    setSelectedFile(null);
+    setExistingAttachment(null);
+    setRemoveAttachment(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setCreateModal(true);
   };
 
@@ -172,10 +211,10 @@ export default function PriceRequired() {
 
   const statusBadge = (s) => {
     const map = {
-      open:      'bg-amber-100 text-amber-800 border-amber-200',
-      quoted:    'bg-blue-100 text-blue-800 border-blue-200',
+      open: 'bg-amber-100 text-amber-800 border-amber-200',
+      quoted: 'bg-blue-100 text-blue-800 border-blue-200',
       finalized: 'bg-purple-100 text-purple-800 border-purple-200',
-      added:     'bg-emerald-100 text-emerald-800 border-emerald-200',
+      added: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     };
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${map[s] || ''}`}>{s}</span>;
   };
@@ -235,8 +274,8 @@ export default function PriceRequired() {
           {grouped.map(g => {
             const typeChip = g.item_type === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
               : g.item_type === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
-              : 'bg-red-50 text-red-700 border-red-200';
-            const filledCount = [1,2,3].filter(n => g[`vendor${n}_name`] && +g[`vendor${n}_rate`] > 0).length;
+                : 'bg-red-50 text-red-700 border-red-200';
+            const filledCount = [1, 2, 3].filter(n => g[`vendor${n}_name`] && +g[`vendor${n}_rate`] > 0).length;
             return (
               <div key={g.anchor_id} className="card p-0 overflow-visible">
                 {/* HEADER — item details + companies + quote progress */}
@@ -260,6 +299,38 @@ export default function PriceRequired() {
                         {g.sites.length ? g.sites.map((s, i) => <span key={i}>{i > 0 && ' · '}📍 {s}</span>) : <span className="text-gray-300">—</span>}
                         {g.request_ids.length > 1 && <span className="text-gray-400 italic ml-2">(merged from {g.request_ids.length})</span>}
                       </div>
+                      {/* Attached Google Sheet links & files */}
+                      {((g.sheet_urls && g.sheet_urls.length > 0) || (g.attachments && g.attachments.length > 0) || g.sheet_url || g.attachment_url) && (
+                        <div className="flex items-center gap-2 flex-wrap mt-2">
+                          {(g.sheet_urls?.length ? g.sheet_urls : (g.sheet_url ? [g.sheet_url] : [])).map((url, i) => (
+                            <a
+                              key={i}
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-xs transition-colors"
+                              title={url}
+                            >
+                              <FiExternalLink size={12} className="text-emerald-600" />
+                              <span>Google Sheet {g.sheet_urls?.length > 1 ? `#${i + 1}` : ''}</span>
+                            </a>
+                          ))}
+                          {(g.attachments?.length ? g.attachments : (g.attachment_url ? [{ url: g.attachment_url, name: g.attachment_name || 'Attachment' }] : [])).map((att, i) => (
+                            <a
+                              key={i}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download
+                              className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-300 px-2 py-0.5 rounded shadow-xs transition-colors"
+                              title={att.name}
+                            >
+                              <FiPaperclip size={12} className="text-blue-600" />
+                              <span className="truncate max-w-[180px]">{att.name || 'Attachment'}</span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-[10px] text-gray-500 uppercase tracking-wide">Quotes filled</div>
@@ -345,7 +416,35 @@ export default function PriceRequired() {
               {requests.map(r => (
                 <tr key={r.id} className="border-t hover:bg-gray-50/60">
                   <td className="px-3 py-2 text-[12px]">{r.site_name || <span className="text-gray-300">—</span>}</td>
-                  <td className="px-3 py-2 font-medium">{r.item_name}<div className="text-[10px] text-gray-400">{r.uom}</div></td>
+                  <td className="px-3 py-2 font-medium">
+                    <div>{r.item_name}</div>
+                    <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                      <span className="text-[10px] text-gray-400 font-normal">{r.uom}</span>
+                      {r.sheet_url && (
+                        <a
+                          href={r.sheet_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded transition-colors"
+                          title={`Open Sheet: ${r.sheet_url}`}
+                        >
+                          <FiExternalLink size={10} /> Sheet
+                        </a>
+                      )}
+                      {r.attachment_url && (
+                        <a
+                          href={r.attachment_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                          className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded transition-colors"
+                          title={`Download: ${r.attachment_name || 'file'}`}
+                        >
+                          <FiPaperclip size={10} /> {r.attachment_name || 'File'}
+                        </a>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-[11px] text-gray-600">{[r.size, r.specification, r.make].filter(Boolean).join(' · ') || <span className="text-gray-300">—</span>}</td>
                   <td className="px-3 py-2"><span className="text-[10px] font-bold uppercase">{r.item_type}</span></td>
                   <td className="px-3 py-2 text-[11px]">{r.raised_by_name || '—'}</td>
@@ -380,7 +479,7 @@ export default function PriceRequired() {
       )}
 
       {/* RAISE MODAL */}
-      <Modal isOpen={createModal} onClose={() => { setCreateModal(false); setEditingId(null); }} title={editingId ? 'Edit Price Request' : 'Raise Price Request'} wide>
+      <Modal isOpen={createModal} onClose={() => { setCreateModal(false); setEditingId(null); setSelectedFile(null); setExistingAttachment(null); setRemoveAttachment(false); }} title={editingId ? 'Edit Price Request' : 'Raise Price Request'} wide>
         <form onSubmit={submit} className="space-y-3">
           <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
             For items NOT yet in the Item Master. Purchase team will collect 3 vendor quotes, pick a final rate, and the item will be added to Master automatically.
@@ -446,14 +545,120 @@ export default function PriceRequired() {
                 {departments.map(d => <option key={d} value={d} />)}
               </datalist>
             </div>
+
+            {/* Google Sheet URL */}
+            <div className="sm:col-span-2">
+              <label className="label flex items-center justify-between">
+                <span>Google Sheet / Reference URL <span className="text-gray-400 font-normal text-[10px]">(optional · paste link)</span></span>
+                {form.sheet_url && (
+                  <a href={form.sheet_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 text-[11px]">
+                    <FiExternalLink size={11} /> Open Link
+                  </a>
+                )}
+              </label>
+              <input
+                type="url"
+                className="input"
+                placeholder="https://docs.google.com/spreadsheets/d/... or any reference link"
+                value={form.sheet_url || ''}
+                onChange={e => setForm({ ...form, sheet_url: e.target.value })}
+              />
+            </div>
+
+            {/* File Upload */}
+            <div className="sm:col-span-2">
+              <label className="label">
+                Upload File / Quotation / BOQ <span className="text-gray-400 font-normal text-[10px]">(optional · Excel, CSV, PDF, Doc, Image up to 25MB)</span>
+              </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.png,.jpg,.jpeg,.webp"
+                className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    if (f.size > 25 * 1024 * 1024) {
+                      toast.error('File size cannot exceed 25 MB');
+                      e.target.value = '';
+                      return;
+                    }
+                    setSelectedFile(f);
+                    setRemoveAttachment(false);
+                  }
+                }}
+              />
+              {selectedFile ? (
+                <div className="flex items-center justify-between p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FiPaperclip className="text-blue-600 flex-shrink-0" size={16} />
+                    <span className="font-medium text-blue-900 truncate">{selectedFile.name}</span>
+                    <span className="text-gray-500 text-[11px]">({(selectedFile.size / 1024).toFixed(0)} KB)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="p-1 text-gray-500 hover:text-red-600 rounded transition-colors"
+                    title="Remove selected file"
+                  >
+                    <FiX size={16} />
+                  </button>
+                </div>
+              ) : existingAttachment && !removeAttachment ? (
+                <div className="flex items-center justify-between p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FiPaperclip className="text-gray-600 flex-shrink-0" size={16} />
+                    <span className="text-gray-500">Current file:</span>
+                    <a
+                      href={existingAttachment.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-blue-600 hover:underline truncate"
+                      download
+                    >
+                      {existingAttachment.name}
+                    </a>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-xs text-blue-600 hover:underline font-medium"
+                    >
+                      Replace
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRemoveAttachment(true)}
+                      className="p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                      title="Remove attachment"
+                    >
+                      <FiX size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-lg p-3 text-center cursor-pointer bg-gray-50/50 hover:bg-blue-50/30 transition-all flex items-center justify-center gap-2 text-xs text-gray-600 group"
+                >
+                  <FiUpload className="text-gray-400 group-hover:text-blue-500 transition-colors" size={16} />
+                  <span>Click to choose an <strong>Excel (.xlsx, .xls)</strong>, <strong>CSV</strong>, <strong>PDF</strong>, or document</span>
+                </div>
+              )}
+            </div>
+
             <div className="sm:col-span-2">
               <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
               <textarea className="input" rows="2" placeholder="Why is this needed? Any urgency?" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
             </div>
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => { setCreateModal(false); setEditingId(null); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">{editingId ? 'Update Request' : 'Submit Request'}</button>
+            <button type="button" onClick={() => { setCreateModal(false); setEditingId(null); setSelectedFile(null); setExistingAttachment(null); setRemoveAttachment(false); }} className="btn btn-secondary">Cancel</button>
+            <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : (editingId ? 'Update Request' : 'Submit Request')}</button>
           </div>
         </form>
       </Modal>

@@ -5,7 +5,7 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload, FiEye } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 export default function Billing() {
@@ -20,6 +20,7 @@ export default function Billing() {
   const [installations, setInstallations] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
+  const [viewMb, setViewMb] = useState(null);
 
   const load = () => {
     api.get('/procurement/sales-bills').then(r => setSalesBills(r.data));
@@ -108,14 +109,42 @@ export default function Billing() {
             <button onClick={() => { setForm({ installation_id: '', bill_number: '', measurements: '', total_amount: 0 }); setModal('mb'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create MB Bill</button>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>Bill No</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Bill No</th><th>Site / Installation</th><th>Source</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {mbBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
-                if (!confirm(`Delete MB bill "${b.bill_number}"?`)) return;
-                try { await api.delete(`/installation/mb-bills/${b.id}`); toast.success('Deleted'); load(); }
-                catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-              }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}</td></tr>))}
-              {mbBills.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-400">No MB bills</td></tr>}
+              {mbBills.map(b => (<tr key={b.id}>
+                <td className="font-medium">{b.bill_number}</td>
+                <td className="text-sm">{b.site_address || (b.installation_id ? `#${b.installation_id}` : '—')}</td>
+                <td>
+                  {b.source === 'auto_dispatch' ? (
+                    <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200 font-mono">
+                      Auto ({b.challan_number || 'Dispatch'})
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-400">Manual</span>
+                  )}
+                </td>
+                <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
+                <td><StatusBadge status={b.status} /></td>
+                <td>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setViewMb(b)}
+                      title="View Measurements"
+                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                    >
+                      <FiEye size={15} />
+                    </button>
+                    {(canDelete('billing') || canDelete('installation')) && (
+                      <button onClick={async () => {
+                        if (!confirm(`Delete MB bill "${b.bill_number}"?`)) return;
+                        try { await api.delete(`/installation/mb-bills/${b.id}`); toast.success('Deleted'); load(); }
+                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>
+                    )}
+                  </div>
+                </td>
+              </tr>))}
+              {mbBills.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No MB bills</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -221,6 +250,51 @@ export default function Billing() {
           <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
+      </Modal>
+      {/* View Measurements Modal (TSK-0823) */}
+      <Modal isOpen={!!viewMb} onClose={() => setViewMb(null)} title={`Measurement Book · ${viewMb?.bill_number || ''}`}>
+        {viewMb && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm bg-gray-50 p-3 rounded border">
+              <div><span className="text-gray-500 block">Site / Address:</span><span className="font-medium">{viewMb.site_address || `Installation #${viewMb.installation_id}`}</span></div>
+              <div><span className="text-gray-500 block">Total Amount:</span><span className="font-semibold text-green-700">₹{Number(viewMb.total_amount || 0).toLocaleString('en-IN')}</span></div>
+              <div><span className="text-gray-500 block">Source:</span><span>{viewMb.source === 'auto_dispatch' ? `Auto from ${viewMb.challan_number || 'Dispatch'}` : 'Manual Entry'}</span></div>
+              <div>
+                <span className="text-gray-500 block mb-1">Status:</span>
+                <select
+                  className="select select-sm text-xs py-1"
+                  value={viewMb.status || 'draft'}
+                  onChange={async (e) => {
+                    const newStatus = e.target.value;
+                    try {
+                      await api.put(`/installation/mb-bills/${viewMb.id}`, { status: newStatus });
+                      toast.success(`Status updated to ${newStatus}`);
+                      setViewMb({ ...viewMb, status: newStatus });
+                      load();
+                    } catch (err) {
+                      toast.error('Failed to update status');
+                    }
+                  }}
+                >
+                  <option value="draft">Draft</option>
+                  <option value="verified">Verified</option>
+                  <option value="approved">Approved</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Measurements & Material Breakdown</label>
+              <pre className="bg-gray-900 text-gray-100 p-3 rounded text-xs font-mono whitespace-pre-wrap max-h-60 overflow-y-auto">
+                {viewMb.measurements || 'No measurement notes entered.'}
+              </pre>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setViewMb(null)} className="btn btn-secondary">Close</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

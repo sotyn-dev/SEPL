@@ -2584,6 +2584,14 @@ router.put('/indents/:id', (req, res) => {
             // from the approval step (mam 2026-06-23).
             storeChallanId = chRes.lastInsertRowid;
 
+            // TSK-0823: Dispatch to MB (installation) auto
+            try {
+              const { syncDispatchToMb } = require('../lib/dispatchToMb');
+              syncDispatchToMb(db, storeChallanId, req.user);
+            } catch (e) {
+              console.error('[TSK-0823 dispatchToMb store-challan trigger error]', e);
+            }
+
             // NOTE (mam 2026-06-06): we DON'T auto-cut the Sales Bill here
             // anymore.  For billable (PO) store items the challan is left
             // sales_bill_pending=1 (see INSERT above) so it surfaces in the
@@ -5803,7 +5811,10 @@ router.get('/delivery-notes', (req, res) => {
         v.name as vendor_name,
         i.indent_number as indent_number,
         NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
-        NULLIF(TRIM(i.site_name), '') as site_name
+        NULLIF(TRIM(i.site_name), '') as site_name,
+        (SELECT mb.id FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_id,
+        (SELECT mb.bill_number FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_number,
+        (SELECT mb.status FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_status
       FROM delivery_notes dn
       LEFT JOIN users u ON dn.received_by = u.id
       LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
@@ -5832,7 +5843,10 @@ router.get('/delivery-notes', (req, res) => {
       v.name as vendor_name,
       i.indent_number as indent_number,
       NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
-      NULLIF(TRIM(i.site_name), '') as site_name
+      NULLIF(TRIM(i.site_name), '') as site_name,
+      (SELECT mb.id FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_id,
+      (SELECT mb.bill_number FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_number,
+      (SELECT mb.status FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_status
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
@@ -6068,6 +6082,16 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
       fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
       fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
       fields.subtotal_amount, fields.grand_total_amount, fields.items_json, salesBillPending);
+    // TSK-0823: Dispatch to MB (installation) auto
+    try {
+      if (document_type === 'challan') {
+        const { syncDispatchToMb } = require('../lib/dispatchToMb');
+        syncDispatchToMb(getDb(), r.lastInsertRowid, req.user);
+      }
+    } catch (e) {
+      console.error('[TSK-0823 dispatchToMb delivery-notes POST error]', e);
+    }
+
     res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type, sales_bill_pending: salesBillPending });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
@@ -6524,6 +6548,14 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
         }
       }
     } catch (e) { console.error('[receive] auto sales bill failed (receipt saved anyway):', e.message); }
+
+    // TSK-0823: Dispatch to MB (installation) auto (update on site receive / shortage)
+    try {
+      const { syncDispatchToMb } = require('../lib/dispatchToMb');
+      syncDispatchToMb(db, req.params.id, req.user);
+    } catch (e) {
+      console.error('[TSK-0823 dispatchToMb receive trigger error]', e);
+    }
 
     res.json({ message: 'Marked as received', receipt_file_path: receiptPath, stock_ins: stockIns, auto_debit: autoDebit, auto_sales_bill: autoSalesBill });
   } catch (err) {

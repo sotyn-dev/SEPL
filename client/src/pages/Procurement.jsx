@@ -6658,7 +6658,16 @@ export default function Procurement() {
                         ? <span className="text-amber-600 text-[11px]">No photo</span>
                         : <span className="text-gray-300 text-xs">—</span>}
                   </td>
-                  <td><StatusBadge status={d.status} /></td>
+                  <td>
+                    <StatusBadge status={d.status} />
+                    {d.mb_bill_number && (
+                      <div className="mt-1">
+                        <span className="inline-flex items-center text-[10px] font-mono bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200" title={`Measurement Book Entry #${d.mb_bill_number} (${d.mb_bill_status || 'draft'})`}>
+                          📐 {d.mb_bill_number}
+                        </span>
+                      </div>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap">
                     {/* Print the auto-generated SEPL Delivery Note / Sales
                         Bill PDF (mam's templates). Fetched via axios so the

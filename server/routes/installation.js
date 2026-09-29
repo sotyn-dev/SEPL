@@ -62,7 +62,20 @@ router.delete('/ra-bills/:id', requirePermission('installation', 'delete'), (req
 
 // MB Bills
 router.get('/mb-bills', (req, res) => {
-  res.json(getDb().prepare('SELECT * FROM mb_bills ORDER BY created_at DESC').all());
+  res.json(getDb().prepare(`
+    SELECT mb.*,
+           i.site_address,
+           i.status as installation_status,
+           po.po_number,
+           dn.document_number as challan_number,
+           dn.delivery_date as challan_date,
+           dn.status as delivery_status
+      FROM mb_bills mb
+      LEFT JOIN installations i ON i.id = mb.installation_id
+      LEFT JOIN purchase_orders po ON po.id = i.po_id
+      LEFT JOIN delivery_notes dn ON dn.id = mb.delivery_note_id
+     ORDER BY mb.created_at DESC
+  `).all());
 });
 
 router.post('/mb-bills', requirePermission('installation', 'create'), (req, res) => {
@@ -73,7 +86,15 @@ router.post('/mb-bills', requirePermission('installation', 'create'), (req, res)
 });
 
 router.put('/mb-bills/:id', requirePermission('installation', 'edit'), (req, res) => {
-  getDb().prepare('UPDATE mb_bills SET status=? WHERE id=?').run(req.body.status, req.params.id);
+  const { status, measurements, total_amount } = req.body;
+  const sets = [];
+  const vals = [];
+  if (status !== undefined) { sets.push('status=?'); vals.push(status); }
+  if (measurements !== undefined) { sets.push('measurements=?'); vals.push(measurements); }
+  if (total_amount !== undefined) { sets.push('total_amount=?'); vals.push(total_amount); }
+  if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+  vals.push(req.params.id);
+  getDb().prepare(`UPDATE mb_bills SET ${sets.join(', ')} WHERE id=?`).run(...vals);
   res.json({ message: 'Updated' });
 });
 

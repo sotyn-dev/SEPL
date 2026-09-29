@@ -734,6 +734,49 @@ export default function SiteChat() {
   };
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) attach(f); };
 
+  // Handle pasting files, screenshots, images, or documents directly into the chat input
+  const onPaste = (e) => {
+    const clipboardData = e.clipboardData || window.clipboardData;
+    if (!clipboardData) return;
+
+    // 1. Check for files directly on clipboardData.files
+    const files = clipboardData.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file && file.size > 0) {
+        e.preventDefault();
+        let toAttach = file;
+        if (!file.name || file.name === 'blob' || file.name === 'image.png') {
+          const ext = (file.type && file.type.split('/')[1]) || 'png';
+          toAttach = new File([file], `pasted-${Date.now()}.${ext}`, { type: file.type || 'image/png' });
+        }
+        attach(toAttach);
+        return;
+      }
+    }
+
+    // 2. Check for clipboard items with kind === 'file' (e.g. Snipping Tool / screenshots in Chrome & Edge)
+    const items = clipboardData.items;
+    if (items && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') {
+          const file = items[i].getAsFile();
+          if (file && file.size > 0) {
+            e.preventDefault();
+            let toAttach = file;
+            if (!file.name || file.name === 'blob' || file.name === 'image.png') {
+              const ext = (file.type && file.type.split('/')[1]) || 'png';
+              toAttach = new File([file], `screenshot-${Date.now()}.${ext}`, { type: file.type || 'image/png' });
+            }
+            attach(toAttach);
+            return;
+          }
+        }
+      }
+    }
+    // If not a file, default behavior applies (normal text paste)
+  };
+
   // ── Profile photos (mam 2026-06-19 "like whatsapp use profile photo") ──
   const userAvatars = useMemo(() => { const m = {}; for (const u of allUsers) m[u.id] = u.avatar_url; return m; }, [allUsers]);
   const onAvatarFile = async (file) => {
@@ -1242,6 +1285,7 @@ export default function SiteChat() {
                       <div className="flex-1 min-w-0">
                         <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
                           onChange={onTextChange}
+                          onPaste={onPaste}
                           onKeyDown={e => {
                             if (mention && mentionList.length) {
                               if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
