@@ -33,7 +33,7 @@ export default function RemarkConfirmDialog({
   const canConfirm = text.trim().length > 0;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5"
         onClick={e => e.stopPropagation()}

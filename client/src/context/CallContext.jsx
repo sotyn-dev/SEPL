@@ -223,8 +223,8 @@ export function CallProvider({ children }) {
       if (d.reason === 'unavailable') toast.error('Could not notify this person. They need notifications enabled or SOTYN open.');
       else if (d.reason === 'no_answer' && c.phase === 'calling') toast.error('No answer. Please try again later.');
     };
+    let requested = new URLSearchParams(window.location.search).get('call');
     const ready = () => {
-      const requested = new URLSearchParams(window.location.search).get('call');
       emit('call:ready', { visible: document.visibilityState === 'visible', callId: requested }, (result) => {
         if (!requested || checkedNotification.current) return;
         checkedNotification.current = true;
@@ -232,6 +232,14 @@ export function CallProvider({ children }) {
       });
     };
     const presence = () => { if (isConnected()) emit('call:presence', { visible: document.visibilityState === 'visible' }); };
+    const notification = (event) => {
+      if (!event.detail?.callId) return;
+      requested = event.detail.callId;
+      checkedNotification.current = false;
+      // If reconnecting, the connect subscription below will request it.
+      if (isConnected()) ready();
+    };
+    window.addEventListener('erp:call-notification', notification);
     document.addEventListener('visibilitychange', presence);
     const offs = [
       subscribe('connect', ready),
@@ -297,7 +305,7 @@ export function CallProvider({ children }) {
       subscribe('call:cancel', onBye),
     ];
     if (isConnected()) ready();
-    return () => { document.removeEventListener('visibilitychange', presence); emit('call:unready'); offs.forEach(off => off()); cleanup(); };
+    return () => { window.removeEventListener('erp:call-notification', notification); document.removeEventListener('visibilitychange', presence); emit('call:unready'); offs.forEach(off => off()); cleanup(); };
   }, [user?.id, cleanup, subscribe, emit, isConnected, setCall]);
 
   // attach local preview stream to the <video> when it mounts / call changes

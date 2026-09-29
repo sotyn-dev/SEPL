@@ -118,6 +118,14 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type === 'navigate' && e.data.url) {
       try {
+        const target = new URL(e.data.url, window.location.origin);
+        // A call belongs above the current page. Reloading to the chat URL
+        // destroys every unsaved form when the user taps the notification.
+        const callId = target.searchParams.get('call');
+        if (target.origin === window.location.origin && callId) {
+          window.dispatchEvent(new CustomEvent('erp:call-notification', { detail: { callId } }));
+          return;
+        }
         window.location.assign(e.data.url);
       } catch {}
     }

@@ -209,7 +209,7 @@ function BillDrawer({ billId, onClose, onChanged, canApprove }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
       <div className="bg-white h-full w-full sm:w-[480px] shadow-2xl overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white z-10">
           <div><h3 className="text-base font-semibold">{bill?.ra_no}</h3><p className="text-xs text-gray-500">{bill?.contractor_name}</p></div>

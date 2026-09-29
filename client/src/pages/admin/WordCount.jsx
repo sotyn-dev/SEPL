@@ -521,7 +521,7 @@ export default function WordCount() {
           before their account was created" complaint is a real bug
           or just a misread timestamp / shared-session scenario. */}
       {verify && (
-        <div className="!m-0 fixed inset-0 z-[60] bg-black/50 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setVerify(null)}>
+        <div className="!m-0 fixed inset-0 z-[60] bg-black/50 flex items-start justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mt-12" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b flex items-center justify-between">
               <h3 className="font-bold text-gray-800 flex items-center gap-2">

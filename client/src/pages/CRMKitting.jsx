@@ -833,7 +833,7 @@ export default function CRMKitting() {
 
       {/* Manage Checkpoints drawer (admin) */}
       {manageOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={() => setManageOpen(false)}>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
           <div className="bg-white w-full sm:max-w-lg h-full overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="bg-gradient-to-r from-blue-900 to-blue-950 text-white p-4 flex items-center justify-between sticky top-0 z-10">
               <div className="font-semibold">Manage Checkpoints</div>

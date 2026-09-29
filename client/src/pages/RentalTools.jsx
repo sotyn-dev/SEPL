@@ -516,7 +516,7 @@ export default function RentalTools() {
       {/* ============ ENQUIRY DETAIL DRAWER ============ */}
       {drawerEnq && (
         <>
-          <div className="fixed inset-0 bg-black/30 z-40" onClick={closeDrawer}></div>
+          <div className="fixed inset-0 bg-black/30 z-40"></div>
           <div className="fixed top-0 right-0 h-full w-full sm:w-[560px] bg-white shadow-2xl z-50 overflow-y-auto">
             <div className="sticky top-0 bg-gradient-to-r from-blue-800 to-blue-950 text-white p-4 flex items-center justify-between">
               <div className="min-w-0">
