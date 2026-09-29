@@ -1,4 +1,6 @@
 import EmployeePtRules from '../components/EmployeePtRules';
+import StaffTypeFilter from '../components/StaffTypeFilter';
+import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -19,6 +21,7 @@ export function buildPayrollExport(rows, month) {
   const columns = [
     ['Pay Month', () => month],
     ['Employee ID', r => r.employee_id], ['Employee', r => r.employee_name],
+    ['Staff Type (current)', r => staffTypeLabel(r.staff_type)],
     ['Dept', r => r.department], ['Designation', r => r.designation], ['Joining Date', r => r.join_date],
     ['Base Salary (Rs)', r => r.base_salary], ['Per Day Rate (Rs)', r => r.per_day_rate],
     ['Present (paid equivalents)', r => r.present_days],
@@ -165,7 +168,9 @@ export default function Payroll() {
   const [month, setMonth] = useState(monthNow());
   const [settings, setSettings] = useState(null);
   const [savedSettings, setSavedSettings] = useState(null);
-  const [list, setList] = useState([]);
+  const [allRows, setList] = useState([]);
+  const [staffType, setStaffType] = useState('');
+  const list = allRows.filter(r => matchesStaffType(r.staff_type, staffType));
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
@@ -488,8 +493,8 @@ export default function Payroll() {
 
   const total = list.reduce((s, r) => s + (r.net_pay || 0), 0);
   // Disbursement tracking — only meaningful once the month is finalised.
-  const isFinalised = list.some(r => r.locked);
-  const finaliseEarly = isFinalised && list[0]?.finalised_at ? finaliseEarlyInfo(list[0].finalised_at, month) : null;
+  const isFinalised = allRows.some(r => r.locked);
+  const finaliseEarly = isFinalised && allRows[0]?.finalised_at ? finaliseEarlyInfo(allRows[0].finalised_at, month) : null;
   const canMarkPaid = isAdmin || (canEdit && canEdit('payroll'));
   const paidCount = list.filter(r => r.paid).length;
   const unpaidCount = list.filter(r => r.locked && !r.paid).length;
@@ -533,6 +538,8 @@ export default function Payroll() {
               <label className="label">Pay Month</label>
               <input type="month" className="input" value={month} onChange={e => setMonth(e.target.value)} />
             </div>
+            <div><label className="label">Staff Type</label><StaffTypeFilter value={staffType} onChange={setStaffType} /></div>
+            {staffType && <p className="text-xs text-gray-500">Showing {list.length} staff. Totals and export follow this filter. Finalise / unlock applies to the entire month.</p>}
             <div className="flex-1" />
             <button disabled={loading || list.length === 0} onClick={() => {
               const data = buildPayrollExport(list, month);
@@ -545,7 +552,7 @@ export default function Payroll() {
               🗓 Holidays{holidays.length ? ` (${holidays.length})` : ''}
             </button>
             <div className="text-right">
-              <p className="text-xs text-gray-500">Total Net Payout</p>
+              <p className="text-xs text-gray-500">{staffType ? 'Filtered Net Payout' : 'Total Net Payout'}</p>
               <p className="text-2xl font-bold text-emerald-600">{fmt(total)}</p>
               {isFinalised && (
                 <p className="text-[11px] font-semibold mt-0.5">
@@ -641,11 +648,12 @@ export default function Payroll() {
               </thead>
               <tbody>
                 {loading && <tr><td colSpan="20" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="20" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="20" className="text-center py-8 text-gray-400">{staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set. Open HR → Employees and set monthly salary.'}</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
                       {r.employee_name}
+                      <div className="text-xs font-normal text-gray-500">{staffTypeLabel(r.staff_type)}</div>
                       {r.locked && <FiLock size={11} className="inline text-emerald-600 ml-1" title={lockTooltip(r)} />}
                       {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — attendance can't be looked up. Open HR → Employees and set the User for this employee.">⚠ no login</span>}
                     </td>
@@ -748,7 +756,7 @@ export default function Payroll() {
           <div className="md:hidden space-y-3">
             {loading && <div className="card p-6 text-center text-gray-400 text-sm">Calculating…</div>}
             {!loading && list.length === 0 && (
-              <div className="card p-6 text-center text-gray-400 text-sm">No active employees with salary set.</div>
+              <div className="card p-6 text-center text-gray-400 text-sm">{staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set.'}</div>
             )}
             {!loading && list.map(r => (
               <div key={r.employee_id} className={`card p-3 space-y-2 ${r.locked ? 'border-emerald-300' : (r.user_linked === false ? 'border-amber-300' : '')}`}>
@@ -760,6 +768,7 @@ export default function Payroll() {
                       {r.locked && <FiLock size={11} className="text-emerald-600" title={lockTooltip(r)} />}
                     </div>
                     {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                    <div className="text-xs text-gray-500">{staffTypeLabel(r.staff_type)}</div>
                     {r.user_linked === false && (
                       <div className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded inline-block mt-0.5">⚠ no login</div>
                     )}

@@ -298,7 +298,7 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   // COALESCE to the snapshot so a deleted user's KEPT attendance rows still
   // show who they belonged to (user_id is nulled on force-delete but the name
   // snapshot stays) — mam 2026-07-06 "old attendance data don't delete".
-  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
+  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone, u.staff_type,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
     (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count,
@@ -356,7 +356,7 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   const lateToday = db.prepare("SELECT COUNT(*) as c FROM attendance WHERE date=? AND status='late'").get(today);
   const onLeave = db.prepare("SELECT COUNT(*) as c FROM leave_requests WHERE status='approved' AND from_date <= ? AND to_date >= ?").get(today, today);
 
-  const todayRecords = db.prepare(`SELECT a.*, u.name as user_name, u.department,
+  const todayRecords = db.prepare(`SELECT a.*, u.name as user_name, u.department, u.staff_type,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
     (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count
@@ -600,7 +600,8 @@ function computeGrid(db, month) {
   }
 
   const employees = db.prepare(
-    `SELECT id, name, user_id, designation, department, salary, roster
+    `SELECT id, name, user_id, designation, department, salary, roster,
+            (SELECT staff_type FROM users WHERE id=employees.user_id) AS staff_type
        FROM employees WHERE (status IS NULL OR status='active') ORDER BY name`
   ).all();
   const activeUsers = db.prepare(`SELECT id, name FROM users WHERE active=1`).all();
@@ -703,6 +704,7 @@ function computeGrid(db, month) {
     }
     return {
       employee_id: e.id,
+      staff_type: e.staff_type,
       name: e.name,
       user_id: e.user_id || null,
       no_login: !e.user_id,
@@ -739,6 +741,7 @@ router.get('/grid/export.xlsx', async (req, res) => {
   const month = String(req.query.month || '');
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
   const grid = computeGrid(db, month);
+  grid.employees = grid.employees.filter(e => !req.query.staff_type || (req.query.staff_type === 'unspecified' ? !e.staff_type : e.staff_type === req.query.staff_type));
 
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
@@ -755,6 +758,7 @@ router.get('/grid/export.xlsx', async (req, res) => {
     { header: 'Half', key: 'half', width: 6 },
     { header: 'Leave', key: 'leave', width: 6 },
     { header: 'Late', key: 'late', width: 6 },
+    { header: 'Staff Type', key: 'staff_type', width: 16 },
   ];
   const head = ws.getRow(1); head.height = 20;
   head.eachCell((cell, col) => {
@@ -773,6 +777,7 @@ router.get('/grid/export.xlsx', async (req, res) => {
   grid.employees.forEach(emp => {
     const rowData = {
       name: emp.name, designation: emp.designation, site: emp.site,
+      staff_type: require('../lib/staffType').STAFF_TYPES[emp.staff_type] || 'Not specified',
       salary: emp.salary || 0, roster: emp.roster_label,
       present: emp.totals.present, half: emp.totals.half, leave: emp.totals.leave, late: emp.totals.late,
     };
@@ -1233,7 +1238,7 @@ router.get('/report', requirePermission('attendance', 'view'), (req, res) => {
   const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
   const endDate = `${y}-${String(m).padStart(2, '0')}-31`;
 
-  const report = getDb().prepare(`SELECT u.id as user_id, u.name, u.department,
+  const report = getDb().prepare(`SELECT u.id as user_id, u.name, u.department, u.staff_type,
     COUNT(CASE WHEN a.status='present' THEN 1 END) as present_days,
     COUNT(CASE WHEN a.status='late' THEN 1 END) as late_days,
     COUNT(CASE WHEN a.status='half_day' THEN 1 END) as half_days,

@@ -5111,6 +5111,7 @@ function initializeDatabase() {
     // it expired — and the sliding refresh meant it never expired. NULL = never
     // revoked, which is every existing row, so adding this logs nobody out.
     try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) { }
+    require('../lib/staffType').ensureStaffTypeColumn(db);
     // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
     // bank): filled by the joiner on the public form, editable by HR after.
     try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) { }

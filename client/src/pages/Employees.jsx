@@ -9,7 +9,11 @@ import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiL
 import Pagination, { usePagination } from '../components/PaginationBar';
 import DataCompletion from '../components/DataCompletion';
 
+import StaffTypeFilter from '../components/StaffTypeFilter';
+import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
+
 export default function Employees() {
+  const [staffType, setStaffType] = useState('');
   const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
   // Salary is confidential — only admins and holders of employee_salary.can_view see it
   const canSeeSalary = isAdmin() || canView('employee_salary');
@@ -103,13 +107,15 @@ export default function Employees() {
 
   // Export CSV — never include salary for non-HR/non-admin users
   const exportCSV = () => {
-    if (employees.length === 0) return toast.error('No data');
+    if (filtered.length === 0) return toast.error('No data');
     const headers = canSeeSalary
       ? ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Salary', 'Status']
       : ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Status'];
-    const rows = employees.map(e => canSeeSalary
+    const rows = filtered.map(e => canSeeSalary
       ? [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.salary, e.status]
       : [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.status]);
+    headers.push('Staff Type');
+    rows.forEach((row, i) => row.push(staffTypeLabel(filtered[i].staff_type)));
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -192,9 +198,9 @@ export default function Employees() {
   };
 
   const filtered = employees.filter(e =>
-    !search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase()))
+    matchesStaffType(e.staff_type, staffType) && (!search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase())))
   );
-  const pager = usePagination(filtered, { resetKey: [search] });
+  const pager = usePagination(filtered, { resetKey: [search, staffType] });
 
   return (
     <div className="space-y-4">
@@ -244,6 +250,7 @@ export default function Employees() {
       {view === 'directory' && (
         <>
           {/* Search */}
+          <StaffTypeFilter value={staffType} onChange={setStaffType} />
           <div className="relative">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
@@ -261,7 +268,7 @@ export default function Employees() {
               {pager.pageItems.map(e => (
                 <tr key={e.id}>
                   <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
-                  <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
+                  <td>{e.designation}</td><td>{e.department}<div className="text-xs text-gray-500">{staffTypeLabel(e.staff_type)}</div></td><td>{e.join_date}</td>
                   <td>
                     {e.linked_user_name
                       ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
@@ -298,6 +305,7 @@ export default function Employees() {
                     <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
                     {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
                     {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
+                    <div className="text-xs text-gray-500">{staffTypeLabel(e.staff_type)}</div>
                   </div>
                   <StatusBadge status={e.status} />
                 </div>

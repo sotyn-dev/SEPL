@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api';
+import StaffTypeFilter from '../components/StaffTypeFilter';
+import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
@@ -104,8 +106,11 @@ export default function Attendance() {
   const [editingLeave, setEditingLeave] = useState(null);
   const [leaveEditForm, setLeaveEditForm] = useState({});
   const [dashboard, setDashboard] = useState(null);
-  const [records, setRecords] = useState([]);
-  const [report, setReport] = useState([]);
+  const [allRecords, setRecords] = useState([]);
+  const [allReport, setReport] = useState([]);
+  const [staffType, setStaffType] = useState('');
+  const records = allRecords.filter(r => matchesStaffType(r.staff_type, staffType));
+  const report = allReport.filter(r => matchesStaffType(r.staff_type, staffType));
   const [leaves, setLeaves] = useState([]);
   const [geofences, setGeofences] = useState([]);
   // True only after a SUCCESSFUL geofence fetch — so a failed fetch (transient
@@ -130,7 +135,8 @@ export default function Attendance() {
   // for everyone in one screen so no-punch days don't drag payroll to absent.
   const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
   const [gridMonth, setGridMonth] = useState(monthNow());
-  const [grid, setGrid] = useState(null);
+  const [allGrid, setGrid] = useState(null);
+  const grid = allGrid ? { ...allGrid, employees: allGrid.employees.filter(e => matchesStaffType(e.staff_type, staffType)) } : null;
   const [gridBusy, setGridBusy] = useState(false);
   const [cellInfo, setCellInfo] = useState(null);
   const [stagedStatus, setStagedStatus] = useState(null); // grid panel: chosen-but-not-yet-committed status (stage → OK)
@@ -446,7 +452,7 @@ export default function Attendance() {
   const exportGrid = async () => {
     if (!grid || !grid.employees?.length) return;
     try {
-      const resp = await api.get(`/attendance/grid/export.xlsx?month=${gridMonth}`, { responseType: 'blob' });
+      const resp = await api.get(`/attendance/grid/export.xlsx?month=${gridMonth}`, { responseType: 'blob', params: { staff_type: staffType } });
       const url = URL.createObjectURL(new Blob([resp.data]));
       const a = document.createElement('a');
       a.href = url; a.download = `attendance-muster-${gridMonth}.xlsx`;
@@ -649,6 +655,7 @@ export default function Attendance() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input type="month" className="input text-sm" value={gridMonth} onChange={e => setGridMonth(e.target.value)} />
+            <StaffTypeFilter value={staffType} onChange={setStaffType} />
             <button onClick={loadGrid} className="btn btn-secondary text-sm">Refresh</button>
             <button onClick={exportGrid} disabled={!grid || !grid.employees?.length} className="btn btn-primary text-sm flex items-center gap-1" title="Download this month's attendance muster as an Excel sheet — identity columns + day-wise codes + present/half/leave/late totals">
               <FiDownload size={14} /> Export Excel
@@ -1084,10 +1091,11 @@ export default function Attendance() {
         <>
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
+            <StaffTypeFilter value={staffType} onChange={setStaffType} />
             <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
-              ['Name','Date','In','Out','Hours','Site','Status'],
+              ['Name','Staff Type','Date','In','Out','Hours','Site','Status'],
               records.map(r => [
-                r.user_name, r.date,
+                r.user_name, staffTypeLabel(r.staff_type), r.date,
                 // Punch times are stored UTC — export them in IST so the CSV
                 // matches the times the table shows via fmtT (mam 2026-09-03).
                 r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
@@ -1454,11 +1462,12 @@ export default function Attendance() {
       {/* MONTHLY REPORT */}
       {tab === 'report' && (
         <>
+          <StaffTypeFilter value={staffType} onChange={setStaffType} />
           <div className="card p-0 hidden md:block"><table className="text-sm freeze-head">
             <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Avg Hours</th></tr></thead>
             <tbody>{report.map(r => (
               <tr key={r.user_id}>
-                <td className="font-medium">{r.name}</td><td className="text-xs">{r.department}</td>
+                <td className="font-medium">{r.name}<div className="text-xs text-gray-500">{staffTypeLabel(r.staff_type)}</div></td><td className="text-xs">{r.department}</td>
                 <td className="text-emerald-600 font-bold">{r.present_days}</td>
                 <td className="text-amber-600">{r.late_days}</td>
                 <td>{r.half_days}</td>

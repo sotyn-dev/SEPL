@@ -9,10 +9,13 @@ import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone } from 'react-icons/fi';
 import DataCompletion from '../../components/DataCompletion';
+import StaffTypeFilter from '../../components/StaffTypeFilter';
+import { STAFF_TYPES, staffTypeLabel, matchesStaffType } from '../../utils/staffType';
 
 export default function UserManagement() {
   const { user: me, markTotpEnabled } = useAuth();
   const [users, setUsers] = useState([]);
+  const [staffType, setStaffType] = useState('');
   const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
   const [search, setSearch]   = useState('');    // search by username or email
   const [page, setPage]       = useState(1);
@@ -45,7 +48,7 @@ export default function UserManagement() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', email: '', username: '', password: '', role: 'user', department: '', phone: '', active: true, approval_role: '' });
+    setForm({ name: '', email: '', username: '', password: '', role: 'user', department: '', phone: '', active: true, approval_role: '', staff_type: '' });
     setSelectedRoles([]);
     setModal(true);
   };
@@ -258,7 +261,7 @@ export default function UserManagement() {
   // Status tab + search (username/email) combined, then paginated (15/page).
   const q = search.trim().toLowerCase();
   const filteredUsers = users.filter(u =>
-    matchFilter(u) &&
+    matchFilter(u) && matchesStaffType(u.staff_type, staffType) &&
     (!q || [u.username, u.email].some(v => String(v || '').toLowerCase().includes(q)))
   );
   const pg = usePagination(filteredUsers, perPage, page, setPage);
@@ -273,7 +276,7 @@ export default function UserManagement() {
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button onClick={async () => {
             try {
-              const r = await api.get('/auth/users/export.xlsx', { responseType: 'blob' });
+              const r = await api.get('/auth/users/export.xlsx', { responseType: 'blob', params: { staff_type: staffType } });
               const url = URL.createObjectURL(r.data);
               const a = document.createElement('a');
               a.href = url; a.download = `active-users-${new Date().toISOString().slice(0, 10)}.xlsx`;
@@ -308,7 +311,8 @@ export default function UserManagement() {
       </div>
 
       <div className="card p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b bg-gray-50/60">
+        <div className="px-4 py-3 border-b bg-gray-50/60 flex flex-wrap gap-3">
+          <StaffTypeFilter value={staffType} onChange={value => { setStaffType(value); setPage(1); }} />
           <div className="relative w-full sm:max-w-xs">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search username or email…"
@@ -358,6 +362,7 @@ export default function UserManagement() {
                 <div>
                   <span className="text-[9px] uppercase text-gray-400 block">Department</span>
                   <span className="font-medium truncate block">{u.department || '—'}</span>
+                  <span className="text-xs text-gray-500 block">{staffTypeLabel(u.staff_type)}</span>
                 </div>
                 {u.phone && (
                   <div className="col-span-2">
@@ -417,7 +422,7 @@ export default function UserManagement() {
         <div className="hidden md:block overflow-x-auto">
           <table>
             <thead>
-              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
+              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department / Staff Type</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {pg.rows.map(u => (
@@ -446,7 +451,7 @@ export default function UserManagement() {
                       )) : <span className="text-xs text-gray-400">No roles</span>}
                     </div>
                   </td>
-                  <td>{u.department}</td>
+                  <td>{u.department}<div className="text-xs text-gray-500">{staffTypeLabel(u.staff_type)}</div></td>
                   <td><HrIdentity rec={u} variant="stacked" /></td>
                   <td>{u.active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
                   <td>
@@ -532,6 +537,14 @@ export default function UserManagement() {
             <div><label className="label">Email *</label><input className="input" type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} required /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
             <div><label className="label">Department</label><input className="input" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} /></div>
+            <div>
+              <label className="label" htmlFor="user-staff-type">Staff Type</label>
+              <select id="user-staff-type" className="select" value={form.staff_type || ''} onChange={e => setForm({...form, staff_type: e.target.value})}>
+                <option value="">Not specified</option>
+                {Object.entries(STAFF_TYPES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <p className="text-[10px] text-gray-500 mt-1">Used to group staff in HR, attendance and payroll. Assign access using Permission Roles below.</p>
+            </div>
             <div>
               <label className="label">{editing ? 'New Password (leave blank to keep)' : 'Password *'}</label>
               <input className="input" type="password" value={form.password || ''} onChange={e => setForm({...form, password: e.target.value})} {...(!editing && { required: true })} />

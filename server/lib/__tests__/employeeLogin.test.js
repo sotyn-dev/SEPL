@@ -11,6 +11,7 @@ function database() {
  CREATE TABLE roles(id INTEGER PRIMARY KEY,name TEXT);CREATE TABLE user_roles(user_id INTEGER,role_id INTEGER);
  CREATE TABLE role_permissions(role_id INTEGER,module TEXT,can_view INTEGER,can_create INTEGER,can_edit INTEGER,can_delete INTEGER,can_approve INTEGER,can_see_all INTEGER);
  CREATE TABLE user_totp(user_id INTEGER,required INTEGER,enabled INTEGER,secret TEXT);`);
+ require('../staffType').ensureStaffTypeColumn(db);
  return db;
 }
 test('employee logins use dotted names, unique suffixes, hashed initial passwords and preserve existing accounts',()=>{

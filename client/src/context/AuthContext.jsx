@@ -19,6 +19,7 @@ export function AuthProvider({ children }) {
           setUser({
             id: r.data.id, name: r.data.name, email: r.data.email, username: r.data.username,
             role: r.data.role, department: r.data.department, phone: r.data.phone,
+            staff_type: r.data.staff_type || null,
             approval_role: r.data.approval_role || null,
             avatar_url: r.data.avatar_url || null,
             has_recovery_code: !!r.data.has_recovery_code,

@@ -749,7 +749,7 @@ router.get('/candidates/stats', (req, res) => {
 // individual figures even there.
 router.get('/employees', (req, res) => {
   const rows = getDb().prepare(
-    `SELECT e.*, u.name as linked_user_name, u.username as linked_username
+    `SELECT e.*, u.name as linked_user_name, u.username as linked_username, u.staff_type
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
   const access = employeeMaster.access(req, getUserPermissions(req.user.id));

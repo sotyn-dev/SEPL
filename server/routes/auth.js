@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const { generateToken, generatePendingToken, getSecret, authMiddleware, adminOnly, getUserPermissions,
         revokeUserSessions, clearSessionCache } = require('../middleware/auth');
 const totp = require('../db/userTotp');
+const { STAFF_TYPES, normalizeStaffType } = require('../lib/staffType');
 const router = express.Router();
 
 router.post('/engagement', authMiddleware, (req, res) => {
@@ -36,7 +37,7 @@ function finishLogin(res, user, db, ip, ua) {
     token,
     user: {
       id: user.id, name: user.name, email: user.email, username: user.username,
-      role: user.role, department: user.department, phone: user.phone,
+      role: user.role, department: user.department, phone: user.phone, staff_type: user.staff_type || null,
       approval_role: user.approval_role || null,
       avatar_url: user.avatar_url || null,
       has_recovery_code: !!user.recovery_code_hash,
@@ -133,6 +134,9 @@ router.post('/login/totp', (req, res) => {
 router.post('/register', authMiddleware, adminOnly, (req, res) => {
   const { name, email, username, password, role, department, phone, role_ids, avatar_url } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
+  let staffType;
+  try { staffType = normalizeStaffType(req.body.staff_type); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
   const db = getDb();
   // Reject duplicates case-insensitively. `email` has a (case-sensitive) UNIQUE
   // index but `username` has NONE — which let two 'vijay.kumar' accounts be
@@ -146,9 +150,9 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
   }
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const result = db.prepare('INSERT INTO users (name, email, username, password, role, department, phone, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    const result = db.prepare('INSERT INTO users (name, email, username, password, role, department, phone, avatar_url, staff_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(name, email, uname, hash, role || 'user', department || null, phone || null,
-           avatar_url ? String(avatar_url).trim() : null);
+           avatar_url ? String(avatar_url).trim() : null, staffType);
 
     // Assign roles
     if (role_ids && role_ids.length > 0) {
@@ -156,7 +160,7 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
       for (const rid of role_ids) insertUserRole.run(result.lastInsertRowid, rid);
     }
 
-    const user = db.prepare('SELECT id, name, email, username, role, department, phone FROM users WHERE id = ?').get(result.lastInsertRowid);
+    const user = db.prepare('SELECT id, name, email, username, role, department, phone, staff_type FROM users WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json({ user, message: 'User created successfully' });
   } catch (e) {
     if (e.message.includes('UNIQUE')) {
@@ -169,7 +173,7 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role, avatar_url, must_change_password FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, name, email, username, role, department, phone, staff_type, recovery_code_hash, approval_role, avatar_url, must_change_password FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const has_recovery_code = !!user.recovery_code_hash;
   delete user.recovery_code_hash;
@@ -227,7 +231,7 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
     const db = getDb();
     const XLSX = require('xlsx');
     const rows = db.prepare(`
-      SELECT u.name, u.email, u.username, u.role, u.department, u.phone,
+      SELECT u.name, u.email, u.username, u.role, u.department, u.phone, u.staff_type,
              COALESCE(
                (SELECT e.salary FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
                (SELECT e.salary FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1),
@@ -244,14 +248,16 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
        WHERE COALESCE(u.active, 1) = 1
        ORDER BY u.name COLLATE NOCASE
     `).all();
-    const header = ['Name', 'Email', 'Username', 'Role', 'Department', 'HR Department', 'Designation', 'Phone', 'Salary (₹)'];
-    const aoa = [header, ...rows.map(r => [
+    const header = ['Name', 'Email', 'Username', 'Role', 'Department', 'HR Department', 'Designation', 'Phone', 'Salary (₹)', 'Staff Type'];
+    const selectedRows = rows.filter(r => !req.query.staff_type || (req.query.staff_type === 'unspecified' ? !r.staff_type : r.staff_type === req.query.staff_type));
+    const aoa = [header, ...selectedRows.map(r => [
       r.name || '', r.email || '', r.username || '', r.role || '', r.department || '',
-      r.hr_department || '', r.designation || '', r.phone || '', +r.salary || 0,
+      r.hr_department || '', r.designation || '', r.phone || '', +r.salary || 0, STAFF_TYPES[r.staff_type] || 'Not specified',
     ])];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 24 }, { wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
+    ws['!autofilter'] = { ref: ws['!ref'] };
+    ws['!cols'] = [{ wch: 24 }, { wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws, 'Active Users');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -319,7 +325,7 @@ router.get('/users', authMiddleware, (req, res) => {
   // employee rows shows BOTH, and hr_record_count lets the UI flag it) — link-only, no
   // name-match fallback, so an unlinked person surfaces as blank (a cleanup signal).
   const users = db.prepare(`
-    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
+    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.staff_type, u.active, u.avatar_url,
            COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
            COALESCE((SELECT enabled FROM user_totp WHERE user_id = u.id), 0) as totp_enabled,
            COALESCE((SELECT required FROM user_totp WHERE user_id = u.id), 0) as totp_required,
@@ -368,6 +374,9 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
 
 // Update user (admin only)
 router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
+  let staffType;
+  try { if (req.body.staff_type !== undefined) staffType = normalizeStaffType(req.body.staff_type); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
   const { name, email, username, department, phone, role, active, role_ids, password, approval_role, avatar_url } = req.body;
   const db = getDb();
   // Pre-image, so we can tell a lockout / demotion apart from a phone-number
@@ -398,6 +407,9 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     } else {
       db.prepare('UPDATE users SET name=?, email=?, department=?, phone=?, role=?, active=? WHERE id=?')
         .run(name, email, department, phone, role, active ? 1 : 0, req.params.id);
+    }
+    if (staffType !== undefined) {
+      db.prepare('UPDATE users SET staff_type=? WHERE id=?').run(staffType, req.params.id);
     }
     // Indent approval role (mam 2026-05-28: Nitin Jain couldn't approve
     // L1 because his approval_role was never set — the boot-time seed

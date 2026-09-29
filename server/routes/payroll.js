@@ -697,7 +697,9 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster,
+      (SELECT staff_type FROM users WHERE id=employees.user_id) AS staff_type
+      FROM employees WHERE status='active' AND salary > 0`).all();
     // Active employees with NO salary set are silently excluded from payroll —
     // surface them so admin knows who's missing and why (mam 2026-06-12:
     // "X not in payroll even they present").  Salary, not attendance, gates
@@ -718,9 +720,9 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
         // payroll_runs has no department column, so a finalised month's
         // snapshot rows come back with a blank Dept (table + Export Excel).
         // Overlay it from the live employee row already in hand.
-        if (snap) return { ...snap, department: emp.department, designation: emp.designation, sunday_count: snap.sundays, locked: true };
+        if (snap) return { ...snap, staff_type: emp.staff_type, department: emp.department, designation: emp.designation, sunday_count: snap.sundays, locked: true };
       }
-      return calculateForEmployee(db, settings, emp, month);
+      return { ...calculateForEmployee(db, settings, emp, month), staff_type: emp.staff_type };
     });
 
     res.json({ month, settings, employees: out, excluded_no_salary: excludedNoSalary });
