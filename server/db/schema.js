@@ -6688,7 +6688,7 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   const ALL_MODULES = [
     'dashboard', 'leads', 'quotations', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement', 'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
-    'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'snags', 'company_assets', 'help_tickets',
+    'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'site_grn', 'snags', 'company_assets', 'help_tickets',
     'sub_contractors', 'ai_agent', 'crm_funnel', 'cheques', 'fire_noc', 'rental_tools', 'influencers', 'crm_kitting',
     // Drawing Tracker (2026-08) — project drawings + permanent revision history.
     'drawing_tracker',

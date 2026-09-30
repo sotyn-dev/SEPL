@@ -350,7 +350,7 @@ function getUserPermissions(userId) {
     let modules = [
       'dashboard', 'leads', 'quotations', 'solar_quotation', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement',
       'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
-      'installation', 'billing', 'complaints', 'hr', 'payroll', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'scoring', 'gamification', 'tools', 'rentals', 'client_snag',
+      'installation', 'billing', 'complaints', 'hr', 'payroll', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'site_grn', 'scoring', 'gamification', 'tools', 'rentals', 'client_snag',
       // employee_salary: gates visibility of the salary field on GET /hr/employees.
       // hr_team: HR-team membership — gates hiring-request actions and the HR-alert
       // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.

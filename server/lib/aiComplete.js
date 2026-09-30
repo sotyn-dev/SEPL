@@ -25,6 +25,7 @@ const { getDb } = require('../db/schema');
 // allowance is small — so the cheap, high-quota models are tried first and the
 // flagships are kept as backstops.
 const GEMINI_PREFERRED = [
+  'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash',
   'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
   'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash',
 ];
@@ -32,6 +33,7 @@ const GEMINI_PREFERRED = [
 // lose answer quality (opts.prefer:'capable' — vision/drawing work). Same ids,
 // flagships first. No caller opts in today; the default stays cheap-first.
 const GEMINI_PREFERRED_CAPABLE = [
+  'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash',
   'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
   'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
 ];
@@ -55,10 +57,21 @@ function setting(db, key) {
 // versa). Callers use .configured to keep their OWN not-configured status code.
 function aiConfig(db, override) {
   const o = override || {};
-  const rawProv = String(o.provider || setting(db, 'ai_provider') || 'anthropic').toLowerCase();
+  let apiKey = (o.apiKey || setting(db, 'ai_api_key') || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  let rawProv = String(o.provider || setting(db, 'ai_provider') || process.env.AI_PROVIDER || '').toLowerCase();
+  
+  if (!rawProv || rawProv === 'anthropic' || rawProv === 'default') {
+    if (/^(AIzaSy|AQ\.)/i.test(apiKey)) {
+      rawProv = 'gemini';
+    } else if (/^sk-ant-/i.test(apiKey)) {
+      rawProv = 'anthropic';
+    } else if (!rawProv) {
+      rawProv = 'anthropic';
+    }
+  }
+
   const provider = (rawProv === 'gemini' || rawProv === 'google') ? 'gemini' : 'anthropic';
-  const apiKey = (o.apiKey || setting(db, 'ai_api_key') || '').trim();
-  let model = (o.model || setting(db, 'ai_model') || '').trim();
+  let model = (o.model || setting(db, 'ai_model') || process.env.AI_MODEL || '').trim();
   if (provider === 'gemini') { if (!model || !/gemini/i.test(model)) model = AI_DEFAULTS.gemini; }
   else { if (!model || /gemini/i.test(model)) model = AI_DEFAULTS.anthropic; }
   return { provider, apiKey, model, configured: !!apiKey };
@@ -152,7 +165,7 @@ async function runAnthropic(cfg, opts) {
 // closed to new keys, so both entries in the old Admin dropdown 404'd and every
 // AI feature died at once. Querying is the only answer that survives the next
 // retirement. Returns [] on any failure so callers can fall back quietly.
-async function listGeminiModels(apiKey, timeout = 15000) {
+async function listGeminiModels(apiKey, timeout = 4000) {
   if (typeof fetch !== 'function') return [];
   try {
     const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', {
