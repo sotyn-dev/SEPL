@@ -5114,6 +5114,7 @@ function initializeDatabase() {
     require('../lib/staffType').ensureStaffTypeColumn(db);
     require('../lib/passwordChangeMetadata').ensurePasswordChangeMetadata(db);
     require('../lib/challanBilling').ensureChallanBilling(db);
+    require('../lib/partialDeliveries').ensurePartialDeliveries(db);
     // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
     // bank): filled by the joiner on the public form, editable by HR after.
     try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) { }

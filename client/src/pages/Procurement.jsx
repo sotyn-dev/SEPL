@@ -3,6 +3,7 @@ import { flowStepLabel } from '../utils/moduleFlows';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
+import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
@@ -441,6 +442,7 @@ export default function Procurement() {
   const [employees, setEmployees] = useState([]); // for "Raised By" dropdown
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
+  const [balanceBill, setBalanceBill] = useState(null);
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   // Mam (2026-06-02): "according to delivery note all items and qty
   // show here may delivery note item of qty 10 but when erec its 9".
@@ -2406,6 +2408,7 @@ export default function Procurement() {
     fd.append('gst_amount', form.gst_amount || 0);
     fd.append('total_amount', form.total_amount || 0);
     fd.append('material_status', form.material_status || 'approved');
+    fd.append('delivery_mode', form.delivery_mode || 'final');
     // Per-line received qty (mam 2026-06-30) → server writes it onto the auto-
     // created delivery challan so the challan shows RECEIVED, not full ordered qty.
     if (billItems?.items?.length) {
@@ -5948,7 +5951,8 @@ export default function Procurement() {
                   </td>
                   <td><StatusBadge status={b.payment_status} /></td>
                   <td className="whitespace-nowrap">
-                    {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
+                    {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="btn btn-secondary text-xs mr-2">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
+                    {b.vendor_po_id && b.delivery_mode !== 'partial' && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
                     {canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
                     try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
@@ -6012,7 +6016,8 @@ export default function Procurement() {
                 )}
                 {(b.vendor_po_id || canDelete('procurement')) && (
                   <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                    {b.vendor_po_id && (
+                    {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="text-amber-700 font-semibold">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
+                    {b.vendor_po_id && b.delivery_mode !== 'partial' && (
                       <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
                         className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
                     )}
@@ -6306,7 +6311,7 @@ export default function Procurement() {
           setReceiveItems(arr.map(it => {
             const qty = +it.qty || +it.quantity || 0;
             return {
-              vpi_id: null,
+              vpi_id: it.vendor_po_item_id || null,
               description: it.description || it.master_name || '—',
               master_name: it.description || '',
               item_code: it.item_code || '',
@@ -6334,7 +6339,8 @@ export default function Procurement() {
           setReceiveItems([]);
           // From-store (no PO) → read lines from the note's items_json;
           // PO-linked → pull from the PO's delivery-note-data as before.
-          if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
+          if (d.supply_pending) loadReceiveItemsFromJson(d.items_json);
+          else if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
           else loadReceiveItemsFromJson(d.items_json);
           setModal('receive');
         };
@@ -8144,14 +8150,22 @@ export default function Procurement() {
         </form>
       </Modal>
 
+      {balanceBill && <BalanceDeliveryModal key={balanceBill.id} bill={balanceBill} onClose={() => setBalanceBill(null)} onSaved={() => { setBalanceBill(null); fetchBillsListPage(); load(); }} />}
       {/* Purchase Bill Modal */}
       <Modal isOpen={modal === 'bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
         <form onSubmit={savePurchaseBill} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
-              Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill will automatically clear this PO from the follow-up list.
+              Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill clears the bill follow-up. Any expected balance remains visible on this bill under Purchase Bills.
             </div>
           )}
+          {form.vendor_po_id && <label className="block text-xs font-semibold">Delivery arrangement
+            <select className="input mt-1" value={form.delivery_mode || 'final'} onChange={e => setForm(f => ({ ...f, delivery_mode: e.target.value }))}>
+              <option value="final">Final delivery — apply normal shortage rules</option>
+              <option value="partial">Partial delivery — balance expected later</option>
+            </select>
+            {form.delivery_mode === 'partial' && <span className="block mt-2 font-normal text-amber-700">Enter 0 for items arriving later. The balance stays pending without a short-supply debit. Use Balance pending · Receive on the saved bill for the next delivery. Enter the invoice amount exactly as billed.</span>}
+          </label>}
           {/* PO qty vs received qty per item (mam 2026-06-04): spot a short
               before saving the bill.  Short lines are flagged + a banner. */}
           {form.vendor_po_id && billItems && billItems.items?.length > 0 && (() => {
@@ -8204,7 +8218,7 @@ export default function Procurement() {
                 </div>
                 {shortLines.length > 0 && (
                   <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
-                    ⚠ <b>{shortLines.length}</b> item{shortLines.length === 1 ? '' : 's'} short (received less than ordered). A short-supply debit may apply.
+                    ⚠ <b>{shortLines.length}</b> item{shortLines.length === 1 ? '' : 's'} {form.delivery_mode === 'partial' ? 'awaiting later delivery. No short-supply debit will be raised.' : 'short (received less than ordered). A short-supply debit may apply.'}
                   </div>
                 )}
                 <div className="bg-blue-50 border-t border-blue-100 px-3 py-1 text-[10px] text-blue-700">

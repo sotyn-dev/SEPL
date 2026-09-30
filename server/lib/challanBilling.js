@@ -21,6 +21,13 @@ function syncChallanBilling(db, id) {
   if (dn.vendor_po_id) {
     billable = !!db.prepare(`SELECT 1 FROM vendor_po_items vpi JOIN indent_items ii ON ii.id=vpi.indent_item_id
       WHERE vpi.vendor_po_id=? AND UPPER(TRIM(COALESCE(ii.item_type,'')))='PO' LIMIT 1`).get(dn.vendor_po_id);
+    if (dn.supply_pending) {
+      const ids = new Set(db.prepare(`SELECT vpi.id FROM vendor_po_items vpi JOIN indent_items ii ON ii.id=vpi.indent_item_id
+        WHERE vpi.vendor_po_id=? AND UPPER(TRIM(COALESCE(ii.item_type,'')))='PO'`).all(dn.vendor_po_id).map(row => row.id));
+      let batch = [];
+      try { batch = JSON.parse(dn.items_json || '[]'); } catch (_) {}
+      billable = batch.some(row => ids.has(+row.vendor_po_item_id) && +row.received_qty > 0);
+    }
   }
   db.prepare('UPDATE delivery_notes SET sales_bill_pending=? WHERE id=?').run(dn.sales_bill_number ? 0 : Number(billable), id);
 }

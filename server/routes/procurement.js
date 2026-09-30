@@ -5060,6 +5060,25 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
 });
 
 // Purchase Bills (paginated + search + date range + backward-compat)
+function attachDeliveryBalance(db, row) {
+  if (row.delivery_mode === 'partial' && row.vendor_po_id) {
+    row.pending_delivery_lines = require('../lib/partialDeliveries').balanceItems(db, row.vendor_po_id).filter(it => it.remaining_qty > 0).length;
+  }
+}
+router.get('/purchase-bills/:id/delivery-balance', (req, res) => {
+  const db = getDb();
+  const bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if (!bill || bill.delivery_mode !== 'partial') return res.status(400).json({ error: 'No staged delivery for this bill' });
+  res.json({ items: require('../lib/partialDeliveries').balanceItems(db, bill.vendor_po_id),
+    history: db.prepare("SELECT document_number, delivery_date, items_json FROM delivery_notes WHERE vendor_po_id=? AND document_type='challan' ORDER BY id").all(bill.vendor_po_id) });
+});
+router.post('/purchase-bills/:id/balance-delivery', needsApprove, (req, res) => {
+  const date = String(req.body.delivery_date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > istToday()) return res.status(400).json({ error: 'Enter a valid delivery date, no later than today' });
+  try {
+    res.json(require('../lib/partialDeliveries').recordBalance(getDb(), +req.params.id, req.body, date, req.user.id));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 router.get('/purchase-bills', (req, res) => {
   const db = getDb();
   const { page, limit, from, to, q, search, export: isExport } = req.query;
@@ -5111,6 +5130,7 @@ router.get('/purchase-bills', (req, res) => {
       LIMIT ? OFFSET ?
     `).all(...params, limitNum, offset);
 
+    for (const row of rows) attachDeliveryBalance(db, row);
     return res.json({
       rows,
       total,
@@ -5132,6 +5152,7 @@ router.get('/purchase-bills', (req, res) => {
     ORDER BY pb.created_at DESC
   `).all(...params);
 
+  for (const row of rows) attachDeliveryBalance(db, row);
   res.json(rows);
 });
 
@@ -5255,20 +5276,8 @@ router.get('/vendor-po/:id/bill-items', (req, res) => {
      ORDER BY vpi.id
   `).all(poId);
 
-  const receivedByVpi = {};
-  let anyReceipt = false;
-  const dns = db.prepare("SELECT items_json FROM delivery_notes WHERE vendor_po_id=? AND items_json IS NOT NULL").all(poId);
-  for (const dn of dns) {
-    try {
-      const arr = JSON.parse(dn.items_json);
-      for (const r of (arr || [])) {
-        if (r.vendor_po_item_id != null) {
-          anyReceipt = true;
-          receivedByVpi[r.vendor_po_item_id] = (receivedByVpi[r.vendor_po_item_id] || 0) + (+r.received_qty || 0);
-        }
-      }
-    } catch (_) { /* ignore bad json */ }
-  }
+  const receivedByVpi = require('../lib/partialDeliveries').receiptTotals(db, poId);
+  const anyReceipt = Object.keys(receivedByVpi).length > 0;
 
   const rows = items.map(it => {
     const recorded = Object.prototype.hasOwnProperty.call(receivedByVpi, it.vpi_id);
@@ -5320,6 +5329,20 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
 
   try {
     const db = getDb();
+    const staged = b.delivery_mode === 'partial';
+    let submitted = [];
+    try { submitted = JSON.parse(b.received_items || '[]'); } catch (_) {}
+    if (vendor_po_id && db.prepare("SELECT id FROM purchase_bills WHERE vendor_po_id=? AND delivery_mode='partial'").get(vendor_po_id)) {
+      return res.status(400).json({ error: 'This PO already has staged deliveries. Use Record balance delivery on its purchase bill.' });
+    }
+    if (staged) {
+      if (!vendor_po_id || materialStatus !== 'approved') return res.status(400).json({ error: 'Staged delivery requires an accepted Vendor PO bill' });
+      const helper = require('../lib/partialDeliveries');
+      if (Object.keys(helper.receiptTotals(db, vendor_po_id)).length) return res.status(400).json({ error: 'Existing delivery quantities are already recorded for this PO. Do not replace them with a new staged bill.' });
+      const lines = helper.balanceItems(db, vendor_po_id);
+      if (!Array.isArray(submitted) || submitted.length !== lines.length) return res.status(400).json({ error: 'Enter received quantity for every PO item, including zero for later items' });
+      try { helper.validateBatch(lines, submitted); } catch (e) { return res.status(400).json({ error: e.message }); }
+    }
     const r = db.prepare(
       // created_by (2026-09-07): who uploaded the bill — the row already
       // stamps debit_notes.created_by from the same handler, so the user id
@@ -5327,6 +5350,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus, req.user?.id || null);
+
+    if (staged) db.prepare("UPDATE purchase_bills SET delivery_mode='partial' WHERE id=?").run(r.lastInsertRowid);
 
     // Mam (2026-06-02): "in rec. against delivery note show here ok
     // site name also show here delivery note number and against it
@@ -5360,7 +5385,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     const dnToday = istToday();
     if (vendor_po_id) {
       const existingDn = db.prepare(
-        'SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? LIMIT 1'
+        "SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? AND document_type='challan' LIMIT 1"
       ).get(vendor_po_id);
       if (existingDn) {
         autoDnId = existingDn.id;
@@ -5445,6 +5470,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-debit] failed (bill saved anyway):', e.message); }
     }
 
+    if (staged && autoDnId) db.prepare('UPDATE delivery_notes SET supply_pending=1 WHERE id=?').run(autoDnId);
+
     // Auto SHORT-SUPPLY debit from the bill (mam 2026-06-04): if items were
     // received SHORT (received < ordered), raise a short-supply debit — but
     // only when one doesn't already exist for this PO (the receiving flow
@@ -5452,7 +5479,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     // vs the PO ordered qty; value = shortfall × PO rate.
     let autoShortDebit = null;
     let vendorMailed = false;
-    if (materialStatus === 'approved' && vendor_po_id) {
+    if (materialStatus === 'approved' && vendor_po_id && !staged) {
       try {
         const existingShort = db.prepare("SELECT id FROM debit_notes WHERE vendor_po_id=? AND type='short_supply'").get(vendor_po_id);
         if (!existingShort) {
@@ -5977,6 +6004,7 @@ router.get('/delivery-notes/ready', (req, res) => {
 router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
   const db = getDb();
   const vendor_po_id = +req.params.id;
+  if (db.prepare("SELECT id FROM purchase_bills WHERE vendor_po_id=? AND delivery_mode='partial'").get(vendor_po_id)) return res.status(400).json({ error: 'Use Record balance delivery; earlier delivery quantities must be preserved.' });
   let receivedItems = [];
   try { receivedItems = Array.isArray(req.body?.received_items) ? req.body.received_items : JSON.parse(req.body?.received_items || '[]'); } catch (_) { receivedItems = []; }
   if (!receivedItems.length) return res.status(400).json({ error: 'No received items provided' });
@@ -6214,7 +6242,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
     } catch (_) {}
   } else if (challan.vendor_po_id) {
     const billable = db.prepare(`
-      SELECT vpi.quantity,
+      SELECT vpi.id as vpi_id, vpi.quantity,
              COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), ''), poi.description) as description,
              COALESCE(ii.unit, poi.unit, im.uom) as unit, COALESCE(poi.rate, 0) as rate, poi.hsn_code, im.item_code
         FROM vendor_po_items vpi
@@ -6223,7 +6251,12 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
         LEFT JOIN item_master im ON im.id = ii.item_master_id
        WHERE vpi.vendor_po_id = ? AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
     `).all(challan.vendor_po_id);
-    items = billable.map(it => ({
+    if (challan.supply_pending) {
+      let batch = [];
+      try { batch = JSON.parse(challan.items_json || '[]'); } catch (_) {}
+      for (const it of billable) it.quantity = +batch.find(row => +row.vendor_po_item_id === it.vpi_id)?.received_qty || 0;
+    }
+    items = billable.filter(it => +it.quantity > 0).map(it => ({
       description: it.description || '', qty: +it.quantity || 0, unit: it.unit || '',
       rate: +it.rate || 0, amount: (+it.quantity || 0) * (+it.rate || 0), hsn: it.hsn_code || '', item_code: it.item_code || '',
     }));
@@ -6369,6 +6402,25 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
     }
   }
 
+  const stagedNote = db.prepare('SELECT supply_pending, items_json FROM delivery_notes WHERE id=?').get(req.params.id);
+  if (stagedNote?.supply_pending) {
+    let planned;
+    try { planned = JSON.parse(stagedNote.items_json || '[]'); } catch (_) { planned = []; }
+    const submitted = itemsReceivedArr || planned;
+    if (!planned.length || submitted.length !== planned.length) return res.status(400).json({ error: 'Receive only the items on this delivery challan' });
+    const seen = new Set();
+    const merged = [];
+    for (const row of submitted) {
+      const original = planned.find(it => +it.vendor_po_item_id === +row.vendor_po_item_id);
+      const qty = +row.received_qty;
+      if (!original || seen.has(+row.vendor_po_item_id) || !Number.isFinite(qty) || qty < 0 || qty > +original.received_qty) return res.status(400).json({ error: 'Received quantity exceeds this delivery batch' });
+      seen.add(+row.vendor_po_item_id);
+      merged.push({ ...original, received_qty: qty, quantity: qty, ordered_qty: +original.received_qty });
+    }
+    itemsReceivedArr = merged;
+    itemsReceivedJson = JSON.stringify(merged);
+  }
+
   try {
     db.prepare(
       `UPDATE delivery_notes
@@ -6419,7 +6471,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
                 // ordered qty.  Skip rows that ended up at 0 (e.g. 10
                 // ordered, 0 received → don't increment stock).
                 const recOverride = receivedByVpi.has(i.vpi_id) ? receivedByVpi.get(i.vpi_id) : null;
-                const qty = recOverride != null ? +recOverride : +i.quantity;
+                const qty = recOverride != null ? +recOverride : (Array.isArray(itemsReceivedArr) ? 0 : +i.quantity);
                 if (!(qty > 0)) continue;
                 const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(warehouseId, i.item_master_id);
                 const prevQty = cur ? +cur.quantity : 0;
@@ -6456,7 +6508,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
     // a [DN-<id>] marker in the reason).
     let autoDebit = null;
     try {
-      if (Array.isArray(itemsReceivedArr) && itemsReceivedArr.some(r => +r.received_qty < +r.ordered_qty)) {
+      if (!db.prepare('SELECT supply_pending FROM delivery_notes WHERE id=?').get(req.params.id)?.supply_pending && Array.isArray(itemsReceivedArr) && itemsReceivedArr.some(r => +r.received_qty < +r.ordered_qty)) {
         const dnRow = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
         const poId = dnRow?.vendor_po_id || null;
         if (poId) {
