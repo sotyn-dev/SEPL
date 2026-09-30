@@ -6325,6 +6325,7 @@ export default function Procurement() {
         const openMarkReceived = (d) => {
           setForm({
             receive_id: d.id,
+            receive_document_type: d.document_type,
             receive_vendor_po_id: d.vendor_po_id,
             receive_doc: `${d.document_type === 'challan' ? 'Challan' : 'Sales Bill'} ${d.document_number || '#' + d.id}`,
             received_by_name: '',
@@ -6624,7 +6625,7 @@ export default function Procurement() {
                           dispatched with Challan only and SB will follow
                           later, this amber chip lingers until SB is
                           uploaded via the Add Sales Bill button below. */}
-                      {d.sales_bill_pending === 1 && !d.sales_bill_number && (
+                      {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
                           📋 SB PENDING
                         </span>
@@ -6653,7 +6654,7 @@ export default function Procurement() {
                   <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
                   <td>
                     {d.receipt_file_path
-                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">Signed ✓</a>
+                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">{d.source_challan_id ? 'Challan proof ✓' : 'Signed ✓'}</a>
                       : d.received_by_name
                         ? <span className="text-amber-600 text-[11px]">No photo</span>
                         : <span className="text-gray-300 text-xs">—</span>}
@@ -6691,13 +6692,13 @@ export default function Procurement() {
                     {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
                       <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
                     )}
-                    {!d.received_by_name && (
+                    {!d.received_by_name && !d.source_challan_id && (
                       <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
                     )}
                     {/* Add Sales Bill — only when this dispatch was marked
                         sales_bill_pending=1 AND no SB has been uploaded yet
                         (mam 2026-05-25). */}
-                    {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                    {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
                       <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
                         Add Sales Bill
                       </button>
@@ -6772,7 +6773,7 @@ export default function Procurement() {
                     </div>
                   </div>
                 )}
-                {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
+                {(d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number) && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
                 )}
                 {d.sales_bill_number && (
@@ -6793,11 +6794,11 @@ export default function Procurement() {
                 {(d.file_path || d.receipt_file_path) && (
                   <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
                     {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
-                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">✓ Signed Receipt</a>}
+                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">{d.source_challan_id ? '✓ Challan proof' : '✓ Signed Receipt'}</a>}
                   </div>
                 )}
                 {/* Primary action — Mark Received (when not yet received) */}
-                {!d.received_by_name && (
+                {!d.received_by_name && !d.source_challan_id && (
                   <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
                 )}
                 {/* Secondary actions row */}
@@ -6814,7 +6815,7 @@ export default function Procurement() {
                     }}
                     className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
                   >🖨 Print</button>
-                  {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                  {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
                     <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
                   )}
                   {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
@@ -9038,17 +9039,17 @@ export default function Procurement() {
               DN — Sales Bill is still coming".  Adds the amber chip
               "📋 SB PENDING" to the dispatch row + enables the "Add
               Sales Bill" button once the SB arrives. */}
-          <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
+          {form.receive_document_type !== 'sales_bill' && <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
             <input type="checkbox" className="mt-0.5"
               checked={!!form.sales_bill_pending}
               onChange={(e) => setForm({ ...form, sales_bill_pending: e.target.checked })} />
             <span>
               <span className="font-semibold text-amber-800">Sales Bill is pending</span>
               <span className="text-amber-700 block mt-0.5">
-                Tick this if the receipt above is a Delivery Note / Challan and the formal Sales Bill will arrive later.  An "📋 SB Pending" chip will show on this dispatch until you upload the Sales Bill.
+                Billable PO items remain Sales Bill Pending after receiving. Create the Sales Bill later from this challan; receiving proof stays on the same delivery.
               </span>
             </span>
-          </label>
+          </label>}
           {/* Optional inventory link — pick a warehouse to auto-add the
               vendor PO's items as stock. Leave blank to skip. */}
           {warehouses.length > 0 && (

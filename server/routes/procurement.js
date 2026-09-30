@@ -6193,6 +6193,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   const db = getDb();
   const challan = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
   if (!challan) return res.status(404).json({ error: 'Dispatch not found' });
+  if (challan.document_type !== 'challan') return res.status(400).json({ error: 'A Sales Bill can only be generated from a challan.' });
 
   // Already generated?  Return the linked Sales Bill.
   if (challan.sales_bill_number) {
@@ -6242,6 +6243,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   `).run(challan.vendor_po_id || null, indentId, challan.source || 'po', today, invNum, isDraft, JSON.stringify(items),
          isDraft ? 'Generated Sales Bill — DRAFT (fill client GSTIN / selling rates before sending)' : 'Generated Sales Bill');
   db.prepare("UPDATE delivery_notes SET sales_bill_pending=0, sales_bill_number=? WHERE id=?").run(invNum, req.params.id);
+  require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
   res.json({ id: sb.lastInsertRowid, document_number: invNum, is_draft: isDraft, items: items.length });
 });
 
@@ -6512,54 +6514,9 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
       } catch (e) { console.error('[receive] S16 engineer mismatch notify failed:', e.message); }
     }
 
-    // Auto SALES BILL on receive (mam 2026-06-04): when a CHALLAN is marked
-    // received and its PO has billable PO-type items, auto-generate a Sales
-    // Bill (INV/) from the BOQ items at their selling rates.  FOC/RGP-only
-    // challans get NO sales bill — the challan IS the delivery note.  The
-    // bill is flagged is_draft when client GSTIN or any selling rate is
-    // missing.  Skipped if a Sales Bill already exists for the PO.
-    let autoSalesBill = null;
-    try {
-      const dnRow = db.prepare("SELECT vendor_po_id, indent_id, document_type, sales_bill_number FROM delivery_notes WHERE id=?").get(req.params.id);
-      if (dnRow && dnRow.document_type === 'challan' && dnRow.vendor_po_id && !dnRow.sales_bill_number) {
-        const billable = db.prepare(`
-          SELECT vpi.quantity,
-                 COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), ''), poi.description) as description,
-                 COALESCE(ii.unit, poi.unit, im.uom) as unit,
-                 COALESCE(poi.rate, 0) as rate, poi.hsn_code, im.item_code
-            FROM vendor_po_items vpi
-            LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
-            LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-            LEFT JOIN item_master im ON im.id = ii.item_master_id
-           WHERE vpi.vendor_po_id = ? AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-        `).all(dnRow.vendor_po_id);
-        const existingSB = db.prepare("SELECT id FROM delivery_notes WHERE vendor_po_id=? AND document_type='sales_bill'").get(dnRow.vendor_po_id);
-        if (billable.length && !existingSB) {
-          const client = db.prepare(`
-            SELECT bb.gstin FROM indents i
-              LEFT JOIN order_planning op ON op.id = i.planning_id
-              LEFT JOIN business_book bb ON bb.id = op.business_book_id
-             WHERE i.id = ?`).get(dnRow.indent_id) || {};
-          const items = billable.map(it => ({
-            description: it.description || '', qty: +it.quantity || 0, unit: it.unit || '',
-            rate: +it.rate || 0, amount: (+it.quantity || 0) * (+it.rate || 0),
-            hsn: it.hsn_code || '', item_code: it.item_code || '',
-          }));
-          const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
-          const { nextSequence } = require('../db/nextSequence');
-          const year = new Date().getFullYear();
-          const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-          const today = istToday();
-          const sb = db.prepare(`
-            INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
-            VALUES (?, ?, 'po', ?, 'sales_bill', ?, 'pending', ?, ?, ?)
-          `).run(dnRow.vendor_po_id, dnRow.indent_id, today, invNum, isDraft, JSON.stringify(items),
-                 isDraft ? 'Auto-generated on receive — DRAFT (fill client GSTIN / selling rates before sending)' : 'Auto-generated Sales Bill on receive');
-          db.prepare("UPDATE delivery_notes SET sales_bill_pending=0, sales_bill_number=? WHERE id=?").run(invNum, req.params.id);
-          autoSalesBill = { id: sb.lastInsertRowid, document_number: invNum, is_draft: isDraft, items: items.length };
-        }
-      }
-    } catch (e) { console.error('[receive] auto sales bill failed (receipt saved anyway):', e.message); }
+    // Record billing outstanding; receiving must never create an invoice.
+    require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
+    const autoSalesBill = null;
 
     // TSK-0823: Dispatch to MB (installation) auto (update on site receive / shortage)
     try {
