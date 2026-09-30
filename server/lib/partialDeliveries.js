@@ -3,6 +3,7 @@ function ensurePartialDeliveries(db) {
     ['purchase_bills', 'delivery_mode', "TEXT NOT NULL DEFAULT 'final'"],
     ['delivery_notes', 'supply_pending', 'INTEGER NOT NULL DEFAULT 0'],
     ['delivery_notes', 'receipt_request_id', 'TEXT'],
+    ['delivery_notes', 'balance_purchase_bill_id', 'INTEGER REFERENCES purchase_bills(id)'],
   ]) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column)) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -61,19 +62,34 @@ function recordBalance(db, billId, body, date, userId) {
     if (!bill || bill.delivery_mode !== 'partial' || !bill.vendor_po_id) throw new Error('This bill is not awaiting staged delivery');
     const key = String(body.request_id || '');
     if (!/^[a-zA-Z0-9-]{16,80}$/.test(key)) throw new Error('A valid delivery request ID is required');
-    const previous = db.prepare('SELECT id, vendor_po_id, document_number FROM delivery_notes WHERE receipt_request_id=?').get(key);
+    const previous = db.prepare('SELECT id, vendor_po_id, document_number, balance_purchase_bill_id FROM delivery_notes WHERE receipt_request_id=?').get(key);
     if (previous) {
       if (previous.vendor_po_id !== bill.vendor_po_id) throw new Error('Delivery request belongs to another PO');
-      return previous;
+      return { ...previous, existing: true };
     }
     const rows = validateBatch(balanceItems(db, bill.vendor_po_id), body.items);
+    let newBillId = null;
+    if (body.add_bill === true || body.add_bill === '1') {
+      const billNumber = String(body.bill_number || '').trim();
+      const billDate = String(body.bill_date || '');
+      const amount = Number(body.amount), gst = Number(body.gst_amount || 0);
+      if (!billNumber || billNumber.length > 100) throw new Error('Enter the new purchase bill number');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(billDate) || Number.isNaN(Date.parse(billDate)) || new Date(billDate).toISOString().slice(0,10) !== billDate) throw new Error('Enter a valid bill date');
+      if (body.amount === '' || body.amount == null || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(gst) || gst < 0) throw new Error('Amount and GST must be valid non-negative numbers');
+      if (!body.bill_file_path) throw new Error('Upload the purchase bill file');
+      if (db.prepare("SELECT id FROM purchase_bills WHERE vendor_id IS ? AND LOWER(TRIM(bill_number))=LOWER(?)").get(bill.vendor_id || null, billNumber)) throw new Error('This bill number is already recorded for this vendor');
+      const total = Math.round((amount + gst) * 100) / 100;
+      newBillId = db.prepare(`INSERT INTO purchase_bills
+        (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,file_path,material_status,delivery_mode,created_by)
+        VALUES (?,?,?,?,?,?,?,?,'approved','partial',?)`).run(bill.vendor_po_id,bill.vendor_id || null,billNumber,billDate,amount,gst,total,body.bill_file_path,userId).lastInsertRowid;
+    }
     const { nextSequence } = require('../db/nextSequence');
     const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0,4)}/`, { pad: 4 });
     const result = db.prepare(`INSERT INTO delivery_notes
-      (vendor_po_id, document_type, document_number, delivery_date, status, items_json, notes, supply_pending, receipt_request_id)
-      VALUES (?, 'challan', ?, ?, 'pending', ?, ?, 1, ?)`).run(bill.vendor_po_id, number, date, JSON.stringify(rows),
-      `Balance delivery against bill ${bill.bill_number || bill.id}; recorded by user ${userId}. ${String(body.notes || '').slice(0,500)}`, key);
-    return { id: result.lastInsertRowid, document_number: number };
+      (vendor_po_id, document_type, document_number, delivery_date, status, items_json, notes, supply_pending, receipt_request_id, balance_purchase_bill_id)
+      VALUES (?, 'challan', ?, ?, 'pending', ?, ?, 1, ?, ?)`).run(bill.vendor_po_id, number, date, JSON.stringify(rows),
+      `Balance delivery against bill ${bill.bill_number || bill.id}; recorded by user ${userId}. ${String(body.notes || '').slice(0,500)}`, key, newBillId);
+    return { id: result.lastInsertRowid, document_number: number, balance_purchase_bill_id: newBillId };
   }).immediate();
 }
 module.exports = { ensurePartialDeliveries, receiptTotals, balanceItems, validateBatch, recordBalance };

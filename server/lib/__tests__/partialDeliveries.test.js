@@ -11,6 +11,7 @@ function fixture() {
     CREATE TABLE item_master(id INTEGER PRIMARY KEY, item_name TEXT, uom TEXT);
     INSERT INTO purchase_bills VALUES(1,10,'B1');`);
   ensurePartialDeliveries(db); ensurePartialDeliveries(db);
+  for (const [name,type] of Object.entries({vendor_id:'INTEGER',bill_date:'TEXT',amount:'REAL',gst_amount:'REAL',total_amount:'REAL',file_path:'TEXT',material_status:'TEXT',created_by:'INTEGER'})) db.exec(`ALTER TABLE purchase_bills ADD COLUMN ${name} ${type}`);
   db.prepare("UPDATE purchase_bills SET delivery_mode='partial'").run();
   for(let i=1;i<=4;i++) {
     db.prepare("INSERT INTO indent_items VALUES(?,?,'Nos',NULL)").run(i,'Item '+i);
@@ -47,4 +48,23 @@ test('reject duplicate, unrelated, negative, nonfinite and empty deliveries',()=
   const db=fixture(),items=balanceItems(db,10);
   for(const rows of [[],[{vendor_po_item_id:99,received_qty:1}],[{vendor_po_item_id:4,received_qty:-1}],[{vendor_po_item_id:4,received_qty:'no'}],[{vendor_po_item_id:4,received_qty:1},{vendor_po_item_id:4,received_qty:1}]]) assert.throws(()=>validateBatch(items,rows));
   db.close();
+});
+
+test('later purchase bill and delivery save together, retries do not duplicate either',()=>{
+  const db=fixture();
+  const body={request_id:'later-bill-delivery-001',items:[{vendor_po_item_id:4,received_qty:10}],add_bill:'1',bill_number:'B2',bill_date:'2026-09-30',amount:'1000',gst_amount:'180',bill_file_path:'/uploads/b2.pdf'};
+  const result=recordBalance(db,1,body,'2026-09-30',1);
+  const bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(result.balance_purchase_bill_id);
+  assert.equal(bill.total_amount,1180);assert.equal(bill.file_path,'/uploads/b2.pdf');assert.equal(bill.bill_number,'B2');
+  assert.equal(db.prepare('SELECT bill_number FROM purchase_bills WHERE id=1').get().bill_number,'B1');
+  assert.equal(recordBalance(db,1,body,'2026-09-30',1).balance_purchase_bill_id,bill.id);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bills').get().n,2);
+  assert.equal(balanceItems(db,10)[3].remaining_qty,0);db.close();
+});
+test('invalid new bill leaves delivery balance and existing bill untouched',()=>{
+  const db=fixture();
+  const base={request_id:'invalid-later-bill-001',items:[{vendor_po_item_id:4,received_qty:10}],add_bill:'1',bill_number:'B2',bill_date:'2026-09-30',amount:1000,gst_amount:180,bill_file_path:'/uploads/b2.pdf'};
+  for(const change of [{bill_file_path:null},{bill_number:'B1'},{amount:-1},{gst_amount:'bad'},{bill_date:'2026-02-30'}]) assert.throws(()=>recordBalance(db,1,{...base,...change},'2026-09-30',1));
+  assert.equal(balanceItems(db,10)[3].remaining_qty,10);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bills').get().n,1);db.close();
 });

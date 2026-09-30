@@ -5070,14 +5070,19 @@ router.get('/purchase-bills/:id/delivery-balance', (req, res) => {
   const bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
   if (!bill || bill.delivery_mode !== 'partial') return res.status(400).json({ error: 'No staged delivery for this bill' });
   res.json({ items: require('../lib/partialDeliveries').balanceItems(db, bill.vendor_po_id),
-    history: db.prepare("SELECT document_number, delivery_date, items_json FROM delivery_notes WHERE vendor_po_id=? AND document_type='challan' ORDER BY id").all(bill.vendor_po_id) });
+    history: db.prepare("SELECT dn.document_number, dn.delivery_date, dn.items_json, pb.bill_number, pb.total_amount, pb.file_path AS bill_file_path FROM delivery_notes dn LEFT JOIN purchase_bills pb ON pb.id=dn.balance_purchase_bill_id WHERE dn.vendor_po_id=? AND dn.document_type='challan' ORDER BY dn.id").all(bill.vendor_po_id) });
 });
-router.post('/purchase-bills/:id/balance-delivery', needsApprove, (req, res) => {
+router.post('/purchase-bills/:id/balance-delivery', needsApprove, vendorPoUpload.single('file'), (req, res) => {
+  const discardUpload = () => { if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} } };
   const date = String(req.body.delivery_date || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > istToday()) return res.status(400).json({ error: 'Enter a valid delivery date, no later than today' });
   try {
-    res.json(require('../lib/partialDeliveries').recordBalance(getDb(), +req.params.id, req.body, date, req.user.id));
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > istToday()) throw new Error('Enter a valid delivery date, no later than today');
+    const body = { ...req.body, items: typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items,
+      bill_file_path: req.file ? `/uploads/${req.file.filename}` : null };
+    const result = require('../lib/partialDeliveries').recordBalance(getDb(), +req.params.id, body, date, req.user.id);
+    if (result.existing || !result.balance_purchase_bill_id) discardUpload();
+    res.json(result);
+  } catch (e) { discardUpload(); res.status(400).json({ error: e.message }); }
 });
 router.get('/purchase-bills', (req, res) => {
   const db = getDb();
