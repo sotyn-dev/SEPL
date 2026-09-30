@@ -144,6 +144,7 @@ const SIDEBAR_GROUPS = [
     { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null, open: true },
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
+    { path: '/site-grn',             label: 'GRN & Material Receipt', icon: FiPackage,      module: 'site_grn' },
     { path: '/sales-bill-receive',   label: 'Sales Bill Receive', icon: FiDownload,     module: 'sales_bill_receive' },
     { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
     { path: '/dispatch-receiving', label: 'Dispatch Receiving', icon: FiArrowDownCircle, module: 'procurement' },

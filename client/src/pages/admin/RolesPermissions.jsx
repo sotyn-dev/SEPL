@@ -75,6 +75,7 @@ const ALL_MODULES = [
   { key: 'sales_bill_receive', label: 'Sales Bill Receive' },
   { key: 'procurement_schedule', label: 'Schedule (Gantt)' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
+  { key: 'site_grn', label: 'GRN & Material Receipt — Site receipt, 3-Way Match & Supplier Payment' },
   { key: 'inventory', label: 'Inventory' },
 
   // — Execution / Site

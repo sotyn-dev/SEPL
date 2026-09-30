@@ -15,7 +15,7 @@ const api = axios.create({ baseURL: '/api' });
 const TIMEOUT_GET_MS = 60 * 1000;
 const TIMEOUT_WRITE_MS = 5 * 60 * 1000;
 const TIMEOUT_LONG_MS = 10 * 60 * 1000;
-const LONG_RUNNING_URL = /(export|download|backup|upload|import|finali[sz]e|transcri|whisper|\/ai\b|\/ask\b|report|pdf|xlsx|csv|print|bulk|generate|sync)/i;
+const LONG_RUNNING_URL = /(export|download|backup|upload|import|finali[sz]e|transcri|whisper|\/ai\b|\/ask\b|report|pdf|xlsx|csv|print|bulk|generate|sync|parse-challan|site-grn)/i;
 function timeoutFor(config) {
   if (typeof config.timeout === 'number' && config.timeout !== 0) return config.timeout < 0 ? 0 : config.timeout;
   const method = String(config.method || 'get').toLowerCase();

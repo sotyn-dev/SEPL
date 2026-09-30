@@ -71,6 +71,8 @@ const BillVerification = lazy(() => import('./pages/BillVerification'));
 const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
+const SiteGRN = lazy(() => import('./pages/SiteGRN'));
+const SiteGRNPrint = lazy(() => import('./pages/SiteGRNPrint'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
 const ComplianceDashboard = lazy(() => import('./pages/ComplianceDashboard'));
@@ -197,6 +199,7 @@ export default function App() {
         <Route path="/bill-print/:id" element={<ProtectedRoute><BillPrint /></ProtectedRoute>} />
         {/* SPOS site-store GRN slips (mam 2026-07-31): printable Issue/Return slip */}
         <Route path="/site-slip/:id/print" element={<ProtectedRoute><SiteSlipPrint /></ProtectedRoute>} />
+        <Route path="/site-grn/:id/print" element={<ProtectedRoute><SiteGRNPrint /></ProtectedRoute>} />
         <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
         <Route path="/po-foc/:id/print" element={<ProtectedRoute><PoFocPrint /></ProtectedRoute>} />
         <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
@@ -299,6 +302,7 @@ export default function App() {
           {/* SOP-05 item-wise register (mam 2026-08-31) */}
           <Route path="rates-items" element={<ModuleRoute module="procurement"><RatesItems /></ModuleRoute>} />
           <Route path="price-required" element={<PriceRequired />} />
+          <Route path="site-grn" element={<ModuleRoute module="site_grn"><SiteGRN /></ModuleRoute>} />
           <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
           <Route path="help-tickets" element={<HelpTickets />} />
           {/* Retired ERP Management links return to Dashboard. */}
