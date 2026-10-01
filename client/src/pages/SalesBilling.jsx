@@ -197,7 +197,6 @@ export default function SalesBilling() {
     try {
       const r = await api.post('/sales-billing/generate-installation', {
         dpr_ids: Array.from(selectedDprIds),
-        checked: true,
         bill_date: installBillDate
       });
       toast.success(r.data.message || 'Installation bills generated');
@@ -294,7 +293,7 @@ export default function SalesBilling() {
             <th className="px-3 py-2 text-right">GST</th>
             <th className="px-3 py-2 text-right">Total</th>
             <th className="px-3 py-2 text-center">Status</th>
-            {sentMode && <th className="px-3 py-2 text-center">Checked / OK</th>}
+            {sentMode && <th className="px-3 py-2 text-center">Approval</th>}
             <th className="px-3 py-2 text-center">{sentMode ? 'Sent to Client' : 'Approval'}</th>
             {showPayment && <th className="px-3 py-2 text-center">Payment</th>}
             <th className="px-3 py-2"></th>
@@ -317,13 +316,13 @@ export default function SalesBilling() {
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmt(b.total_amount)}</td>
               <td className="px-3 py-2 text-center">{StatusCell(b)}</td>
               {sentMode && <td className="px-3 py-2 text-center">
-                {b.checked_at
+                {b.from_approved_dprs ? <span className="text-xs text-emerald-700">DPR approved · No further approval</span> : b.checked_at
                   ? <span className="text-xs text-emerald-700 whitespace-nowrap" title={`Checked ${b.checked_at}`}>✓ Checked / OK</span>
                   : <button onClick={() => checkBill(b)} className="btn btn-secondary text-xs whitespace-nowrap">Checked / OK</button>}
               </td>}
               <td className="px-3 py-2 text-center">
                 {sentMode ? (
-                  <button disabled={!b.checked_at && !b.sent_to_client} title={!b.checked_at && !b.sent_to_client ? 'Mark Checked / OK first' : undefined} onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full disabled:opacity-40 disabled:cursor-not-allowed ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
+                  <button disabled={!b.from_approved_dprs && !b.checked_at && !b.sent_to_client} title={!b.from_approved_dprs && !b.checked_at && !b.sent_to_client ? 'Mark Checked / OK first' : undefined} onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full disabled:opacity-40 disabled:cursor-not-allowed ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
                     {b.sent_to_client ? '✓ Sent to client' : 'Sent to client'}
                   </button>
                 ) : ApprovalCell(b)}
@@ -358,7 +357,7 @@ export default function SalesBilling() {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h3 className="font-semibold text-lg">Sales Billing</h3>
         <div className="flex gap-2">
-          {tab === 'dpr' && <button onClick={openInstallModal} className="btn btn-secondary flex items-center gap-2" title="Check completed, approved DPRs to create their bills"><FiCheckCircle /> Check DPRs & Create Bills</button>}
+          {tab === 'dpr' && <button onClick={openInstallModal} className="btn btn-secondary flex items-center gap-2" title="Create bills from approved DPRs in completed billing periods"><FiCheckCircle /> Create 15-Day DPR Bills</button>}
           {(tab === 'orders' || tab === 'dashboard') && <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>}
           {tab !== 'responsible' && <button onClick={() => {
             // Export what the ACTIVE tab actually shows — each tab is a different
@@ -572,7 +571,7 @@ export default function SalesBilling() {
       {tab === 'dpr' && (
         <div className="space-y-2">
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
-            <b>Done</b> → <b>Checked / OK</b> → Bill created → <b>Sent to Client</b>. Check completed, approved DPRs to create their bills automatically. Each DPR is billed once.
+            <b>DPR approved</b> → <b>15-day bill created</b> → <b>Sent to Client</b>. Periods: 1st–15th and 16th–month-end. Pending and rejected DPRs are excluded. No second approval is required; each DPR is billed once.
           </div>
           <BillTable rows={t3Pager.pageItems} pager={t3Pager} showPayment={false} sentMode />
         </div>
@@ -581,10 +580,10 @@ export default function SalesBilling() {
       {tab === 'responsible' && <ResponsibilityTab module="sales_billing" title="Sales Billing" />}
 
       {/* Selective Installation Bills Modal */}
-      <Modal isOpen={installModal} onClose={() => !generatingInstall && setInstallModal(false)} title="Check DPRs & Create Bills" xwide>
+      <Modal isOpen={installModal} onClose={() => !generatingInstall && setInstallModal(false)} title="Create 15-Day DPR Bills" xwide>
         <div className="space-y-4">
           <div className="text-xs text-gray-600 bg-blue-50/70 border border-blue-200 rounded-lg p-3 leading-relaxed">
-            Review the selected completed DPRs and amounts. Click <b>Checked / OK</b> to record your check and automatically create their bills. Sending to the client remains a separate step.
+            Approved DPRs from completed periods are shown below. Bills are grouped by project and period (1st–15th or 16th–month-end). No second approval is needed. Sending to the client remains a separate step.
           </div>
 
           {/* Controls toolbar */}
@@ -763,7 +762,7 @@ export default function SalesBilling() {
                 <FiCheckCircle size={14} />
                 {generatingInstall
                   ? 'Generating…'
-                  : `Checked / OK — Create Bills (${selectedStats.orderCount})`}
+                  : `Create 15-Day Bills (${selectedStats.orderCount})`}
               </button>
             </div>
           </div>

@@ -4,6 +4,7 @@
 // per bill; numbering SEPL/SB/<FY>/NNN; Admin + Accounts (installation perm).
 const express = require('express');
 const { istToday } = require('../lib/istDate');
+const { billingPeriod, completedThrough } = require('../lib/installationBillingPeriod');
 const { resolveInstallationBillUnits } = require('../lib/installationBillUnits');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -153,6 +154,7 @@ router.get('/', requirePermission('installation', 'view'), (req, res) => {
   const db = getDb();
   const rows = db.prepare(
     `SELECT sb.*, u.name AS created_by_name,
+            (EXISTS(SELECT 1 FROM dpr WHERE sales_bill_id=sb.id) AND NOT EXISTS(SELECT 1 FROM dpr WHERE sales_bill_id=sb.id AND COALESCE(approval_status,'pending')<>'approved')) AS from_approved_dprs,
             COALESCE((SELECT SUM(p.amount) FROM payments p
                        WHERE p.reference_type='sales_bill' AND p.reference_id=sb.id), 0) AS received_amount
        FROM sales_bills sb LEFT JOIN users u ON u.id = sb.created_by
@@ -186,9 +188,9 @@ router.get('/pending', requirePermission('installation', 'view'), (req, res) => 
     const unbilledDprs = db.prepare(
       `SELECT d.id, s.business_book_id
          FROM dpr d JOIN sites s ON s.id = d.site_id
-        WHERE d.approval_status='approved' AND d.billing_ready=1
-          AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
-    ).all();
+        WHERE d.approval_status='approved'
+          AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL AND d.report_date <= ?`
+    ).all(completedThrough(istToday()));
     let totalVal = 0;
     for (const d of unbilledDprs) {
       const res = getDprSitcWorkItems(db, { dprIds: [d.id], businessBookId: d.business_book_id });
@@ -215,10 +217,11 @@ router.get('/unbilled-dprs', requirePermission('installation', 'view'), (req, re
          JOIN sites s ON s.id = d.site_id
          JOIN business_book bb ON bb.id = s.business_book_id
          LEFT JOIN users u ON u.id = d.submitted_by
-        WHERE d.approval_status = 'approved' AND d.billing_ready = 1
+        WHERE d.approval_status = 'approved'
           AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL
+        AND d.report_date <= ?
         ORDER BY s.business_book_id, d.report_date DESC`
-    ).all();
+    ).all(completedThrough(istToday()));
 
     const poByOrder = new Map();
     const getPoMaps = (bbId) => {
@@ -746,7 +749,11 @@ router.put('/:id/sent', requirePermission('installation', 'edit'), (req, res) =>
   const db = getDb();
   const bill = db.prepare('SELECT id, bill_type, checked_at, sent_to_client FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
-  if (bill.bill_type === 3 && !bill.sent_to_client && !bill.checked_at) {
+  const linkedDprs = db.prepare('SELECT approval_status FROM dpr WHERE sales_bill_id=?').all(bill.id);
+  if (!bill.sent_to_client && linkedDprs.some(d => d.approval_status !== 'approved')) {
+    return res.status(409).json({ error: 'A linked DPR is no longer approved. Reconcile this bill before sending.' });
+  }
+  if (bill.bill_type === 3 && !linkedDprs.length && !bill.sent_to_client && !bill.checked_at) {
     return res.status(400).json({ error: 'Mark this installation bill Checked / OK before Sent to Client.' });
   }
   const sent = bill.sent_to_client ? 0 : 1;
@@ -811,19 +818,20 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
 });
 
 // Generate Type-3 Installation bills from DPRs.
-// Sums each project's DPR work-item value for approved, billing-ready, NOT-yet-billed DPRs,
-// and raises one Type-3 bill per project. Supports selective billing via dprIds.
+// Sums approved, unbilled DPR work by project and completed half-month.
+// Raises a Type-3 bill per project/period. Supports selective billing via dprIds.
 // Idempotent via dpr.sales_bill_id (a DPR is billed once). Returns a summary.
-function generateInstallationBills(db, userId, { draft = true, dprIds = null, billDate = null, checked = false } = {}) {
-  // No background or legacy caller may bypass the human check step.
-  if (!checked || !userId) throw new Error('Check the selected DPRs before creating installation bills.');
+function generateInstallationBills(db, userId = null, { dprIds = null, billDate = null, today = istToday() } = {}) {
+  // DPR approval is the only approval gate. Only completed billing periods qualify.
+  const cutoff = completedThrough(today);
   let sql = `
     SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id
        FROM dpr d JOIN sites s ON s.id = d.site_id
-      WHERE d.approval_status = 'approved' AND d.billing_ready = 1
+      WHERE d.approval_status = 'approved'
         AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL
   `;
-  const params = [];
+  sql += ' AND d.report_date <= ?';
+  const params = [cutoff];
   if (Array.isArray(dprIds) && dprIds.length > 0) {
     sql += ` AND d.id IN (${dprIds.map(() => '?').join(',')})`;
     params.push(...dprIds);
@@ -836,25 +844,28 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
   }
   if (!rows.length) return { created: 0, bills: [] };
 
-  const groups = new Map();   // bb_id → { dprIds, minDate, maxDate }
+  const groups = new Map();
   for (const r of rows) {
-    if (!groups.has(r.bb_id)) groups.set(r.bb_id, { dprIds: [], minDate: r.report_date, maxDate: r.report_date });
-    const g = groups.get(r.bb_id);
-    g.dprIds.push(r.dpr_id);
-    if (r.report_date < g.minDate) g.minDate = r.report_date;
-    if (r.report_date > g.maxDate) g.maxDate = r.report_date;
+    const period = billingPeriod(r.report_date);
+    const key = `${r.bb_id}:${period.start}`;
+    if (!groups.has(key)) groups.set(key, { bbId:r.bb_id, dprIds:[], minDate:period.start, maxDate:period.end });
+    groups.get(key).dprIds.push(r.dpr_id);
   }
-
-  const billDateToUse = /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : istToday();
-  const out = [];
+  const billDateToUse = /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : today;
+  const out = [], skipped = [];
   const tx = db.transaction(() => {
-    for (const [bbId, g] of groups) {
+    for (const g of groups.values()) {
+      const bbId = g.bbId;
       const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbId);
       if (!bb) throw new Error('A selected DPR has no linked order.');
 
       const sitcRes = getDprSitcWorkItems(db, { dprIds: g.dprIds, businessBookId: bbId });
       const workValue = round2(sitcRes.totalSitcVal);
-      if (workValue <= 0) throw new Error('A selected project has no billable work value. Review its DPR quantities and rates.');
+      if (workValue <= 0) {
+        if (dprIds) throw new Error('A selected project has no billable work value. Review its DPR quantities and rates.');
+        skipped.push({ business_book_id:bbId, period:g.minDate, reason:'No billable work value; review DPR quantities and rates' });
+        continue;
+      }
 
       const instPct = parseFloat(String(bb.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
       const pctToUse = instPct > 0 ? instPct : 100;
@@ -881,11 +892,10 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
          VALUES (?,?,?,?,?,?,3,?,?,?,?,?, 'DPR', ?, ?, 'pending', ?)`
       ).run(bill_number, billDateToUse, amount, gst_amount, total_amount, gst_rate,
         bbId, (bb.client_name || bb.company_name || '').trim(), bb.project_name || null, BILL_STATUS[3],
-        prior ? prior.id : null, refDoc, draft ? 'draft' : 'approved', userId);
+        prior ? prior.id : null, refDoc, 'approved', userId);
       const billId = r.lastInsertRowid;
-      db.prepare('UPDATE sales_bills SET checked_at=CURRENT_TIMESTAMP, checked_by=? WHERE id=?').run(userId, billId);
       db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
-        .run(billId, 'checked', userId, `Checked / OK: DPRs ${g.dprIds.join(', ')}; bill created automatically`);
+        .run(billId, 'dpr_approved', userId, `Bill created from approved DPRs ${g.dprIds.join(', ')}; no second approval required`);
 
       // Populate sales_bill_items with full SITC rates
       const insItem = db.prepare(
@@ -899,26 +909,23 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
       const upd = db.prepare('UPDATE dpr SET sales_bill_id=? WHERE id=?');
       for (const dprId of g.dprIds) upd.run(billId, dprId);
       db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
-        .run(billId, draft ? 'draft' : 'approved', userId, `Installation bill from ${g.dprIds.length} DPR(s)`);
+        .run(billId, 'approved', userId, `Installation bill from ${g.dprIds.length} DPR(s)`);
       out.push({ bill_number, business_book_id: bbId, dprs: g.dprIds.length, amount, total_amount });
     }
   });
   tx();
-  return { created: out.length, bills: out };
+  return { created: out.length, bills: out, skipped };
 }
 
 // Generate installation bills for selected DPRs (or all eligible unbilled DPRs if none specified).
 router.post('/generate-installation', requirePermission('installation', 'create'), (req, res) => {
   try {
     const db = getDb();
-    if (req.body.checked !== true) return res.status(400).json({ error: 'Confirm Checked / OK to create the bill.' });
     const dprIds = Array.isArray(req.body.dpr_ids) ? req.body.dpr_ids.map(Number).filter(Boolean) : null;
     if (!dprIds || dprIds.length === 0) {
       return res.status(400).json({ error: 'Please select at least one DPR to generate installation bills.' });
     }
     const result = generateInstallationBills(db, req.user.id, {
-      draft: false,
-      checked: true,
       dprIds,
       billDate: req.body.bill_date
     });
