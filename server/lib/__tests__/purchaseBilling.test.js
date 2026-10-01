@@ -1,0 +1,42 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const Database=require('better-sqlite3');
+const {ensurePurchaseBilling,saveBill,poState,financials,followup}=require('../purchaseBilling');
+function fixture(){
+ const db=new Database(':memory:');
+ db.exec(`PRAGMA foreign_keys=ON;
+ CREATE TABLE users(id INTEGER PRIMARY KEY);
+ CREATE TABLE vendors(id INTEGER PRIMARY KEY,name TEXT);
+ CREATE TABLE indents(id INTEGER PRIMARY KEY,indent_number TEXT,site_name TEXT);
+ CREATE TABLE indent_items(id INTEGER PRIMARY KEY,item_master_id INTEGER,description TEXT,unit TEXT);
+ CREATE TABLE item_master(id INTEGER PRIMARY KEY,item_name TEXT,uom TEXT);
+ CREATE TABLE vendor_pos(id INTEGER PRIMARY KEY,vendor_id INTEGER,po_number TEXT,indent_id INTEGER,cancelled INTEGER DEFAULT 0,po_approval TEXT DEFAULT 'approved',payment_block_status TEXT,expected_receipt_date TEXT);
+ CREATE TABLE vendor_po_items(id INTEGER PRIMARY KEY,vendor_po_id INTEGER,indent_item_id INTEGER,description TEXT,quantity REAL,rate REAL);
+ CREATE TABLE delivery_notes(id INTEGER PRIMARY KEY,vendor_po_id INTEGER,document_type TEXT,status TEXT,items_json TEXT,balance_purchase_bill_id INTEGER);
+ CREATE TABLE grn(id INTEGER PRIMARY KEY,vendor_po_id INTEGER,status TEXT);
+ CREATE TABLE grn_items(id INTEGER PRIMARY KEY,grn_id INTEGER,item_master_id INTEGER,description TEXT,accepted_qty REAL,received_qty REAL,rejected_qty REAL);
+ CREATE TABLE purchase_bills(id INTEGER PRIMARY KEY,vendor_po_id INTEGER,vendor_id INTEGER,bill_number TEXT,bill_date TEXT,amount REAL,gst_amount REAL,total_amount REAL,file_path TEXT,material_status TEXT,created_by INTEGER,payment_status TEXT DEFAULT 'pending');
+ CREATE TABLE debit_notes(id INTEGER PRIMARY KEY,vendor_po_id INTEGER,vendor_id INTEGER,purchase_bill_id INTEGER,status TEXT,type TEXT,reason TEXT,amount REAL);
+ CREATE TABLE payments(id INTEGER PRIMARY KEY,type TEXT,reference_type TEXT,reference_id INTEGER,amount REAL);
+ INSERT INTO users VALUES(1); INSERT INTO vendors VALUES(1,'Vendor A'),(2,'Vendor B');
+ INSERT INTO indents VALUES(1,'I1','Site');
+ INSERT INTO vendor_pos(id,vendor_id,po_number,indent_id) VALUES(1,1,'PO1',1),(2,1,'PO2',1),(3,2,'PO3',1);
+ INSERT INTO indent_items VALUES(1,NULL,'Cable','MTR'),(2,NULL,'Pipe','PCS'),(3,NULL,'Tool','PCS');
+ INSERT INTO vendor_po_items VALUES(1,1,1,'Cable',100,100),(2,2,2,'Pipe',20,350),(3,3,3,'Tool',10,50);`);
+ for(const [id,qty] of [[1,100],[2,20],[3,10]])db.prepare("INSERT INTO delivery_notes VALUES(?,?,'challan','received',?,NULL)").run(id,id,JSON.stringify([{vendor_po_item_id:id,received_qty:qty}]));
+ ensurePurchaseBilling(db);return db;
+}
+let sequence=0;
+const line=(id,quantity,rate=id===2?350:100)=>({vendor_po_id:id,vendor_po_item_id:id,quantity,bill_rate:rate,gst_percent:18});
+function save(db,items,extra={}){const id=++sequence;return saveBill(db,{vendor_id:1,bill_number:'TEST-'+id,bill_date:'2026-09-30',request_key:'local-test-request-'+id,items,...extra},1,'/uploads/test.pdf');}
+const bill=(db,id)=>db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(id);
+test('single PO partial billing, same rate, no debit, unpaid, follow-up remainder',()=>{const db=fixture();const r=save(db,[line(1,60)]);assert.equal(bill(db,r.id).total_amount,7080);assert.equal(r.debit_total,0);assert.equal(r.net_payable,7080);assert.equal(r.payment_status,'pending');assert.equal(poState(db,1).items[0].billable_qty,40);assert.equal(followup(db).rows.find(p=>p.id===1).pending_value,4000);assert.equal(db.prepare('SELECT bill_rate-po_rate n FROM purchase_bill_items').get().n,0);db.close();});
+test('multi PO editable rates, snapshots unchanged and every PO balance updated',()=>{const db=fixture();const r=save(db,[line(1,60,105),line(2,20,360)]);assert.equal(bill(db,r.id).vendor_po_id,null);assert.equal(bill(db,r.id).total_amount,15930);assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bill_pos').get().n,2);assert.equal(poState(db,1).items[0].billable_qty,40);assert.equal(poState(db,2).items[0].billable_qty,0);assert(!followup(db).rows.some(p=>p.id===2));assert.equal(db.prepare('SELECT rate FROM vendor_po_items WHERE id=2').get().rate,350);assert.equal(db.prepare('SELECT bill_rate-po_rate n FROM purchase_bill_items WHERE vendor_po_item_id=2').get().n,10);db.close();});
+test('mixed vendors rejected atomically',()=>{const db=fixture();assert.throws(()=>save(db,[line(1,1),line(3,1)]),/same|selected vendor/);assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bills').get().n,0);db.close();});
+test('full billing disappears; duplicate or excessive quantities blocked; retry idempotent',()=>{const db=fixture();const data={request_key:'same-request-123456789'};const r=save(db,[line(1,100)],data);assert(!followup(db).rows.some(p=>p.id===1));assert.throws(()=>save(db,[line(1,1)]),/exceeds/);assert.equal(save(db,[line(1,100)],data).id,r.id);assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bill_items').get().n,1);db.close();});
+test('legitimate debit and existing AP records derive unpaid, partial and paid balances',()=>{const db=fixture();db.exec("INSERT INTO debit_notes VALUES(1,1,1,NULL,'open','short_supply','Agreed adjustment',500)");const r=save(db,[{...line(1,100),gst_percent:0}],{debit_ids:[1]});assert.equal(r.debit_total,500);assert.equal(r.net_payable,9500);assert.equal(r.payment_status,'pending');db.exec(`INSERT INTO payments VALUES(1,'payable','purchase_bill',${r.id},5000)`);let f=financials(db,bill(db,r.id));assert.equal(f.payment_status,'partial');assert.equal(f.balance_amount,4500);db.exec(`INSERT INTO payments VALUES(2,'payable','purchase_bill',${r.id},4500)`);f=financials(db,bill(db,r.id));assert.equal(f.payment_status,'paid');assert.equal(f.balance_amount,0);assert.throws(()=>save(db,[line(2,1)],{debit_ids:[1]}),/available/);db.close();});
+test('historical exact quantities migrate without changing totals; false auto debit not charged',()=>{const db=fixture();db.exec("INSERT INTO purchase_bills(id,vendor_po_id,vendor_id,bill_number,amount,gst_amount,total_amount,material_status) VALUES(10,1,1,'OLD',10000,1800,11800,'approved'); INSERT INTO debit_notes VALUES(1,1,1,10,'open','short_supply','Auto short supply',2440)");ensurePurchaseBilling(db);ensurePurchaseBilling(db);assert.equal(bill(db,10).total_amount,11800);assert.equal(bill(db,10).reconciliation_version,1);assert.equal(financials(db,bill(db,10)).debit_total,0);assert.equal(poState(db,1).items[0].billable_qty,0);assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bill_items').get().n,1);db.close();});
+test('uncertain history blocks new allocation without inventing billed quantities',()=>{const db=fixture();db.exec("INSERT INTO purchase_bills(id,vendor_po_id,vendor_id,bill_number,amount,gst_amount,total_amount) VALUES(10,1,1,'OLD',123,0,123)");ensurePurchaseBilling(db);assert(poState(db,1).reconciliation_required);assert.throws(()=>save(db,[line(1,1)]),/historical/);assert.equal(bill(db,10).total_amount,123);db.close();});
+test('GRN acceptance excludes rejected quantities and does not double count challan',()=>{const db=fixture();db.exec("INSERT INTO grn VALUES(1,1,'complete'); INSERT INTO grn_items VALUES(1,1,NULL,'Cable',60,70,10)");assert.equal(poState(db,1).items[0].billable_qty,60);save(db,[line(1,60)]);assert.equal(db.prepare('SELECT grn_item_id FROM purchase_bill_items').get().grn_item_id,1);db.close();});
+test('pending receipts and zero accepted GRNs are not billable',()=>{const db=fixture();db.exec("UPDATE delivery_notes SET status='pending' WHERE id=1; INSERT INTO grn VALUES(1,2,'complete'); INSERT INTO grn_items VALUES(1,1,NULL,'Pipe',0,20,20)");assert.equal(poState(db,1).items[0].billable_qty,0);assert.equal(poState(db,2).items[0].billable_qty,0);db.close();});
+test('multiple historical bills on one PO reconcile independently without changing amounts',()=>{const db=fixture();db.exec("INSERT INTO purchase_bills(id,vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,file_path) VALUES(10,1,1,'OLD-A','2026-09-30',6000,0,6000,'old.pdf'),(11,1,1,'OLD-B','2026-09-30',4000,0,4000,'old.pdf')");ensurePurchaseBilling(db);for(const[id,name,qty]of[[10,'OLD-A',60],[11,'OLD-B',40]])saveBill(db,{vendor_id:1,bill_number:name,bill_date:'2026-09-30',request_key:'historical-request-'+id,items:[{...line(1,qty),gst_percent:0}]},1,'old.pdf',id);assert.equal(poState(db,1).items[0].billable_qty,0);assert.equal(bill(db,10).total_amount,6000);assert.equal(bill(db,11).total_amount,4000);db.close();});

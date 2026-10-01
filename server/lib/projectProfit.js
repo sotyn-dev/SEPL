@@ -36,7 +36,7 @@ function report(db, {basis='sales', from='', to=''} = {}) {
       WHERE b.approval_status='approved' AND (b.bill_type IN (2,3) OR b.bill_type IS NULL)`).all(),'Sales invoice','revenue','amount','bill_date');
     else add(db.prepare(`SELECT *,ra_no reference FROM proj_client_ra_bills WHERE status IN ('raised','payment','paid')`).all(),'Client RA','revenue','gross_amount','raised_at');
     add(db.prepare(`SELECT b.*, COALESCE(op.business_book_id,p.business_book_id) project_id,b.bill_number reference
-      FROM purchase_bills b LEFT JOIN vendor_pos v ON v.id=b.vendor_po_id LEFT JOIN indents i ON i.id=v.indent_id
+      FROM ${db.prepare("SELECT 1 FROM sqlite_master WHERE name='purchase_bill_items'").get() ? `(SELECT b.id,b.bill_number,b.bill_date,p.vendor_po_id,SUM(p.taxable_amount) amount FROM purchase_bills b JOIN purchase_bill_items p ON p.purchase_bill_id=b.id GROUP BY b.id,p.vendor_po_id UNION ALL SELECT id,bill_number,bill_date,vendor_po_id,amount FROM purchase_bills WHERE NOT EXISTS(SELECT 1 FROM purchase_bill_items p WHERE p.purchase_bill_id=purchase_bills.id))` : 'purchase_bills'} b LEFT JOIN vendor_pos v ON v.id=b.vendor_po_id LEFT JOIN indents i ON i.id=v.indent_id
       LEFT JOIN order_planning op ON op.id=i.planning_id LEFT JOIN purchase_orders p ON p.id=op.po_id`).all(),'Purchase bill','cost','amount','bill_date');
     add(db.prepare(`SELECT *,ra_no reference FROM proj_contractor_ra_bills WHERE status IN ('raised','payment','paid')`).all(),'Contractor RA','cost','gross_amount','raised_at');
     add(db.prepare(`SELECT r.*,COALESCE(s.business_book_id,p.business_book_id) project_id,r.request_no reference

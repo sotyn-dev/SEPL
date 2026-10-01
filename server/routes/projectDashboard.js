@@ -57,7 +57,7 @@ function getProjectVpos(db, project) {
         ))
       )
     ORDER BY vp.id DESC
-  `).all(pId, pId, lNo, pName, pName, cName, cName);
+  `).all(pId, pId, lNo, pName, pName, cName, cName).map(po => ({...po,...require("../lib/purchaseBilling").poFinancials(db,po.id)}));
 }
 
 // ── GET /api/project-dashboard/projects ──────────────────────────────────

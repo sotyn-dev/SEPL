@@ -102,7 +102,7 @@ router.post('/grn', requirePermission('indent_fms', 'create'), (req, res) => {
 
   const insertItem = db.prepare('INSERT INTO grn_items (grn_id, description, ordered_qty, received_qty, accepted_qty, rejected_qty, unit, rate, amount, remarks, item_master_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
   for (const i of (items || [])) {
-    insertItem.run(r.lastInsertRowid, i.description, i.ordered_qty, i.received_qty, i.accepted_qty || i.received_qty, i.rejected_qty || 0, i.unit, i.rate, (i.accepted_qty || i.received_qty) * i.rate, i.remarks, i.item_master_id || null);
+    insertItem.run(r.lastInsertRowid, i.description, i.ordered_qty, i.received_qty, i.accepted_qty ?? Math.max(0, (+i.received_qty || 0) - (+i.rejected_qty || 0)), i.rejected_qty || 0, i.unit, i.rate, (i.accepted_qty ?? Math.max(0, (+i.received_qty || 0) - (+i.rejected_qty || 0))) * i.rate, i.remarks, i.item_master_id || null);
   }
 
   // Auto DEBIT NOTES from receiving variance (mam 2026-06-04): rejected
@@ -171,7 +171,7 @@ router.post('/grn', requirePermission('indent_fms', 'create'), (req, res) => {
       };
       const tx = db.transaction(() => {
         for (const i of (items || [])) {
-          const qty = +(i.accepted_qty || i.received_qty || 0);
+          const qty = +(i.accepted_qty ?? Math.max(0, (+i.received_qty || 0) - (+i.rejected_qty || 0)));
           if (!i.item_master_id || qty <= 0) continue;
           apply(+warehouse_id, +i.item_master_id, qty, +(i.rate || 0));
           stockIns += 1;
@@ -201,6 +201,7 @@ router.get('/grn/:id', (req, res) => {
 
 router.delete('/grn/:id', requirePermission('indent_fms', 'delete'), (req, res) => {
   const db = getDb();
+  if (db.prepare('SELECT p.id FROM purchase_bill_items p JOIN grn_items g ON g.id=p.grn_item_id WHERE g.grn_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This GRN is allocated to a purchase invoice.' });
   db.prepare('DELETE FROM grn_items WHERE grn_id=?').run(req.params.id);
   db.prepare('DELETE FROM grn WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });

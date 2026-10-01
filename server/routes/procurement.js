@@ -1,5 +1,6 @@
 const express = require('express');
 const { istToday } = require('../lib/istDate');
+const purchaseBilling = require('../lib/purchaseBilling');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
@@ -4707,7 +4708,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
   if (!cur) return res.status(404).json({ error: 'Vendor PO not found' });
   if (cur.cancelled) return res.status(400).json({ error: 'PO is cancelled — restore it before editing.' });
 
-  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
+  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bill_pos WHERE vendor_po_id=?').get(id).c;
   const sets = []; const params = [];
   const set = (k, v) => { sets.push(`${k}=?`); params.push(v); };
 
@@ -4979,7 +4980,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   // Block-edit warnings — surface bill / DN count so the UI can disable
   // line-item editing fields when downstream documents already reference
   // this PO.
-  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(req.params.id).c;
+  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bill_pos WHERE vendor_po_id=?').get(req.params.id).c;
   const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(req.params.id).c;
 
   // TSK-0824: Attach cost estimate evaluation per item and overall
@@ -5007,7 +5008,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
 router.delete('/vendor-po/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
-  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
+  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bill_pos WHERE vendor_po_id=?').get(id).c;
   const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(id).c;
   // Hard delete is only allowed when nothing references this PO. Otherwise
   // the user should use POST /vendor-po/:id/cancel which is a soft-delete
@@ -5061,6 +5062,9 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
 
 // Purchase Bills (paginated + search + date range + backward-compat)
 function attachDeliveryBalance(db, row) {
+  Object.assign(row, purchaseBilling.financials(db,row));
+  row.linked_pos=db.prepare('SELECT vp.id,vp.po_number FROM purchase_bill_pos bp JOIN vendor_pos vp ON vp.id=bp.vendor_po_id WHERE bp.purchase_bill_id=?').all(row.id);
+
   if (row.delivery_mode === 'partial' && row.vendor_po_id) {
     row.pending_delivery_lines = require('../lib/partialDeliveries').balanceItems(db, row.vendor_po_id).filter(it => it.remaining_qty > 0).length;
   }
@@ -5125,9 +5129,7 @@ router.get('/purchase-bills', (req, res) => {
     const offset = (pageNum - 1) * limitNum;
     const rows = db.prepare(`
       SELECT pb.*, v.name as vendor_name,
-        COALESCE((SELECT SUM(d.amount) FROM debit_notes d
-                   WHERE d.vendor_po_id = pb.vendor_po_id
-                     AND d.status <> 'cancelled'), 0) AS debit_total
+        0 AS debit_total
       FROM purchase_bills pb
       LEFT JOIN vendors v ON pb.vendor_id = v.id
       ${whereSql}
@@ -5148,9 +5150,7 @@ router.get('/purchase-bills', (req, res) => {
   // Raw array for export or backward compat
   const rows = db.prepare(`
     SELECT pb.*, v.name as vendor_name,
-      COALESCE((SELECT SUM(d.amount) FROM debit_notes d
-                 WHERE d.vendor_po_id = pb.vendor_po_id
-                   AND d.status <> 'cancelled'), 0) AS debit_total
+      0 AS debit_total
     FROM purchase_bills pb
     LEFT JOIN vendors v ON pb.vendor_id = v.id
     ${whereSql}
@@ -5162,103 +5162,27 @@ router.get('/purchase-bills', (req, res) => {
 });
 
 // Follow-up: POs awaiting Purchase Bill (paginated + search + expected-date range + blocked_count)
-router.get('/purchase-bills/followup', (req, res) => {
-  const db = getDb();
-  const { page, limit, from, to, q, search, export: isExport } = req.query;
-
-  // 1. Calculate blocked_count (POs waiting for bill but blocked on payment gate)
-  const blockedRow = db.prepare(`
-    SELECT COUNT(*) as c
-    FROM vendor_pos vp
-    WHERE COALESCE(vp.cancelled, 0) = 0
-      AND vp.payment_block_status = 'pending'
-      AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)
-  `).get();
-  const blocked_count = blockedRow ? blockedRow.c : 0;
-
-  // 2. Base criteria for follow-up: not cancelled, not blocked, no purchase bill
-  const whereClauses = [
-    'COALESCE(vp.cancelled, 0) = 0',
-    '(vp.payment_block_status IS NULL OR vp.payment_block_status != \'pending\')',
-    'NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)'
-  ];
-  const params = [];
-
-  if (from) {
-    whereClauses.push('DATE(vp.expected_receipt_date) >= ?');
-    params.push(from);
-  }
-  if (to) {
-    whereClauses.push('DATE(vp.expected_receipt_date) <= ?');
-    params.push(to);
-  }
-
-  const queryStr = (q || search || '').trim().toLowerCase();
-  if (queryStr) {
-    whereClauses.push('(LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(ind.indent_number, \'\')) LIKE ? OR LOWER(COALESCE(ind.site_name, \'\')) LIKE ?)');
-    const likeParam = `%${queryStr}%`;
-    params.push(likeParam, likeParam, likeParam, likeParam);
-  }
-
-  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
-
-  const pageNum = parseInt(page, 10);
-  const limitNum = parseInt(limit, 10);
-  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
-
-  const totalRow = db.prepare(`
-    SELECT COUNT(*) as c
-    FROM vendor_pos vp
-    LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents ind ON vp.indent_id = ind.id
-    ${whereSql}
-  `).get(...params);
-  const total = totalRow ? totalRow.c : 0;
-
-  let selectSql = `
-    SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.expected_receipt_date,
-           vp.vendor_id, vp.payment_block_status, vp.delay_reason, vp.file_path,
-           v.name as vendor_name,
-           ind.indent_number, ind.site_name as indent_site_name,
-           COALESCE((
-             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
-             FROM vendor_po_items vpi
-             WHERE vpi.vendor_po_id = vp.id
-           ), vp.total_amount) as display_total
-    FROM vendor_pos vp
-    LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents ind ON vp.indent_id = ind.id
-    ${whereSql}
-    ORDER BY (CASE WHEN vp.expected_receipt_date IS NULL OR vp.expected_receipt_date = '' THEN '9999-12-31' ELSE vp.expected_receipt_date END) ASC, vp.id DESC
-  `;
-
-  let rows;
-  if (isPaginated) {
-    const offset = (pageNum - 1) * limitNum;
-    selectSql += ' LIMIT ? OFFSET ?';
-    rows = db.prepare(selectSql).all(...params, limitNum, offset);
-  } else {
-    rows = db.prepare(selectSql).all(...params);
-  }
-
-  for (const r of rows) {
-    const stored = +r.total_amount || 0;
-    const live = +r.display_total || 0;
-    r.total_amount_drift = Math.round(Math.abs(stored - live));
-  }
-
-  if (isPaginated) {
-    return res.json({
-      rows,
-      total,
-      blocked_count,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum) || 1
-    });
-  }
-
-  res.json(rows);
+router.get('/purchase-bills/followup', (req,res)=>{
+  const result=purchaseBilling.followup(getDb(),req.query);
+  const page=Math.max(1,parseInt(req.query.page)||1),limit=Math.max(1,parseInt(req.query.limit)||15);
+  if(req.query.export || !req.query.page)return res.json(result.rows);
+  res.json({...result,rows:result.rows.slice((page-1)*limit,page*limit),total:result.rows.length,page,limit,totalPages:Math.max(1,Math.ceil(result.rows.length/limit))});
+});
+router.get('/purchase-bills/eligible', (req,res)=>{
+  const db=getDb(),vendor=+req.query.vendor_id;
+  const legacy=+req.query.reconcile_bill_id||0;
+  const pos=db.prepare('SELECT id FROM vendor_pos WHERE vendor_id=? AND COALESCE(cancelled,0)=0 ORDER BY id DESC').all(vendor).map(p=>purchaseBilling.poState(db,p.id,legacy));
+  res.json({pos:pos.filter(p=>p.items.some(i=>i.billable_qty>0)||p.reconciliation_required),debits:purchaseBilling.eligibleDebits(db,vendor)});
+});
+router.post('/purchase-bills/:id/reconcile',needsApprove,vendorPoUpload.single('file'),(req,res)=>{
+  try {
+    const bill=getDb().prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+    if(!bill)throw Error('Bill not found');
+    const body={...req.body,items:typeof req.body.items==='string'?JSON.parse(req.body.items):req.body.items,debit_ids:[]};
+    const result=purchaseBilling.saveBill(getDb(),body,req.user.id,req.file?`/uploads/${req.file.filename}`:bill.file_path,+req.params.id);
+    if(req.file)getDb().prepare('UPDATE purchase_bills SET file_path=? WHERE id=?').run(`/uploads/${req.file.filename}`,bill.id);
+    res.json(result);
+  } catch(e){if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}res.status(400).json({error:e.message});}
 });
 
 // Per-item PO qty vs RECEIVED qty for a Vendor PO — feeds the Bill-upload
@@ -5306,6 +5230,18 @@ router.get('/vendor-po/:id/bill-items', (req, res) => {
 // is attached it still works — mam sometimes captures a bill without a scan.
 router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
+  if(b.items) {
+    try {
+      const body={...b,items:typeof b.items==='string'?JSON.parse(b.items):b.items,debit_ids:typeof b.debit_ids==='string'?JSON.parse(b.debit_ids):b.debit_ids};
+      const result=purchaseBilling.saveBill(getDb(),body,req.user.id,req.file?`/uploads/${req.file.filename}`:null);
+      if(result.existing&&req.file)fs.unlinkSync(req.file.path);
+      return res.status(201).json(result);
+    }catch(e){if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}return res.status(400).json({error:e.message});}
+  }
+  if(b.vendor_po_id && getDb().prepare('SELECT 1 FROM purchase_bill_pos WHERE vendor_po_id=? LIMIT 1').get(+b.vendor_po_id)) {
+    if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}
+    return res.status(400).json({error:'This PO already has a bill. Use Add Bill for its remaining unbilled quantities, or Balance pending · Receive for a later delivery.'});
+  }
   if (!req.file) return res.status(400).json({ error: 'Bill file is required — upload the vendor bill' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
   const vendor_id = b.vendor_id ? +b.vendor_id : null;
@@ -5556,6 +5492,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-sales-bill] failed (bill saved anyway):', e.message); }
     }
 
+    purchaseBilling.ensurePurchaseBilling(db);
     res.status(201).json({
       id: r.lastInsertRowid,
       file_path: filePath,
@@ -5575,7 +5512,13 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
 });
 
 router.delete('/purchase-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
-  getDb().prepare('DELETE FROM purchase_bills WHERE id=?').run(req.params.id);
+  const db=getDb(),bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if(bill && purchaseBilling.financials(db,bill).paid_amount>0)return res.status(400).json({error:'A bill with recorded payments cannot be deleted'});
+  if(db.prepare('SELECT 1 FROM debit_notes WHERE purchase_bill_id=?').get(req.params.id))return res.status(400).json({error:'Resolve linked debit notes before deleting this bill'});
+  db.transaction(()=>{
+    db.prepare('UPDATE delivery_notes SET balance_purchase_bill_id=NULL WHERE balance_purchase_bill_id=?').run(req.params.id);
+    db.prepare('DELETE FROM purchase_bills WHERE id=?').run(req.params.id);
+  })();
   res.json({ message: 'Deleted' });
 });
 
@@ -5748,7 +5691,7 @@ router.get('/po-pipeline', (req, res) => {
            (SELECT COUNT(*) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status='received') as dn_received,
            (SELECT MIN(dn.delivery_date) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id) as dispatched_on,
            (SELECT MAX(dn.received_at) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status='received') as received_on,
-           (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) as bill_count,
+           (SELECT COUNT(*) FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id) as bill_count,
            (SELECT pb.payment_status FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id ORDER BY pb.id DESC LIMIT 1) as bill_payment_status,
            (SELECT COUNT(*) FROM grn g WHERE g.vendor_po_id = vp.id) as grn_count,
            (SELECT COUNT(*) FROM debit_notes d WHERE d.vendor_po_id = vp.id) as debit_count,
@@ -5923,7 +5866,7 @@ router.get('/delivery-notes/ready', (req, res) => {
   // 2. Ready to Dispatch POs: billed, not cancelled, no sales bill delivery note
   const whereClauses = [
     'COALESCE(vp.cancelled, 0) = 0',
-    'EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)',
+    'EXISTS (SELECT 1 FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id)',
     `NOT EXISTS (
       SELECT 1 FROM delivery_notes dn
       WHERE dn.vendor_po_id = vp.id
@@ -6009,6 +5952,7 @@ router.get('/delivery-notes/ready', (req, res) => {
 router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
   const db = getDb();
   const vendor_po_id = +req.params.id;
+  if (db.prepare('SELECT id FROM purchase_bill_items WHERE vendor_po_id=? LIMIT 1').get(vendor_po_id)) return res.status(400).json({ error: 'Receipt quantities are allocated to invoices. Record a new delivery instead.' });
   if (db.prepare("SELECT id FROM purchase_bills WHERE vendor_po_id=? AND delivery_mode='partial'").get(vendor_po_id)) return res.status(400).json({ error: 'Use Record balance delivery; earlier delivery quantities must be preserved.' });
   let receivedItems = [];
   try { receivedItems = Array.isArray(req.body?.received_items) ? req.body.received_items : JSON.parse(req.body?.received_items || '[]'); } catch (_) { receivedItems = []; }
@@ -6407,6 +6351,10 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
     }
   }
 
+  if (itemsReceivedArr) {
+    const allocated = db.prepare('SELECT vendor_po_item_id,SUM(quantity) qty FROM purchase_bill_items WHERE delivery_note_id=? GROUP BY vendor_po_item_id').all(req.params.id);
+    if (allocated.some(a => itemsReceivedArr.filter(r => r.vendor_po_item_id === a.vendor_po_item_id).reduce((s,r) => s+r.received_qty,0) < a.qty)) return res.status(400).json({ error: 'Received quantity cannot be reduced below quantities already invoiced.' });
+  }
   const stagedNote = db.prepare('SELECT supply_pending, items_json FROM delivery_notes WHERE id=?').get(req.params.id);
   if (stagedNote?.supply_pending) {
     let planned;
@@ -6596,6 +6544,7 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
   // un-receive a dispatch that site staff marked received meanwhile
   // (review 2026-09-05). `received` itself is set by the receive flow.
   const { status, notes } = req.body || {};
+  if (status && !['received','partial'].includes(status) && getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   const sets = []; const params = [];
   if (status !== undefined) {
     if (!['pending', 'received', 'partial', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
@@ -6609,6 +6558,7 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
 });
 
 router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
+  if (getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -9127,7 +9077,7 @@ router.get('/vendor-scorecard', requirePermission('procurement', 'view'), (req, 
     const poRows = db.prepare(`
       SELECT vp.vendor_id, vp.expected_receipt_date erd,
              (SELECT MIN(date(g.created_at)) FROM grn g WHERE g.vendor_po_id = vp.id) grn_date,
-             (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) bills
+             (SELECT COUNT(*) FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id) bills
         FROM vendor_pos vp
        WHERE COALESCE(vp.cancelled,0)=0 AND vp.vendor_id IS NOT NULL AND date(vp.created_at) >= ?`).all(sinceIso);
     for (const p of poRows) {

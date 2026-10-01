@@ -89,6 +89,7 @@ function recordBalance(db, billId, body, date, userId) {
       (vendor_po_id, document_type, document_number, delivery_date, status, items_json, notes, supply_pending, receipt_request_id, balance_purchase_bill_id)
       VALUES (?, 'challan', ?, ?, 'pending', ?, ?, 1, ?, ?)`).run(bill.vendor_po_id, number, date, JSON.stringify(rows),
       `Balance delivery against bill ${bill.bill_number || bill.id}; recorded by user ${userId}. ${String(body.notes || '').slice(0,500)}`, key, newBillId);
+    if (newBillId && db.prepare("SELECT 1 FROM sqlite_master WHERE name='purchase_bill_items'").get()) require('./purchaseBilling').ensurePurchaseBilling(db);
     return { id: result.lastInsertRowid, document_number: number, balance_purchase_bill_id: newBillId };
   }).immediate();
 }

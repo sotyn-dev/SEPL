@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
+import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
@@ -267,6 +268,11 @@ function MobileItemRow({ item, idx }) {
   );
 }
 
+function BillPaymentSummary({bill}) {
+  const labels={pending:'UNPAID',partial:'PARTIALLY PAID',paid:'PAID'};
+  return <div className="text-xs"><b className={bill.payment_status==='paid'?'text-emerald-700':'text-amber-700'}>{labels[bill.payment_status]||'UNPAID'}</b><div>Net ₹{(+bill.net_payable||0).toLocaleString('en-IN')}</div><div>Paid ₹{(+bill.paid_amount||0).toLocaleString('en-IN')}</div><div>Balance ₹{(+bill.balance_amount||0).toLocaleString('en-IN')}</div>{bill.debit_review_amount>0&&<div className="text-amber-700">Debit ₹{bill.debit_review_amount} needs allocation/review</div>}</div>;
+}
+
 export default function Procurement() {
   const { canDelete, canCreate, canEdit, canApprove, canView, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
@@ -443,6 +449,7 @@ export default function Procurement() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [balanceBill, setBalanceBill] = useState(null);
+  const [reconcileBill, setReconcileBill] = useState(null);
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   // Mam (2026-06-02): "according to delivery note all items and qty
   // show here may delivery note item of qty 10 but when erec its 9".
@@ -5680,16 +5687,14 @@ export default function Procurement() {
           });
           setBillItems(null);
           setBillRecv({});
-          setModal('bill');
-          // Load PO qty vs received qty per item + suggest the bill amount.
+          setModal('legacy-bill');
           api.get(`/procurement/vendor-po/${po.id}/bill-items`).then(r => {
             setBillItems(r.data);
-            // Seed editable received: recorded received if any, else PO qty.
             const recv = {};
             for (const it of (r.data.items || [])) recv[it.vpi_id] = it.received_qty != null ? it.received_qty : it.ordered_qty;
             setBillRecv(recv);
             const amt = Math.round((r.data.items || []).reduce((s, it) => s + ((+recv[it.vpi_id] || 0) * (+it.rate || 0)), 0) * 100) / 100;
-            setForm(f => ({ ...f, amount: amt, total_amount: amt + (f.gst_amount || 0) }));
+            setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) }));
           }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
         };
         return (
@@ -5801,9 +5806,9 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                          <td className="px-2 py-1.5 text-center">{chip}</td>
+                          <td className="px-2 py-1.5 text-center">{po.reconciliation_required ? <span className="text-amber-700">Reconciliation needed</span> : chip}</td>
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
-                            Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
+                            Rs {(+po.pending_value || 0).toLocaleString('en-IN')}<div className="text-[10px] font-normal">Accepted, unbilled value (before GST)</div><div className="text-[10px] font-normal whitespace-normal">{po.items?.filter(i=>i.billable_qty>0).map(i=>`${i.description}: ${i.billable_qty} ${i.unit}`).join(' · ')}</div>
                             {+po.total_amount_drift > 1 && (
                               <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                                 ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
@@ -5875,7 +5880,7 @@ export default function Procurement() {
                         </div>
                         <div className="text-right">
                           <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                          <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                          <div className="font-semibold text-emerald-700">Rs {(+po.pending_value || 0).toLocaleString('en-IN')}<div className="text-[10px] font-normal">Accepted, unbilled value (before GST)</div><div className="text-[10px] font-normal whitespace-normal">{po.items?.filter(i=>i.billable_qty>0).map(i=>`${i.description}: ${i.billable_qty} ${i.unit}`).join(' · ')}</div></div>
                           {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
                         </div>
                       </div>
@@ -5933,14 +5938,14 @@ export default function Procurement() {
               {billsListLoading && <tr><td colSpan="10" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
               {!billsListLoading && billsListPg.rows.map(b => (
                 <tr key={b.id}>
-                  <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
+                  <td className="font-medium">{b.bill_number}<div className="text-xs text-gray-500">{b.linked_pos?.map(p=>p.po_number).join(" · ")}</div></td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
                   <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
                   <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
                   <td>
                     {+b.debit_total > 0 ? (
-                      <div className="leading-tight" title="Debit notes on this PO are deducted from the payable">
+                      <div className="leading-tight" title="Valid adjustments allocated to this invoice are deducted from the payable">
                         <div className="text-red-600 text-[11px]">− Rs {Math.round(+b.debit_total).toLocaleString('en-IN')}</div>
-                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {Math.round((+b.total_amount || 0) - (+b.debit_total || 0)).toLocaleString('en-IN')}</div>
+                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {(+b.net_payable || 0).toLocaleString('en-IN')}</div>
                       </div>
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
@@ -5949,10 +5954,11 @@ export default function Procurement() {
                       ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
                       : <span className="text-gray-300 text-xs">—</span>}
                   </td>
-                  <td><StatusBadge status={b.payment_status} /></td>
+                  <td><BillPaymentSummary bill={b} /></td>
                   <td className="whitespace-nowrap">
+                    {b.vendor_po_id && b.reconciliation_version === 0 && <button onClick={() => setReconcileBill(b)} className="text-blue-700 text-xs mr-2">Reconcile items</button>}
                     {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="btn btn-secondary text-xs mr-2">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
-                    {b.vendor_po_id && b.delivery_mode !== 'partial' && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
+                    {b.vendor_po_id && b.reconciliation_version === 0 && b.delivery_mode !== 'partial' && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
                     {canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
                     try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
@@ -5985,8 +5991,10 @@ export default function Procurement() {
                       {b.bill_date || '—'}
                     </div>
                   </div>
-                  <StatusBadge status={b.payment_status} />
+                  <BillPaymentSummary bill={b} />
                 </div>
+                {!!b.linked_pos?.length && <div className="text-xs text-blue-700">{b.linked_pos.map(p => p.po_number).join(' · ')}</div>}
+                {b.debit_total > 0 && <div className="text-xs text-amber-700">Valid debit: ₹{b.debit_total.toLocaleString('en-IN')}</div>}
                 {b.vendor_name && (
                   <div className="text-xs">
                     <div className="text-[10px] uppercase text-gray-400">Vendor</div>
@@ -6016,8 +6024,9 @@ export default function Procurement() {
                 )}
                 {(b.vendor_po_id || canDelete('procurement')) && (
                   <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                    {b.vendor_po_id && b.reconciliation_version === 0 && <button onClick={() => setReconcileBill(b)} className="text-blue-700 text-xs mr-2">Reconcile items</button>}
                     {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="text-amber-700 font-semibold">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
-                    {b.vendor_po_id && b.delivery_mode !== 'partial' && (
+                    {b.vendor_po_id && b.reconciliation_version === 0 && b.delivery_mode !== 'partial' && (
                       <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
                         className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
                     )}
@@ -8151,8 +8160,9 @@ export default function Procurement() {
       </Modal>
 
       {balanceBill && <BalanceDeliveryModal key={balanceBill.id} bill={balanceBill} onClose={() => setBalanceBill(null)} onSaved={() => { setBalanceBill(null); fetchBillsListPage(); load(); }} />}
+      {(modal === 'bill' || reconcileBill) && <PurchaseBillReconciliation vendors={vendors} initialVendor={form.vendor_id} initialPo={form.vendor_po_id} legacy={reconcileBill} onClose={() => { setModal(false); setReconcileBill(null); }} onSaved={() => { setModal(false); setReconcileBill(null); fetchBillsListPage(); fetchBillsFuPage(); load(); }} />}
       {/* Purchase Bill Modal */}
-      <Modal isOpen={modal === 'bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
+      <Modal isOpen={modal === 'legacy-bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
         <form onSubmit={savePurchaseBill} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
