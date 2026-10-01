@@ -63,6 +63,7 @@ const SiteChat = lazy(() => import('./pages/SiteChat'));
 const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
+const SiteWorkBoard = lazy(() => import('./pages/SiteWorkBoard'));
 const ProjectDashboard = lazy(() => import('./pages/ProjectDashboard'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
 const LabourManagementSystem = lazy(() => import('./pages/LabourManagementSystem'));
@@ -258,6 +259,7 @@ export default function App() {
           <Route path="sotyn-flow/:boardId" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
           <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
           <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
+          <Route path="site-work-board" element={<ModuleRoute module="dpr"><SiteWorkBoard /></ModuleRoute>} />
           <Route path="project-dashboard" element={<ModuleRoute module="project_dashboard"><ProjectDashboard /></ModuleRoute>} />
           {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
           <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />

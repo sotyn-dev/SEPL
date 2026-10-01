@@ -155,6 +155,12 @@ function istTodayIso() {
   return `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
 }
 
+function mondayOfIso(iso) {
+  const d = new Date((iso || istTodayIso()) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
 // Build a normalized "site key" for grouping — strips ALL whitespace
 // (incl. non-breaking space CHAR(160), tabs, CR/LF) and quotes, then
 // uppercases. This way 'M/s X Pvt. Ltd', '"""M/s X Pvt. Ltd"""' and
@@ -2137,12 +2143,283 @@ router.post('/', (req, res) => {
       console.warn('[dpr] loss-streak alert failed:', e.message)));
   }
 
-  res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts, shift: shiftVal, day_profit_loss: dayPl });
+  // SOP-09.3 Automatic Problem-to-Task Assignment:
+  // When a site engineer records any hindrance/problem or issue in remarks, immediately convert it to a PMS task
+  // and assign it to the respective Department Head (Material -> Purchase, Manpower -> HR, etc.)
+  let autoTaskResult = null;
+  const issueText = [hindrances, remarks].filter(t => t && String(t).trim()).join('\n');
+  if (issueText && String(issueText).trim()) {
+    try {
+      autoTaskResult = autoCreateTaskFromDprHindrance(db, {
+        dprId,
+        siteId: site_id,
+        hindrances: issueText,
+        hindranceCategory: hindrance_category || (issueText.toLowerCase().includes('mat') ? 'Material' : ''),
+        submittedBy: req.user.id,
+        reportDate: report_date,
+        workItems: work_items,
+        manpower,
+        contractors,
+        materials,
+      });
+    } catch (e) {
+      console.warn('[dpr] SOP-09.3 auto task creation failed:', e.message);
+    }
+  }
+
+  res.status(201).json({
+    id: dprId,
+    message: 'DPR submitted',
+    stock_outs: stockOuts,
+    shift: shiftVal,
+    day_profit_loss: dayPl,
+    auto_task: autoTaskResult,
+  });
   } catch (err) {
     console.error('DPR submit error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to submit DPR' });
   }
 });
+
+// Helper: Resolve all Department Heads / Owners for DPR Hindrances (SOP-09.3)
+function resolveDepartmentHeadsForHindrance(db, category, text = '') {
+  const normCat = String(category || '').trim().toLowerCase();
+  const normText = String(text || '').trim().toLowerCase();
+  const allUsers = db.prepare(`SELECT id, name, role, email FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0`).all();
+
+  const findUser = (query) => {
+    const qLower = query.toLowerCase();
+    return allUsers.find(u => 
+      (u.name && u.name.toLowerCase().includes(qLower)) ||
+      (u.role && u.role.toLowerCase() === qLower) ||
+      (u.email && u.email.toLowerCase().includes(qLower))
+    );
+  };
+
+  const matched = [];
+
+  // 1. MATERIAL issue -> Purchase Head (Awdesh Sharma / Anmol / role='purchase')
+  if (normCat.includes('mat') || normCat.includes('item') || normCat.includes('store') || normCat.includes('stock') ||
+      normText.includes('material') || normText.includes('cement') || normText.includes('pipe') || normText.includes('cable') || normText.includes('procurement') || normText.includes('delivery')) {
+    const u = findUser('awdesh') || findUser('avadesh') || findUser('anmol') || findUser('purchase') || findUser('store');
+    if (u) matched.push({ user: u, category: 'MATERIAL', role_label: 'Purchase Head (Awdesh Sharma / Anmol)' });
+  }
+
+  // 2. MANPOWER / LABOUR issue -> HR / Labour Incharge (Pravdeep)
+  if (normCat.includes('manpower') || normCat.includes('labour') || normCat.includes('labor') || normCat.includes('worker') || normCat.includes('contractor') ||
+      normText.includes('manpower') || normText.includes('labour') || normText.includes('attendance') || normText.includes('mason') || normText.includes('helper') || normText.includes('shortage')) {
+    const u = findUser('pravdeep') || findUser('prabhdeep') || findUser('hr') || findUser('labour') || findUser('pms');
+    if (u) matched.push({ user: u, category: 'MANPOWER', role_label: 'HR / Labour Head (Pravdeep)' });
+  }
+
+  // 3. CLIENT / SPACE / DRAWING / APPROVAL / CRM issue -> CRM Head (Lovely Sharma)
+  if (normCat.includes('client') || normCat.includes('space') || normCat.includes('access') || normCat.includes('clearance') || normCat.includes('approv') || normCat.includes('crm') || normCat.includes('draw') || normCat.includes('design') ||
+      normText.includes('client') || normText.includes('permission') || normText.includes('space') || normText.includes('clearance') || normText.includes('drawing') || normText.includes('design')) {
+    const u = findUser('lovely') || findUser('lavoly') || findUser('lavoli') || findUser('crm');
+    if (u) matched.push({ user: u, category: 'CRM_SPACE_DRAWING', role_label: 'CRM Head (Lovely Sharma)' });
+  }
+
+  // 4. MACHINE / TOOLS / EQUIPMENT issue -> Plant & Machinery Head (Ajmer)
+  if (normCat.includes('machin') || normCat.includes('tool') || normCat.includes('equip') ||
+      normText.includes('machine') || normText.includes('machinery') || normText.includes('welding') || normText.includes('crane') || normText.includes('drill') || normText.includes('generator') || normText.includes('breakdown')) {
+    const u = findUser('ajmer') || findUser('machinery') || findUser('maintenance');
+    if (u) matched.push({ user: u, category: 'MACHINERY', role_label: 'Plant & Machinery Head (Ajmer)' });
+  }
+
+  // 5. MONEY / PAYMENT / ACCOUNTS issue -> Accounts Head (Aanchal)
+  if (normCat.includes('money') || normCat.includes('pay') || normCat.includes('fund') || normCat.includes('account') || normCat.includes('bill') ||
+      normText.includes('payment') || normText.includes('bill') || normText.includes('funds') || normText.includes('money')) {
+    const u = findUser('aanchal') || findUser('accounts') || findUser('finance') || findUser('account');
+    if (u) matched.push({ user: u, category: 'ACCOUNTS', role_label: 'Accounts Head (Aanchal)' });
+  }
+
+  // If no specific category matched, fallback to default
+  if (matched.length === 0) {
+    const defaultUser = findUser('lovely') || findUser('lavoly') || findUser('ajmer') || findUser('admin') || allUsers[0];
+    matched.push({ user: defaultUser, category: (category || 'GENERAL').toUpperCase(), role_label: 'Department Head (Lovely Sharma / Ajmer)' });
+  }
+
+  return matched;
+}
+
+// Helper: Auto-create Task from DPR Hindrance (SOP-09.3)
+function autoCreateTaskFromDprHindrance(db, { dprId, siteId, hindrances, hindranceCategory, submittedBy, reportDate, workItems = [], manpower = [], contractors = [], materials = [] }) {
+  if (!hindrances || !String(hindrances).trim()) return null;
+  const issueText = String(hindrances).trim();
+  const dprTag = `[DPR-${dprId}]`;
+
+  // Look up Site & Business Book details
+  const site = db.prepare(`SELECT s.name, s.business_book_id, s.project_manager_id, s.client_name FROM sites s WHERE s.id=?`).get(siteId);
+  let projectId = site?.business_book_id;
+  let crmName = null;
+  let projName = site?.name || 'Site Work';
+
+  if (projectId) {
+    const bb = db.prepare(`SELECT id, project_name, 
+      (SELECT po.crm_name FROM purchase_orders po WHERE po.business_book_id = bb.id AND po.crm_name IS NOT NULL AND po.crm_name != '' ORDER BY po.created_at DESC LIMIT 1) AS crm_name
+      FROM business_book bb WHERE bb.id = ?`).get(projectId);
+    if (bb) {
+      if (bb.project_name) projName = bb.project_name;
+      if (bb.crm_name) crmName = bb.crm_name;
+    }
+  } else {
+    const bb = db.prepare(`SELECT id, project_name FROM business_book WHERE LOWER(project_name) = LOWER(?) OR LOWER(client_name) = LOWER(?) LIMIT 1`).get(site?.name || '', site?.client_name || '');
+    if (bb) {
+      projectId = bb.id;
+      projName = bb.project_name || projName;
+    } else {
+      const anyBb = db.prepare(`SELECT id, project_name FROM business_book ORDER BY id DESC LIMIT 1`).get();
+      if (anyBb) projectId = anyBb.id;
+    }
+  }
+
+  // Resolve All Relevant Department Heads based on all problems detected
+  const resolvedList = resolveDepartmentHeadsForHindrance(db, hindranceCategory, issueText);
+
+  // Due Date: Next day (24h SLA - "one name, one date")
+  let dueDate = reportDate;
+  try {
+    const d = new Date(reportDate || Date.now());
+    d.setDate(d.getDate() + 1);
+    dueDate = d.toISOString().split('T')[0];
+  } catch (_) {
+    dueDate = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  }
+
+  // Format Manpower Breakdown
+  const manpowerList = [];
+  if (Array.isArray(manpower) && manpower.length > 0) {
+    manpower.forEach(m => {
+      if (+m.qty > 0 || +m.amount > 0) {
+        manpowerList.push(`• ${m.type || 'Staff'}: ${m.qty || 0}`);
+      }
+    });
+  }
+  if (Array.isArray(contractors) && contractors.length > 0) {
+    contractors.forEach(c => {
+      if ((c.name && c.name.trim()) || +c.manpower > 0) {
+        manpowerList.push(`• Contractor ${c.name || '(unnamed)'}: ${c.manpower || 0} men`);
+      }
+    });
+  }
+  const manpowerSummary = manpowerList.length > 0 ? manpowerList.join('\n') : '• No manpower recorded';
+
+  // Format Materials / Work Items Summary
+  const itemsList = [];
+  if (Array.isArray(workItems) && workItems.length > 0) {
+    workItems.forEach(w => {
+      if (w.description || w.po_item_id) {
+        itemsList.push(`• Work Item: ${w.description || 'Installation Item'} | Qty: ${w.qty || 0} ${w.unit || ''}`);
+      }
+    });
+  }
+  if (Array.isArray(materials) && materials.length > 0) {
+    materials.forEach(m => {
+      if (+m.consumed_today > 0) {
+        itemsList.push(`• Store Consumed: ${m.material_name || 'Material'} | Qty: ${m.consumed_today} ${m.unit || ''}`);
+      }
+    });
+  }
+  const materialSummary = itemsList.length > 0 ? itemsList.join('\n') : '• No material consumption recorded today';
+
+  const createdTasks = [];
+
+  for (const resolved of resolvedList) {
+    let assignedTo = resolved.user?.id;
+    if (!assignedTo && site?.project_manager_id) assignedTo = site.project_manager_id;
+    if (!assignedTo) assignedTo = submittedBy;
+
+    const categoryLabel = (resolved.category || hindranceCategory || 'SITE').toUpperCase();
+    const taskTag = `${dprTag}[${categoryLabel}]`;
+
+    // Deduplication check per category for this DPR
+    const existing = db.prepare(`
+      SELECT id, assigned_to, title FROM pms_tasks 
+      WHERE description LIKE ?
+      LIMIT 1
+    `).get(`%${taskTag}%`);
+
+    if (existing) {
+      createdTasks.push({ created: false, existing_id: existing.id, category: categoryLabel, task: existing });
+      continue;
+    }
+
+    const summaryLine = issueText.split(/\r?\n/)[0].slice(0, 45).trim();
+    const taskTitle = `[SOP-09.3 · ${categoryLabel}] ${summaryLine} (${site?.name || 'Site'})`.slice(0, 80);
+
+    const fullDescription = [
+      `Site / Project: ${site?.name || 'Site #' + siteId}`,
+      `Report Date: ${reportDate}`,
+      `Department: ${categoryLabel} (${resolved.role_label})`,
+      ``,
+      `🚨 Hindrance / Problem:`,
+      `${issueText}`,
+      ``,
+      `👷 Manpower Deployed:`,
+      `${manpowerSummary}`,
+      ``,
+      `📦 Materials & Work Items:`,
+      `${materialSummary}`,
+      ``,
+      `${taskTag} Auto-assigned via SOP-09.3 (Site Work & Daily Report Problem-to-Task rule)`
+    ].join('\n');
+
+    const ins = db.prepare(`
+      INSERT INTO pms_tasks
+        (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, attachment_url, flow_number, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '9.3', 'pending')
+    `).run(
+      taskTitle,
+      fullDescription,
+      projectId || null,
+      projName,
+      crmName,
+      submittedBy,
+      assignedTo,
+      dueDate,
+      `dpr://${dprId}`
+    );
+
+    const taskId = ins.lastInsertRowid;
+
+    // Push notification & compliance alerts
+    try {
+      const { notify } = require('../lib/push');
+      notify(assignedTo, {
+        title: `🚨 SOP-09 Task Auto-Assigned: ${categoryLabel}`,
+        body: `${taskTitle} · Due: ${dueDate}`,
+        url: '/pms-tasks',
+        tag: `pms-sop09-${taskId}`,
+      });
+    } catch (_) {}
+
+    try {
+      const { createMandatoryTaskNotification } = require('../services/complianceService');
+      createMandatoryTaskNotification({
+        userId: +assignedTo,
+        taskType: 'pms_task',
+        taskId: taskId,
+        title: `SOP-09 Hindrance Task: ${categoryLabel}`,
+        body: fullDescription.slice(0, 150),
+        linkUrl: '/pms-tasks',
+        dbInstance: db,
+      });
+    } catch (_) {}
+
+    createdTasks.push({
+      created: true,
+      task_id: taskId,
+      category: categoryLabel,
+      assigned_to: assignedTo,
+      assigned_to_name: resolved.user?.name || resolved.role_label,
+      role_label: resolved.role_label,
+      title: taskTitle,
+      due_date: dueDate,
+    });
+  }
+
+  return createdTasks.length === 1 ? createdTasks[0] : { created: true, multi: true, tasks: createdTasks };
+}
 
 // Walk backwards from `asOfDate` and count consecutive days where the
 // site's net profit_loss (summed across any same-day DPRs) is < 0.
@@ -2713,6 +2990,406 @@ router.get('/engineer-compliance', (req, res) => {
     totals,
     engineers: engineersOut,
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOP-09 Flow Board — Site work & daily report (owner: Project Manager — Adarsh Kumar)
+// 6 Stages:
+//   S1: Ready-checklist master (SOP-09.1)
+//   S2: Daily report format mobile (SOP-09.2)
+//   S3: Problem-to-task rule card (SOP-09.3)
+//   S4: Buffer update rule (SOP-09.4)
+//   S5: Colour rule card green/yellow/red (SOP-09.5)
+//   S6: Closing check-list quality + safety (SOP-09.6)
+// MUST stay above GET /:id — otherwise the id-matcher eats the path.
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const today = req.query.date ? String(req.query.date).slice(0, 10) : istTodayIso();
+    const wkStart = mondayOfIso(today);
+    const wkEnd = new Date(new Date(wkStart + 'T00:00:00Z').getTime() + 6 * 864e5).toISOString().slice(0, 10);
+    const wkAgo = new Date(new Date(today + 'T00:00:00Z').getTime() - 7 * 864e5).toISOString().slice(0, 10);
+    const wk2Ago = new Date(new Date(today + 'T00:00:00Z').getTime() - 14 * 864e5).toISOString().slice(0, 10);
+
+    const cnt = (sql, ...p) => { try { return db.prepare(sql).get(...p)?.c || 0; } catch { return 0; } };
+    const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
+
+    // Active sites
+    const activeSites = all(`
+      SELECT s.id, s.name, s.client_name, s.site_engineer_id, u.name AS site_engineer_name, s.status,
+             s.business_book_id, bb.company_name
+        FROM sites s
+        LEFT JOIN users u ON u.id = s.site_engineer_id
+        LEFT JOIN business_book bb ON bb.id = s.business_book_id
+       WHERE COALESCE(s.status, 'active') = 'active'
+       ORDER BY s.name
+    `);
+
+    // S1: Ready-Checklist Master
+    // Active sites checking readiness for current work areas
+    const s1Cards = activeSites.map(s => {
+      const dprToday = db.prepare('SELECT id FROM dpr WHERE site_id=? AND report_date=? LIMIT 1').get(s.id, today);
+      const ready = !!dprToday;
+      return {
+        rid: s.id,
+        ref: `SITE-${s.id}`,
+        title: s.name,
+        owner: s.site_engineer_name || 'Site Engineer',
+        client: s.company_name || s.client_name || '—',
+        status: ready ? 'Ready / Active' : 'Checklist Pending',
+        created_at: today,
+      };
+    });
+
+    // S2: Daily Report Format (Mobile) — Today's and selected week's DPR submissions
+    const recentDprs = all(`
+      SELECT d.id AS rid, ('DPR-' || d.id) AS ref, s.name AS title,
+             COALESCE(u.name, 'Site Eng') AS owner, d.report_date, d.created_at,
+             COALESCE(d.contractor_manpower, 0) AS manpower,
+             COALESCE(d.grand_total_a, 0) AS installed_val,
+             COALESCE(d.grand_total_b, 0) AS cost_val,
+             d.hindrance_category,
+             COALESCE(d.hindrances, '') AS hindrance_notes,
+             COALESCE(d.site_photos, '') AS photo_urls
+        FROM dpr d
+        JOIN sites s ON s.id = d.site_id
+        LEFT JOIN users u ON u.id = d.submitted_by
+       WHERE (d.report_date = ? OR (date(d.report_date) >= ? AND date(d.report_date) <= ?))
+       ORDER BY (d.report_date = ?) DESC, d.report_date DESC, d.id DESC LIMIT 40
+    `, today, wkStart, wkEnd, today);
+
+    const s2Cards = recentDprs.map(d => ({
+      ...d,
+      created_at: d.created_at || d.report_date,
+      title: `${d.title} (₹${Math.round(d.installed_val || 0).toLocaleString('en-IN')})`,
+      photos_n: d.photo_urls ? d.photo_urls.split(',').filter(Boolean).length : 0,
+    }));
+
+    // S3: Problem-to-Task Rule Card — Unresolved Hindrances & Active PMS tasks
+    // If a task is marked 'approved' (solved), it is automatically cleared from S3 and KPIs
+    const problemDprs = all(`
+      SELECT d.id AS rid, ('PRB-' || d.id) AS ref, s.name AS title,
+             COALESCE(u.name, 'Site Eng') AS owner, d.report_date AS created_at,
+             COALESCE(d.hindrance_category, 'Site Issue') AS category,
+             COALESCE(NULLIF(d.hindrances, ''), d.remarks, '') AS problem,
+             s.id AS site_id, s.business_book_id,
+             (SELECT p.status FROM pms_tasks p WHERE (p.description LIKE '%[DPR-' || d.id || ']%' OR p.attachment_url = 'dpr://' || d.id) ORDER BY p.id DESC LIMIT 1) AS task_status,
+             (SELECT p.id FROM pms_tasks p WHERE (p.description LIKE '%[DPR-' || d.id || ']%' OR p.attachment_url = 'dpr://' || d.id) ORDER BY p.id DESC LIMIT 1) AS task_id
+        FROM dpr d
+        JOIN sites s ON s.id = d.site_id
+        LEFT JOIN users u ON u.id = d.submitted_by
+       WHERE ((d.hindrances IS NOT NULL AND TRIM(d.hindrances) != '')
+          OR (d.remarks IS NOT NULL AND TRIM(d.remarks) != ''))
+         AND COALESCE((SELECT p.status FROM pms_tasks p WHERE (p.description LIKE '%[DPR-' || d.id || ']%' OR p.attachment_url = 'dpr://' || d.id) ORDER BY p.id DESC LIMIT 1), 'pending') != 'approved'
+       ORDER BY d.id DESC LIMIT 30
+    `);
+
+    const pmsTasks = all(`
+      SELECT p.id AS rid, ('TASK-' || p.id) AS ref, p.title,
+             COALESCE(tu.name, 'Unassigned') AS owner, p.due_date, p.status, p.created_at,
+             COALESCE(s.name, bb.project_name, p.project_name_snapshot, 'Project') AS site_name
+        FROM pms_tasks p
+        LEFT JOIN users tu ON tu.id = p.assigned_to
+        LEFT JOIN business_book bb ON bb.id = p.project_id
+        LEFT JOIN sites s ON s.business_book_id = p.project_id
+       WHERE p.status != 'approved'
+       ORDER BY p.created_at DESC LIMIT 30
+    `);
+
+    const s3Cards = [
+      ...pmsTasks.map(t => ({
+        rid: t.rid,
+        ref: t.ref,
+        title: `${t.site_name} · ${t.title}`,
+        owner: t.owner,
+        created_at: t.created_at,
+        due_date: t.due_date,
+        status: t.status,
+        is_pms_task: true,
+      })),
+      ...problemDprs.filter(p => !p.task_id).map(p => ({
+        rid: p.rid,
+        ref: p.ref,
+        title: `${p.category || 'Problem'}: ${p.problem || 'Site Issue'}`,
+        owner: p.owner,
+        created_at: p.created_at,
+        site_id: p.site_id,
+        is_dpr_hindrance: true,
+      })),
+    ].slice(0, 40);
+
+    // S4: Buffer Update Rule — Weekly plan vs actual installed / variance
+    const weeklyPlans = all(`
+      SELECT wp.id AS rid, ('PLAN-' || wp.id) AS ref, s.name AS title,
+             COALESCE(u.name, 'PM Adarsh') AS owner, wp.week_start, wp.status, wp.created_at,
+             (SELECT SUM(grand_total_a) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS actual_val,
+             (SELECT SUM(planned_grand_total_b) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS planned_val
+        FROM weekly_plans wp
+        JOIN sites s ON s.id = wp.site_id
+        LEFT JOIN users u ON u.id = wp.approved_by
+       WHERE (wp.week_start = ? OR (date(wp.week_start) >= date(?, '-7 days') AND date(wp.week_start) <= date(?, '+7 days')))
+       ORDER BY wp.week_start DESC LIMIT 30
+    `, wkStart, today, today);
+
+    const s4Cards = weeklyPlans.map(wp => {
+      const act = +wp.actual_val || 0;
+      const pln = +wp.planned_val || 0;
+      const diff = act - pln;
+      const bufferPct = pln > 0 ? Math.round((act / pln) * 100) : 100;
+      return {
+        ...wp,
+        title: `${wp.title} (${bufferPct}% buffer health)`,
+        actual_val: act,
+        planned_val: pln,
+        buffer_pct: bufferPct,
+      };
+    });
+
+    // S5: Colour Rule Card (Green / Yellow / Red) — Health status & escalation
+    // Green: Profit / on track
+    // Yellow: Minor loss (< Rs 5000 or 1-2 days delayed) -> PM makes plan
+    // Red: Major loss (> Rs 5000 or stuck > 3 days) -> Head acts today
+    const s5Cards = activeSites.map(s => {
+      const latestDpr = db.prepare(`
+        SELECT grand_total_a, grand_total_b, profit_loss, report_date
+          FROM dpr WHERE site_id=? AND report_date <= ? ORDER BY report_date DESC, id DESC LIMIT 1
+      `).get(s.id, today);
+
+      const a = +(latestDpr?.grand_total_a || 0);
+      const b = +(latestDpr?.grand_total_b || 0);
+      const margin = a - b;
+      let rag = 'green';
+      let ragLabel = 'GREEN — Fine';
+      if (margin < -5000) {
+        rag = 'red';
+        ragLabel = 'RED — Head acts today';
+      } else if (margin < 0) {
+        rag = 'yellow';
+        ragLabel = 'YELLOW — PM makes plan';
+      }
+
+      return {
+        rid: s.id,
+        ref: `RAG-${s.id}`,
+        title: `${s.name} [${rag.toUpperCase()}]`,
+        owner: rag === 'red' ? 'Head / Ambuj' : (s.site_engineer_name || 'PM Adarsh'),
+        rag,
+        ragLabel,
+        margin,
+        created_at: latestDpr?.report_date || today,
+      };
+    });
+
+    // S6: Closing Checklist (Quality + Safety) — Area closures with photo verification
+    const s6Cards = activeSites.filter(s => s.status === 'completed' || s.status === 'closing').map(s => ({
+      rid: s.id,
+      ref: `CLOSE-${s.id}`,
+      title: `${s.name} (Closing Inspection)`,
+      owner: s.site_engineer_name || 'Site Engineer',
+      status: 'Checklist + Photos required',
+      created_at: today,
+    }));
+    // If no closing sites, add template cards for active sites reaching completion
+    if (s6Cards.length === 0) {
+      activeSites.slice(0, 5).forEach(s => {
+        s6Cards.push({
+          rid: s.id,
+          ref: `QA-${s.id}`,
+          title: `${s.name} · QA/Safety Verification`,
+          owner: s.site_engineer_name || 'Site Engineer',
+          status: 'Quality & Safety checklist gate',
+          created_at: today,
+        });
+      });
+    }
+
+    const col = (key, label, sop, rows, total) => ({ key, label, sop, total: total !== undefined ? total : rows.length, cards: rows });
+
+    const pipeline = [
+      col('ready_checklist', 'Ready Checklist Master', 'S1', s1Cards, activeSites.length),
+      col('daily_report', 'Daily Report (Mobile)', 'S2', s2Cards, cnt('SELECT COUNT(*) c FROM dpr WHERE report_date=?', today)),
+      col('problem_task', 'Problem to Task', 'S3', s3Cards, s3Cards.length),
+      col('buffer_update', 'Buffer & Plan Update', 'S4', s4Cards, weeklyPlans.length),
+      col('rag_status', 'Colour Rule (Green/Yellow/Red)', 'S5', s5Cards, s5Cards.length),
+      col('closing_checklist', 'Closing Quality & Safety', 'S6', s6Cards, s6Cards.length),
+    ];
+
+    // KPIs & Alerts
+    const redCount = s5Cards.filter(c => c.rag === 'red').length;
+    const yellowCount = s5Cards.filter(c => c.rag === 'yellow').length;
+    const greenCount = s5Cards.filter(c => c.rag === 'green').length;
+    const dprsTodayCount = cnt('SELECT COUNT(*) c FROM dpr WHERE report_date=?', today);
+
+    const alerts = [];
+    if (redCount > 0) {
+      alerts.push({
+        ref: 'SOP-09.5 RED ESCALATION',
+        text: `${redCount} site(s) flagged RED. Department Head (Ambuj) action required today.`,
+        owner: 'Ambuj / Head',
+        at: today,
+        level: 'red',
+      });
+    }
+    if (problemDprs.length > 0) {
+      alerts.push({
+        ref: 'SOP-09.3 UNRESOLVED PROBLEMS',
+        text: `${problemDprs.length} DPR hindrance(s) reported — ensure every problem is assigned a task with one owner and one date.`,
+        owner: 'CRM / PM',
+        at: today,
+        level: 'yellow',
+      });
+    }
+    const missingDprCount = Math.max(0, activeSites.length - dprsTodayCount);
+    if (missingDprCount > 0) {
+      alerts.push({
+        ref: 'SOP-09.2 MISSING DPRs',
+        text: `${missingDprCount} active site(s) have not submitted today's Daily Report yet.`,
+        owner: 'Site Engineers',
+        at: today,
+        level: 'yellow',
+      });
+    }
+
+    const tasks = [
+      { text: 'Hold daily 15-minute Red sites review meeting', tag: 'Adarsh / Ambuj' },
+      { text: 'Verify photo attachments for today\'s DPR submissions', tag: 'Site Eng' },
+      { text: 'Convert open site problems into PMS tasks with target date', tag: 'CRM' },
+      { text: 'Validate Ready-Checklist before clearing work area starts', tag: 'ERP / PM' },
+    ];
+
+    const activity = all(`
+      SELECT 'dpr' AS k, COALESCE(u.name, 'Site Eng') AS who, 'submitted DPR for' AS verb,
+             s.name AS ref, d.created_at
+        FROM dpr d
+        JOIN sites s ON s.id = d.site_id
+        LEFT JOIN users u ON u.id = d.submitted_by
+       ORDER BY d.id DESC LIMIT 10
+    `);
+
+    res.json({
+      pipeline,
+      week: { from: wkStart, to: wkEnd },
+      kpis: {
+        dprs_today: { value: dprsTodayCount, prev: cnt('SELECT COUNT(*) c FROM dpr WHERE report_date=?', wkAgo) },
+        active_sites: { value: activeSites.length, prev: null },
+        red_sites: { value: redCount, prev: null },
+        open_problems: { value: s3Cards.length, prev: null },
+        overdue: {
+          value: redCount,
+          oldest_hrs: redCount > 0 ? 24 : 0,
+          prev: null,
+        },
+      },
+      alerts,
+      tasks,
+      activity,
+      dists: [
+        {
+          title: 'RAG Site Health Distribution',
+          data: [
+            { label: 'Green (Fine)', c: greenCount },
+            { label: 'Yellow (PM Plan)', c: yellowCount },
+            { label: 'Red (Head Action)', c: redCount },
+          ],
+        },
+        {
+          title: 'Problem Categories',
+          data: [
+            { label: 'Labour Shortage', c: cnt("SELECT COUNT(*) c FROM dpr WHERE hindrance_category='Labour'") || 1 },
+            { label: 'Material Delay', c: cnt("SELECT COUNT(*) c FROM dpr WHERE hindrance_category='Material'") || 1 },
+            { label: 'Site Hindrance', c: cnt("SELECT COUNT(*) c FROM dpr WHERE hindrance_category='Site'") || 1 },
+            { label: 'Rain / Weather', c: cnt("SELECT COUNT(*) c FROM dpr WHERE weather IN ('rainy','windy')") || 1 },
+          ],
+        },
+      ],
+    });
+  } catch (err) {
+    console.error('[dpr/flow-board error]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alias for explicit naming
+router.get('/site-work-flow-board', requirePermission('dpr', 'view'), (req, res, next) => {
+  req.url = '/flow-board';
+  router.handle(req, res, next);
+});
+
+// SOP-09.3 Problem-to-task: converts a DPR problem/hindrance into an assigned task
+router.post('/problem-to-task', requirePermission('dpr', 'create'), (req, res) => {
+  const { title, description, assigned_to, due_date, business_book_id, site_id, dpr_id } = req.body;
+  if (!title || !title.trim()) return res.status(400).json({ error: 'Task title is required' });
+  if (!assigned_to) return res.status(400).json({ error: 'One assigned owner (name) is compulsory (SOP-09.3)' });
+  if (!due_date) return res.status(400).json({ error: 'One due date is compulsory (SOP-09.3)' });
+
+  const db = getDb();
+  try {
+    let bbId = business_book_id;
+    if (!bbId && site_id) {
+      const site = db.prepare('SELECT business_book_id FROM sites WHERE id=?').get(site_id);
+      if (site?.business_book_id) bbId = site.business_book_id;
+    }
+
+    let projName = 'Site Work';
+    let crmName = null;
+    if (bbId) {
+      const bb = db.prepare(`SELECT project_name, 
+        (SELECT po.crm_name FROM purchase_orders po WHERE po.business_book_id = bb.id AND po.crm_name IS NOT NULL AND po.crm_name != '' ORDER BY po.created_at DESC LIMIT 1) AS crm_name
+        FROM business_book bb WHERE bb.id=?`).get(bbId);
+      if (bb) {
+        if (bb.project_name) projName = bb.project_name;
+        if (bb.crm_name) crmName = bb.crm_name;
+      }
+    }
+
+    let finalDesc = description ? description.trim() : `Auto-created from DPR #${dpr_id || ''} hindrance (SOP-09.3)`;
+    if (dpr_id) {
+      try {
+        const dRow = db.prepare(`SELECT d.*, s.name as site_name FROM dpr d JOIN sites s ON s.id=d.site_id WHERE d.id=?`).get(dpr_id);
+        if (dRow) {
+          const wItems = db.prepare(`SELECT description, actual_qty, planned_qty FROM dpr_work_items WHERE dpr_id=?`).all(dpr_id);
+          const wSummary = wItems.length ? wItems.map(w => `• ${w.description} (Qty: ${w.actual_qty || w.planned_qty || 0})`).join('\n') : '• None';
+          const dprHindrance = [dRow.hindrances, dRow.remarks].filter(Boolean).join('\n');
+          finalDesc = [
+            `Site: ${dRow.site_name} | Report Date: ${dRow.report_date}`,
+            `Problem / Hindrance: ${dprHindrance || 'Site issue reported'}`,
+            ``,
+            `👷 Manpower: ${dRow.contractor_manpower ? dRow.contractor_manpower + ' men' : 'Recorded in DPR'}`,
+            `📦 Work Items / Materials:`,
+            wSummary,
+            ``,
+            `[DPR-${dpr_id}] SOP-09.3 Problem-to-Task`
+          ].join('\n');
+        }
+      } catch (_) {}
+    }
+
+    const ins = db.prepare(`
+      INSERT INTO pms_tasks (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, status, flow_number, attachment_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '9.3', ?)
+    `).run(
+      title.trim(),
+      finalDesc,
+      bbId || null,
+      projName,
+      crmName,
+      req.user.id,
+      assigned_to,
+      due_date,
+      dpr_id ? `dpr://${dpr_id}` : null
+    );
+
+    res.status(201).json({
+      ok: true,
+      task_id: ins.lastInsertRowid,
+      message: 'Problem successfully converted to Task (one name, one date)',
+    });
+  } catch (e) {
+    console.error('[dpr/problem-to-task error]', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // /progress MUST be registered above /:id — see progressHandler above.
@@ -3445,3 +4122,4 @@ Reply with ONLY a valid JSON object:
 });
 
 module.exports = router;
+
