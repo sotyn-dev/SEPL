@@ -3,6 +3,9 @@ import { flowStepLabel } from '../utils/moduleFlows';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
+import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
+import PurchaseBillMatching from '../components/PurchaseBillMatching';
+import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
@@ -266,6 +269,11 @@ function MobileItemRow({ item, idx }) {
   );
 }
 
+function BillPaymentSummary({bill}) {
+  const labels={pending:'UNPAID',partial:'PARTIALLY PAID',paid:'PAID'};
+  return <div className="text-xs"><b className={bill.payment_status==='paid'?'text-emerald-700':'text-amber-700'}>{labels[bill.payment_status]||'UNPAID'}</b><div>Net ₹{(+bill.net_payable||0).toLocaleString('en-IN')}</div><div>Paid ₹{(+bill.paid_amount||0).toLocaleString('en-IN')}</div><div>Balance ₹{(+bill.balance_amount||0).toLocaleString('en-IN')}</div>{bill.debit_review_amount>0&&<div className="text-amber-700">Debit ₹{bill.debit_review_amount} needs allocation/review</div>}</div>;
+}
+
 export default function Procurement() {
   const { canDelete, canCreate, canEdit, canApprove, canView, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
@@ -441,6 +449,9 @@ export default function Procurement() {
   const [employees, setEmployees] = useState([]); // for "Raised By" dropdown
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
+  const [matchingTarget, setMatchingTarget] = useState(null);
+  const [balanceBill, setBalanceBill] = useState(null);
+  const [reconcileBill, setReconcileBill] = useState(null);
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   // Mam (2026-06-02): "according to delivery note all items and qty
   // show here may delivery note item of qty 10 but when erec its 9".
@@ -2404,8 +2415,10 @@ export default function Procurement() {
     if (form.bill_date) fd.append('bill_date', form.bill_date);
     fd.append('amount', form.amount || 0);
     fd.append('gst_amount', form.gst_amount || 0);
+    fd.append('freight_amount', form.freight_amount || 0);
     fd.append('total_amount', form.total_amount || 0);
     fd.append('material_status', form.material_status || 'approved');
+    fd.append('delivery_mode', form.delivery_mode || 'final');
     // Per-line received qty (mam 2026-06-30) → server writes it onto the auto-
     // created delivery challan so the challan shows RECEIVED, not full ordered qty.
     if (billItems?.items?.length) {
@@ -5677,16 +5690,14 @@ export default function Procurement() {
           });
           setBillItems(null);
           setBillRecv({});
-          setModal('bill');
-          // Load PO qty vs received qty per item + suggest the bill amount.
+          setModal('legacy-bill');
           api.get(`/procurement/vendor-po/${po.id}/bill-items`).then(r => {
             setBillItems(r.data);
-            // Seed editable received: recorded received if any, else PO qty.
             const recv = {};
             for (const it of (r.data.items || [])) recv[it.vpi_id] = it.received_qty != null ? it.received_qty : it.ordered_qty;
             setBillRecv(recv);
             const amt = Math.round((r.data.items || []).reduce((s, it) => s + ((+recv[it.vpi_id] || 0) * (+it.rate || 0)), 0) * 100) / 100;
-            setForm(f => ({ ...f, amount: amt, total_amount: amt + (f.gst_amount || 0) }));
+            setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) + (+f.freight_amount || 0) }));
           }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
         };
         return (
@@ -5815,7 +5826,7 @@ export default function Procurement() {
                             )}
                           </td>
                           <td className="px-2 py-1.5">
-                            <button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
+                            <button className="block text-blue-700 underline text-xs mb-2" onClick={()=>setMatchingTarget({kind:'po',id:po.id,label:po.po_number})}>Receiving / bill balance</button><button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
                           </td>
                         </tr>
                       );
@@ -5888,7 +5899,7 @@ export default function Procurement() {
                         </a>
                         {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 File</a>}
                       </div>
-                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
+                      <button className="block text-blue-700 underline text-xs mb-2" onClick={()=>setMatchingTarget({kind:'po',id:po.id,label:po.po_number})}>Receiving / bill balance</button><button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
                     </div>
                   );
                 })}
@@ -5925,19 +5936,19 @@ export default function Procurement() {
                 </div>
               </div>
           <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Freight</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {billsListLoading && <tr><td colSpan="10" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
+              {billsListLoading && <tr><td colSpan="11" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
               {!billsListLoading && billsListPg.rows.map(b => (
                 <tr key={b.id}>
-                  <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
-                  <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
+                  <td className="font-medium">{b.bill_number}<div className="text-xs text-gray-500">{b.linked_pos?.map(p=>p.po_number).join(" · ")}</div></td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
+                  <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td><td>Rs {(b.freight_amount || 0).toLocaleString()}</td>
                   <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
                   <td>
                     {+b.debit_total > 0 ? (
-                      <div className="leading-tight" title="Debit notes on this PO are deducted from the payable">
+                      <div className="leading-tight" title="Valid adjustments allocated to this invoice are deducted from the payable">
                         <div className="text-red-600 text-[11px]">− Rs {Math.round(+b.debit_total).toLocaleString('en-IN')}</div>
-                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {Math.round((+b.total_amount || 0) - (+b.debit_total || 0)).toLocaleString('en-IN')}</div>
+                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {(+b.net_payable || 0).toLocaleString('en-IN')}</div>
                       </div>
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
@@ -5946,9 +5957,11 @@ export default function Procurement() {
                       ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
                       : <span className="text-gray-300 text-xs">—</span>}
                   </td>
-                  <td><StatusBadge status={b.payment_status} /></td>
+                  <td><BillPaymentSummary bill={b} /><button className="text-xs underline text-blue-700 mt-2" onClick={()=>setMatchingTarget({kind:'bill',id:b.id,label:b.bill_number})}>{b.match_status || 'Check matching'}</button>{b.match_required===1 && b.match_hold>0 && <div className="text-xs text-amber-700">Hold ₹{b.match_hold.toLocaleString('en-IN')}</div>}</td>
                   <td className="whitespace-nowrap">
-                    {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
+                    {b.vendor_po_id && b.reconciliation_version === 0 && <button onClick={() => setReconcileBill(b)} className="text-blue-700 text-xs mr-2">Reconcile items</button>}
+                    {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="btn btn-secondary text-xs mr-2">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
+                    {b.vendor_po_id && b.reconciliation_version === 0 && b.delivery_mode !== 'partial' && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
                     {canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
                     try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
@@ -5958,7 +5971,7 @@ export default function Procurement() {
                 </tr>
               ))}
               {!billsListLoading && billsListTotal === 0 && (
-                <tr><td colSpan="10" className="text-center py-8 text-gray-400">
+                <tr><td colSpan="11" className="text-center py-8 text-gray-400">
                   {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
                 </td></tr>
               )}
@@ -5981,8 +5994,10 @@ export default function Procurement() {
                       {b.bill_date || '—'}
                     </div>
                   </div>
-                  <StatusBadge status={b.payment_status} />
+                  <div><BillPaymentSummary bill={b} /><button className="text-xs text-blue-700 underline" onClick={()=>setMatchingTarget({kind:'bill',id:b.id,label:b.bill_number})}>{b.match_status || 'Check matching'}</button></div>
                 </div>
+                {!!b.linked_pos?.length && <div className="text-xs text-blue-700">{b.linked_pos.map(p => p.po_number).join(' · ')}</div>}
+                {b.debit_total > 0 && <div className="text-xs text-amber-700">Valid debit: ₹{b.debit_total.toLocaleString('en-IN')}</div>}
                 {b.vendor_name && (
                   <div className="text-xs">
                     <div className="text-[10px] uppercase text-gray-400">Vendor</div>
@@ -6012,7 +6027,9 @@ export default function Procurement() {
                 )}
                 {(b.vendor_po_id || canDelete('procurement')) && (
                   <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                    {b.vendor_po_id && (
+                    {b.vendor_po_id && b.reconciliation_version === 0 && <button onClick={() => setReconcileBill(b)} className="text-blue-700 text-xs mr-2">Reconcile items</button>}
+                    {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="text-amber-700 font-semibold">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
+                    {b.vendor_po_id && b.reconciliation_version === 0 && b.delivery_mode !== 'partial' && (
                       <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
                         className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
                     )}
@@ -6306,7 +6323,7 @@ export default function Procurement() {
           setReceiveItems(arr.map(it => {
             const qty = +it.qty || +it.quantity || 0;
             return {
-              vpi_id: null,
+              vpi_id: it.vendor_po_item_id || null,
               description: it.description || it.master_name || '—',
               master_name: it.description || '',
               item_code: it.item_code || '',
@@ -6325,6 +6342,7 @@ export default function Procurement() {
         const openMarkReceived = (d) => {
           setForm({
             receive_id: d.id,
+            receive_document_type: d.document_type,
             receive_vendor_po_id: d.vendor_po_id,
             receive_doc: `${d.document_type === 'challan' ? 'Challan' : 'Sales Bill'} ${d.document_number || '#' + d.id}`,
             received_by_name: '',
@@ -6333,7 +6351,8 @@ export default function Procurement() {
           setReceiveItems([]);
           // From-store (no PO) → read lines from the note's items_json;
           // PO-linked → pull from the PO's delivery-note-data as before.
-          if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
+          if (d.supply_pending) loadReceiveItemsFromJson(d.items_json);
+          else if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
           else loadReceiveItemsFromJson(d.items_json);
           setModal('receive');
         };
@@ -6624,7 +6643,7 @@ export default function Procurement() {
                           dispatched with Challan only and SB will follow
                           later, this amber chip lingers until SB is
                           uploaded via the Add Sales Bill button below. */}
-                      {d.sales_bill_pending === 1 && !d.sales_bill_number && (
+                      {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
                           📋 SB PENDING
                         </span>
@@ -6653,7 +6672,7 @@ export default function Procurement() {
                   <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
                   <td>
                     {d.receipt_file_path
-                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">Signed ✓</a>
+                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">{d.source_challan_id ? 'Challan proof ✓' : 'Signed ✓'}</a>
                       : d.received_by_name
                         ? <span className="text-amber-600 text-[11px]">No photo</span>
                         : <span className="text-gray-300 text-xs">—</span>}
@@ -6691,13 +6710,13 @@ export default function Procurement() {
                     {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
                       <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
                     )}
-                    {!d.received_by_name && (
+                    {!d.received_by_name && !d.source_challan_id && (
                       <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
                     )}
                     {/* Add Sales Bill — only when this dispatch was marked
                         sales_bill_pending=1 AND no SB has been uploaded yet
                         (mam 2026-05-25). */}
-                    {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                    {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
                       <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
                         Add Sales Bill
                       </button>
@@ -6772,7 +6791,7 @@ export default function Procurement() {
                     </div>
                   </div>
                 )}
-                {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
+                {(d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number) && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
                 )}
                 {d.sales_bill_number && (
@@ -6793,11 +6812,11 @@ export default function Procurement() {
                 {(d.file_path || d.receipt_file_path) && (
                   <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
                     {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
-                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">✓ Signed Receipt</a>}
+                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">{d.source_challan_id ? '✓ Challan proof' : '✓ Signed Receipt'}</a>}
                   </div>
                 )}
                 {/* Primary action — Mark Received (when not yet received) */}
-                {!d.received_by_name && (
+                {!d.received_by_name && !d.source_challan_id && (
                   <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
                 )}
                 {/* Secondary actions row */}
@@ -6814,7 +6833,7 @@ export default function Procurement() {
                     }}
                     className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
                   >🖨 Print</button>
-                  {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                  {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
                     <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
                   )}
                   {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
@@ -8143,14 +8162,24 @@ export default function Procurement() {
         </form>
       </Modal>
 
+      {matchingTarget && <PurchaseBillMatching key={`${matchingTarget.kind}-${matchingTarget.id}`} target={matchingTarget} canApprove={canApprove('procurement')} onClose={()=>setMatchingTarget(null)} onSaved={()=>fetchBillsListPage()} />}
+      {balanceBill && <BalanceDeliveryModal key={balanceBill.id} bill={balanceBill} onClose={() => setBalanceBill(null)} onSaved={() => { setBalanceBill(null); fetchBillsListPage(); load(); }} />}
+      {(modal === 'bill' || reconcileBill) && <PurchaseBillReconciliation vendors={vendors} initialVendor={form.vendor_id} initialPo={form.vendor_po_id} legacy={reconcileBill} onClose={() => { setModal(false); setReconcileBill(null); }} onSaved={() => { setModal(false); setReconcileBill(null); fetchBillsListPage(); fetchBillsFuPage(); load(); }} />}
       {/* Purchase Bill Modal */}
-      <Modal isOpen={modal === 'bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
+      <Modal isOpen={modal === 'legacy-bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
         <form onSubmit={savePurchaseBill} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
-              Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill will automatically clear this PO from the follow-up list.
+              Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill clears the bill follow-up. Any expected balance remains visible on this bill under Purchase Bills.
             </div>
           )}
+          {form.vendor_po_id && <label className="block text-xs font-semibold">Delivery arrangement
+            <select className="input mt-1" value={form.delivery_mode || 'final'} onChange={e => setForm(f => ({ ...f, delivery_mode: e.target.value }))}>
+              <option value="final">Final delivery — apply normal shortage rules</option>
+              <option value="partial">Partial delivery — balance expected later</option>
+            </select>
+            {form.delivery_mode === 'partial' && <span className="block mt-2 font-normal text-amber-700">Enter 0 for items arriving later. The balance stays pending without a short-supply debit. Use Balance pending · Receive on the saved bill for the next delivery. Enter the invoice amount exactly as billed.</span>}
+          </label>}
           {/* PO qty vs received qty per item (mam 2026-06-04): spot a short
               before saving the bill.  Short lines are flagged + a banner. */}
           {form.vendor_po_id && billItems && billItems.items?.length > 0 && (() => {
@@ -8163,7 +8192,7 @@ export default function Procurement() {
               const nr = { ...billRecv, [vpiId]: v };
               setBillRecv(nr);
               const amt = Math.round(billItems.items.reduce((s, it) => s + ((nr[it.vpi_id] == null ? +it.ordered_qty : +nr[it.vpi_id]) * (+it.rate || 0)), 0) * 100) / 100;
-              setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) }));
+              setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) + (+f.freight_amount || 0) }));
             };
             return (
               <div className="border rounded-lg overflow-hidden">
@@ -8203,7 +8232,7 @@ export default function Procurement() {
                 </div>
                 {shortLines.length > 0 && (
                   <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
-                    ⚠ <b>{shortLines.length}</b> item{shortLines.length === 1 ? '' : 's'} short (received less than ordered). A short-supply debit may apply.
+                    ⚠ <b>{shortLines.length}</b> item{shortLines.length === 1 ? '' : 's'} {form.delivery_mode === 'partial' ? 'awaiting later delivery. No short-supply debit will be raised.' : 'short (received less than ordered). A short-supply debit may apply.'}
                   </div>
                 )}
                 <div className="bg-blue-50 border-t border-blue-100 px-3 py-1 text-[10px] text-blue-700">
@@ -8248,10 +8277,11 @@ export default function Procurement() {
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({ ...form, bill_number: e.target.value })} /></div>
             <div><label className="label">Bill Date</label><input className="input" type="date" value={form.bill_date} onChange={e => setForm({ ...form, bill_date: e.target.value })} /></div>
             {/* `|| ''` lets backspace clear the field (mam 2026-05-25). */}
-            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount || ''} onChange={e => setForm({ ...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0) })} /></div>
-            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount || ''} onChange={e => setForm({ ...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value })} /></div>
+            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount || ''} onChange={e => setForm({ ...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0) + (form.freight_amount || 0) })} /></div>
+            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount || ''} onChange={e => setForm({ ...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value + (form.freight_amount || 0) })} /></div>
           </div>
-          <div><label className="label">Total</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
+          <div><label className="label">Freight Amount</label><input className="input" type="number" min="0" step="0.01" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({ ...form, freight_amount: +e.target.value, total_amount: Math.round(((form.amount || 0) + (form.gst_amount || 0) + +e.target.value) * 100) / 100 })} /></div>
+          <div><label className="label">Total (Amount + GST + Freight)</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
           <div>
             <label className="label">Bill File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
             <input
@@ -9038,17 +9068,17 @@ export default function Procurement() {
               DN — Sales Bill is still coming".  Adds the amber chip
               "📋 SB PENDING" to the dispatch row + enables the "Add
               Sales Bill" button once the SB arrives. */}
-          <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
+          {form.receive_document_type !== 'sales_bill' && <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
             <input type="checkbox" className="mt-0.5"
               checked={!!form.sales_bill_pending}
               onChange={(e) => setForm({ ...form, sales_bill_pending: e.target.checked })} />
             <span>
               <span className="font-semibold text-amber-800">Sales Bill is pending</span>
               <span className="text-amber-700 block mt-0.5">
-                Tick this if the receipt above is a Delivery Note / Challan and the formal Sales Bill will arrive later.  An "📋 SB Pending" chip will show on this dispatch until you upload the Sales Bill.
+                Billable PO items remain Sales Bill Pending after receiving. Create the Sales Bill later from this challan; receiving proof stays on the same delivery.
               </span>
             </span>
-          </label>
+          </label>}
           {/* Optional inventory link — pick a warehouse to auto-add the
               vendor PO's items as stock. Leave blank to skip. */}
           {warehouses.length > 0 && (

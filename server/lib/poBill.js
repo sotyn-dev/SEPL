@@ -50,11 +50,11 @@ const PO_APPROVED_DATE_IST = `date(${PO_APPROVED_AT}, '+330 minutes')`;
 function poMissingBillWhere(cutSql) {
   if (!cutSql) {
     return `COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
-           AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`;
+           AND NOT EXISTS (SELECT 1 FROM purchase_bill_pos bp JOIN purchase_bills pb ON pb.id=bp.purchase_bill_id WHERE bp.vendor_po_id=vp.id)`;
   }
   return `COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
            AND ${PO_APPROVED_TS_IST} <= ${cutSql}
-           AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id
+           AND NOT EXISTS (SELECT 1 FROM purchase_bill_pos bp JOIN purchase_bills pb ON pb.id=bp.purchase_bill_id WHERE bp.vendor_po_id=vp.id
                             AND datetime(pb.created_at, '+330 minutes') <= ${cutSql})`;
 }
 

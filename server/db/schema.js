@@ -5113,6 +5113,8 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) { }
     require('../lib/staffType').ensureStaffTypeColumn(db);
     require('../lib/passwordChangeMetadata').ensurePasswordChangeMetadata(db);
+    require('../lib/challanBilling').ensureChallanBilling(db);
+    require('../lib/partialDeliveries').ensurePartialDeliveries(db);
     // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
     // bank): filled by the joiner on the public form, editable by HR after.
     try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) { }
@@ -7565,6 +7567,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/salesBillCheckingScore').migrateDprBillCheckingScore(db);
   require('../lib/subcontractorWorkOrders').initialize(db);
   require('../lib/offerLetterScore').initialize(db);
+  require('../lib/purchaseBilling').ensurePurchaseBilling(db);
   return db;
 }
 
