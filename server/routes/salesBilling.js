@@ -4,12 +4,14 @@
 // per bill; numbering SEPL/SB/<FY>/NNN; Admin + Accounts (installation perm).
 const express = require('express');
 const { istToday } = require('../lib/istDate');
+const raWorkflow = require('../lib/raBillingWorkflow');
 const { billingPeriod, completedThrough } = require('../lib/installationBillingPeriod');
 const { resolveInstallationBillUnits } = require('../lib/installationBillUnits');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+router.use('/ra', require('./raBilling'));
 
 const round2 = n => Math.round((+n || 0) * 100) / 100;
 const BILL_STATUS = { 1: 'ORDER BOOKED', 2: 'MATERIAL DELIVERED', 3: 'INSTALLATION COMPLETE', 4: 'READY FOR PAYMENT' };
@@ -190,7 +192,7 @@ router.get('/pending', requirePermission('installation', 'view'), (req, res) => 
          FROM dpr d JOIN sites s ON s.id = d.site_id
         WHERE d.approval_status='approved'
           AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL AND d.report_date <= ?`
-    ).all(completedThrough(istToday()));
+    ).all(istToday());
     let totalVal = 0;
     for (const d of unbilledDprs) {
       const res = getDprSitcWorkItems(db, { dprIds: [d.id], businessBookId: d.business_book_id });
@@ -221,7 +223,9 @@ router.get('/unbilled-dprs', requirePermission('installation', 'view'), (req, re
           AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL
         AND d.report_date <= ?
         ORDER BY s.business_book_id, d.report_date DESC`
-    ).all(completedThrough(istToday()));
+    ).all(istToday());
+    const eligible=new Set(raWorkflow.queue(db,(ids,bb)=>getDprSitcWorkItems(db,{dprIds:ids,businessBookId:bb})).flatMap(g=>g.eligible_ids));
+    const eligibleRows=rows.filter(r=>eligible.has(r.dpr_id));
 
     const poByOrder = new Map();
     const getPoMaps = (bbId) => {
@@ -240,7 +244,7 @@ router.get('/unbilled-dprs', requirePermission('installation', 'view'), (req, re
     };
 
     const groups = new Map();
-    for (const r of rows) {
+    for (const r of eligibleRows) {
       const instPct = parseFloat(String(r.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
       const { byId, byDesc } = getPoMaps(r.bb_id);
       const wis = db.prepare('SELECT po_item_id, description, rate, actual_qty FROM dpr_work_items WHERE dpr_id=?').all(r.dpr_id);
@@ -711,6 +715,8 @@ router.put('/:id/approve', requirePermission('installation', 'edit'), (req, res)
   const db = getDb();
   const bill = db.prepare('SELECT id, approval_status FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
+  raWorkflow.ensure(db);
+  if(db.prepare('SELECT 1 FROM ra_bill_workflow WHERE bill_id=? AND submitted_on IS NOT NULL').get(bill.id))return res.status(409).json({error:'Submitted bill cannot be reverted; use an adjustment process.'});
   const next = req.body.approval_status === 'draft' ? 'draft' : 'approved';
   db.prepare('UPDATE sales_bills SET approval_status=? WHERE id=?').run(next, bill.id);
   db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
@@ -723,6 +729,8 @@ router.delete('/:id', requirePermission('installation', 'delete'), (req, res) =>
   const db = getDb();
   const bill = db.prepare('SELECT id FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
+  raWorkflow.ensure(db);
+  if(db.prepare('SELECT 1 FROM ra_bill_workflow WHERE bill_id=? AND (submitted_on IS NOT NULL OR mail_state IS NOT NULL)').get(bill.id))return res.status(409).json({error:'Submitted or emailed bill cannot be deleted.'});
   const child = db.prepare('SELECT id FROM sales_bills WHERE previous_bill_id=?').get(bill.id);
   if (child) return res.status(409).json({ error: 'Delete the later bill in this chain first' });
   // Free the DPRs this installation bill consumed so they can be re-billed.
@@ -749,6 +757,7 @@ router.put('/:id/sent', requirePermission('installation', 'edit'), (req, res) =>
   const db = getDb();
   const bill = db.prepare('SELECT id, bill_type, checked_at, sent_to_client FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
+  if(bill.bill_type===3)return res.status(409).json({error:'Use RA Billing → Bill pack & submission to record submission with evidence.'});
   const linkedDprs = db.prepare('SELECT approval_status FROM dpr WHERE sales_bill_id=?').all(bill.id);
   if (!bill.sent_to_client && linkedDprs.some(d => d.approval_status !== 'approved')) {
     return res.status(409).json({ error: 'A linked DPR is no longer approved. Reconcile this bill before sending.' });
@@ -771,10 +780,13 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
     const db = getDb();
     const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
     if (!bill) return res.status(404).json({ error: 'Bill not found' });
-    if (bill.bill_type !== 4) return res.status(400).json({ error: 'Payment can only be recorded against the Type 4 (Final) bill' });
+    if (![3,4].includes(bill.bill_type)) return res.status(400).json({error:'Record payment against an RA or Final bill'});
+    if(bill.bill_type===3 && !raWorkflow.workflow(db,bill.id).submitted_on)return res.status(400).json({error:'Submit the RA bill first'});
     if (bill.approval_status !== 'approved') return res.status(400).json({ error: 'Approve the Final bill before recording payment' });
     const amount = round2(req.body.amount);
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be a positive number' });
+    const receivedBefore=round2(db.prepare("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE reference_type='sales_bill' AND reference_id=?").get(bill.id).s);
+    if(amount>round2(bill.total_amount-receivedBefore)+0.005)return res.status(400).json({error:'Payment exceeds outstanding amount'});
     const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : istToday();
     const payment_mode = ['Cash', 'Bank', 'UPI', 'Cheque', 'NEFT/RTGS'].includes(req.body.payment_mode) ? req.body.payment_mode : 'Bank';
 
@@ -810,6 +822,7 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
       return { received, outstanding, payment_status: pstatus };
     })();
 
+    if(bill.bill_type===3)raWorkflow.syncCollection(db,bill.id);
     res.json({ message: 'Payment recorded', ...out });
   } catch (err) {
     console.error('sales-billing payment error', err);
@@ -823,7 +836,9 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
 // Idempotent via dpr.sales_bill_id (a DPR is billed once). Returns a summary.
 function generateInstallationBills(db, userId = null, { dprIds = null, billDate = null, today = istToday() } = {}) {
   // DPR approval is the only approval gate. Only completed billing periods qualify.
-  const cutoff = completedThrough(today);
+  const ready=raWorkflow.queue(db,(ids,bb)=>getDprSitcWorkItems(db,{dprIds:ids,businessBookId:bb}),today);
+  const eligible=new Set(ready.flatMap(g=>g.eligible_ids));
+  const cutoff = today;
   let sql = `
     SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id
        FROM dpr d JOIN sites s ON s.id = d.site_id
@@ -836,7 +851,7 @@ function generateInstallationBills(db, userId = null, { dprIds = null, billDate 
     sql += ` AND d.id IN (${dprIds.map(() => '?').join(',')})`;
     params.push(...dprIds);
   }
-  const rows = db.prepare(sql).all(...params);
+  const rows = db.prepare(sql).all(...params).filter(r=>eligible.has(r.dpr_id));
   if (Array.isArray(dprIds) && rows.length !== new Set(dprIds).size) {
     const error = new Error('Some selected DPRs are already billed or no longer ready. Refresh and review the selection.');
     error.status = 409;
@@ -846,7 +861,8 @@ function generateInstallationBills(db, userId = null, { dprIds = null, billDate 
 
   const groups = new Map();
   for (const r of rows) {
-    const period = billingPeriod(r.report_date);
+    const project=ready.find(g=>g.project_id===r.bb_id);
+    const period=project.rule.mode==='calendar' && project.trigger!=='Amount limit reached' ? billingPeriod(r.report_date) : {start:project.oldest_date,end:today};
     const key = `${r.bb_id}:${period.start}`;
     if (!groups.has(key)) groups.set(key, { bbId:r.bb_id, dprIds:[], minDate:period.start, maxDate:period.end });
     groups.get(key).dprIds.push(r.dpr_id);
@@ -943,3 +959,6 @@ router.post('/generate-installation', requirePermission('installation', 'create'
 
 module.exports = router;
 module.exports.generateInstallationBills = generateInstallationBills;
+module.exports.getDprSitcWorkItems = getDprSitcWorkItems;
+
+module.exports.installBillHTML = installBillHTML;

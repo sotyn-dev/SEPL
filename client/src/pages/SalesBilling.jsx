@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import RaBillingBoard from '../components/RaBillingBoard';
 import Modal from '../components/Modal';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import toast from 'react-hot-toast';
@@ -16,13 +17,14 @@ const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: FiGrid },
   { id: 'orders', label: 'Sales Order Bills', icon: FiFileText },
   { id: 'material', label: 'Material · PO vs Bill', icon: FiPackage },
+  { id: 'ra', label: 'RA Billing · SOP-13', icon: FiClipboard },
   { id: 'dpr', label: 'DPR / Installation Bills', icon: FiClipboard },
   { id: 'responsible', label: 'Responsible', icon: FiUsers },
 ];
 
 export default function SalesBilling() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useUrlTab(['dashboard', 'orders', 'material', 'dpr', 'responsible'], 'dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'orders', 'material', 'dpr', 'ra', 'responsible'], 'dashboard');
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
@@ -210,6 +212,7 @@ export default function SalesBilling() {
   };
 
   const sendToClient = async (b) => {
+    if(b.bill_type===3){setTab('ra');return;}
     try { const r = await api.put(`/sales-billing/${b.id}/sent`, {}); toast.success(r.data.message || 'Updated'); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
@@ -323,7 +326,7 @@ export default function SalesBilling() {
               <td className="px-3 py-2 text-center">
                 {sentMode ? (
                   <button disabled={!b.from_approved_dprs && !b.checked_at && !b.sent_to_client} title={!b.from_approved_dprs && !b.checked_at && !b.sent_to_client ? 'Mark Checked / OK first' : undefined} onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full disabled:opacity-40 disabled:cursor-not-allowed ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
-                    {b.sent_to_client ? '✓ Sent to client' : 'Sent to client'}
+                    {b.bill_type===3 ? 'Bill pack & submission' : b.sent_to_client ? '✓ Sent to client' : 'Sent to client'}
                   </button>
                 ) : ApprovalCell(b)}
               </td>
@@ -567,11 +570,12 @@ export default function SalesBilling() {
         </div>
       )}
 
+      {tab === 'ra' && <RaBillingBoard />}
       {/* DPR / INSTALLATION BILLS (Type 3) */}
       {tab === 'dpr' && (
         <div className="space-y-2">
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
-            <b>DPR approved</b> → <b>15-day bill created</b> → <b>Sent to Client</b>. Periods: 1st–15th and 16th–month-end. Pending and rejected DPRs are excluded. No second approval is required; each DPR is billed once.
+            <b>DPR approved</b> → <b>15-day bill created</b> → <b>Sent to Client</b>. Default: 15 days from oldest approved unbilled work, or the project amount limit if reached first. Set rules in RA Billing. Pending and rejected DPRs are excluded. No second approval is required; each DPR is billed once.
           </div>
           <BillTable rows={t3Pager.pageItems} pager={t3Pager} showPayment={false} sentMode />
         </div>

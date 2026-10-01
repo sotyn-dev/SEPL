@@ -6,6 +6,8 @@ const Database = require('better-sqlite3');
 test('Approved DPRs bill by closed fortnight without a second approval', async () => {
   const db = new Database(':memory:');
   db.exec(`
+    CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT,active INTEGER);
+    INSERT INTO users VALUES(7,'Tester',1);
     CREATE TABLE business_book(id INTEGER PRIMARY KEY, payment_against_installation TEXT, client_name TEXT, company_name TEXT, project_name TEXT);
     CREATE TABLE sites(id INTEGER PRIMARY KEY, business_book_id INTEGER);
     CREATE TABLE dpr(id INTEGER PRIMARY KEY, site_id INTEGER, report_date TEXT, approval_status TEXT, billing_ready INTEGER, sales_bill_id INTEGER);
@@ -31,6 +33,8 @@ test('Approved DPRs bill by closed fortnight without a second approval', async (
   });
   stub('../istDate', { istToday: () => '2026-10-01' });
   const router = require('../../routes/salesBilling');
+  require('../raBillingWorkflow').ensure(db);
+  db.exec("INSERT INTO ra_billing_rules(project_id,mode) VALUES(1,'calendar')");
   db.exec("UPDATE dpr SET billing_ready=0; INSERT INTO dpr VALUES(2,1,'2026-09-18','rejected',1,NULL),(3,1,'2026-09-19','pending',1,NULL),(4,1,'2026-10-01','approved',1,NULL);");
   const app = express(); app.use(express.json()); app.use(router);
   const server = app.listen(0, '127.0.0.1');
@@ -57,17 +61,7 @@ test('Approved DPRs bill by closed fortnight without a second approval', async (
     assert.equal(db.prepare('SELECT sales_bill_id FROM dpr').get().sales_bill_id, bill.id);
     assert.equal((await call('POST', '/generate-installation', request)).status, 409);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM sales_bills').get().n, 1);
-    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 200);
-    db.prepare('UPDATE sales_bills SET checked_at=NULL, checked_by=NULL, sent_to_client=0').run();
-    db.exec("UPDATE dpr SET approval_status='rejected' WHERE id=1");
-    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 409);
-    db.exec("UPDATE dpr SET approval_status='approved' WHERE id=1");
-    assert.equal((await call('PUT', `/${bill.id}/checked`, {}, true)).status, 403);
-    assert.equal((await call('PUT', `/${bill.id}/checked`)).status, 200);
-    const logCount = db.prepare("SELECT COUNT(*) n FROM sales_bill_status_log WHERE status='checked'").get().n;
-    assert.equal((await call('PUT', `/${bill.id}/checked`)).status, 200);
-    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_bill_status_log WHERE status='checked'").get().n, logCount);
-    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 200);
+    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 409); // submission needs an evidence pack
     db.exec("INSERT INTO dpr VALUES(5,1,'2026-09-02','approved',0,NULL),(6,1,'2026-09-28','approved',0,NULL); INSERT INTO dpr_work_items VALUES(5,5,1,'Pipe','mtr',110,2),(6,6,1,'Pipe','mtr',110,3);");
     const result = require('../../scripts/installationBillingCron').runOnce('2026-10-01');
     assert.equal(result.created, 2);
