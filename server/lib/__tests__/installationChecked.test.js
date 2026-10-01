@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const Database = require('better-sqlite3');
 
-test('Checked / OK creates one bill, preserves amounts, records reviewer and gates sending', async () => {
+test('Approved DPRs bill by closed fortnight without a second approval', async () => {
   const db = new Database(':memory:');
   db.exec(`
     CREATE TABLE business_book(id INTEGER PRIMARY KEY, payment_against_installation TEXT, client_name TEXT, company_name TEXT, project_name TEXT);
@@ -29,9 +29,9 @@ test('Checked / OK creates one bill, preserves amounts, records reviewer and gat
     authMiddleware: (req, res, next) => { req.user = { id: 7 }; next(); },
     requirePermission: () => (req, res, next) => req.headers['x-deny'] ? res.sendStatus(403) : next(),
   });
+  stub('../istDate', { istToday: () => '2026-10-01' });
   const router = require('../../routes/salesBilling');
-  assert.throws(() => router.generateInstallationBills(db, null), /Check/);
-  assert.equal(require('../../scripts/installationBillingCron').runOnce(true).created, 0);
+  db.exec("UPDATE dpr SET billing_ready=0; INSERT INTO dpr VALUES(2,1,'2026-09-18','rejected',1,NULL),(3,1,'2026-09-19','pending',1,NULL),(4,1,'2026-10-01','approved',1,NULL);");
   const app = express(); app.use(express.json()); app.use(router);
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
@@ -39,9 +39,9 @@ test('Checked / OK creates one bill, preserves amounts, records reviewer and gat
     method, headers: { 'Content-Type': 'application/json', ...(deny ? { 'x-deny': '1' } : {}) }, body: JSON.stringify(body),
   });
   try {
-    const request = { checked: true, dpr_ids: [1] };
+    const request = { dpr_ids: [1] };
     assert.equal((await call('POST', '/generate-installation', request, true)).status, 403);
-    assert.equal((await call('POST', '/generate-installation', { dpr_ids: [1] })).status, 400);
+    assert.equal((await call('POST', '/generate-installation', { dpr_ids: [2,3,4] })).status, 409);
     assert.equal((await call('POST', '/generate-installation', { checked: true })).status, 400);
     const response = await call('POST', '/generate-installation', request);
     assert.equal(response.status, 200, await response.text());
@@ -49,19 +49,42 @@ test('Checked / OK creates one bill, preserves amounts, records reviewer and gat
     assert.equal(bill.amount, 2000);
     assert.equal(bill.gst_amount, 360);
     assert.equal(bill.total_amount, 2360);
-    assert.equal(bill.checked_by, 7); assert.ok(bill.checked_at);
+    assert.equal(bill.checked_by, null); assert.equal(bill.checked_at, null);
+    assert.equal(bill.approval_status, 'approved');
+    assert.match(bill.reference_doc_no, /2026-09-16.*2026-09-30/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM dpr WHERE id IN (2,3,4) AND sales_bill_id IS NULL').get().n, 3);
     assert.equal(bill.sent_to_client, 0);
     assert.equal(db.prepare('SELECT sales_bill_id FROM dpr').get().sales_bill_id, bill.id);
     assert.equal((await call('POST', '/generate-installation', request)).status, 409);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM sales_bills').get().n, 1);
     assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 200);
     db.prepare('UPDATE sales_bills SET checked_at=NULL, checked_by=NULL, sent_to_client=0').run();
-    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 400);
+    db.exec("UPDATE dpr SET approval_status='rejected' WHERE id=1");
+    assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 409);
+    db.exec("UPDATE dpr SET approval_status='approved' WHERE id=1");
     assert.equal((await call('PUT', `/${bill.id}/checked`, {}, true)).status, 403);
     assert.equal((await call('PUT', `/${bill.id}/checked`)).status, 200);
     const logCount = db.prepare("SELECT COUNT(*) n FROM sales_bill_status_log WHERE status='checked'").get().n;
     assert.equal((await call('PUT', `/${bill.id}/checked`)).status, 200);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_bill_status_log WHERE status='checked'").get().n, logCount);
     assert.equal((await call('PUT', `/${bill.id}/sent`)).status, 200);
+    db.exec("INSERT INTO dpr VALUES(5,1,'2026-09-02','approved',0,NULL),(6,1,'2026-09-28','approved',0,NULL); INSERT INTO dpr_work_items VALUES(5,5,1,'Pipe','mtr',110,2),(6,6,1,'Pipe','mtr',110,3);");
+    const result = require('../../scripts/installationBillingCron').runOnce('2026-10-01');
+    assert.equal(result.created, 2);
+    const generated = db.prepare('SELECT * FROM sales_bills WHERE id<>? ORDER BY id').all(bill.id);
+    assert.deepEqual(generated.map(b=>b.amount), [400,600]);
+    assert.ok(generated.every(b=>b.approval_status==='approved' && !b.sent_to_client && !b.checked_by));
+    assert.equal(require('../../scripts/installationBillingCron').runOnce('2026-10-01').created, 0);
   } finally { await new Promise(resolve => server.close(resolve)); db.close(); }
+});
+
+test('period boundaries include leap years and year rollover', () => {
+  const { billingPeriod, completedThrough } = require('../installationBillingPeriod');
+  assert.deepEqual(billingPeriod('2026-01-15'), {start:'2026-01-01',end:'2026-01-15'});
+  assert.deepEqual(billingPeriod('2026-01-16'), {start:'2026-01-16',end:'2026-01-31'});
+  assert.equal(billingPeriod('2028-02-29').end,'2028-02-29');
+  assert.equal(completedThrough('2026-01-01'),'2025-12-31');
+  assert.equal(completedThrough('2026-01-15'),'2025-12-31');
+  assert.equal(completedThrough('2026-01-16'),'2026-01-15');
+  assert.throws(()=>billingPeriod('2026-02-30'));
 });
