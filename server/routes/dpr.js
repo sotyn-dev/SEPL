@@ -2144,17 +2144,31 @@ router.post('/', (req, res) => {
   }
 
   // SOP-09.3 Automatic Problem-to-Task Assignment:
-  // When a site engineer records any hindrance/problem or issue in remarks, immediately convert it to a PMS task
+  // When a site engineer records any hindrance/problem, category, or zero manpower, immediately convert it to a PMS task
   // and assign it to the respective Department Head (Material -> Purchase, Manpower -> HR, etc.)
   let autoTaskResult = null;
-  const issueText = [hindrances, remarks].filter(t => t && String(t).trim()).join('\n');
+  let issueText = [hindrances, remarks].filter(t => t && String(t).trim()).join('\n').trim();
+  
+  // Auto-detect zero manpower or explicit category selection
+  const totalContractorManpower = Array.isArray(contractors) && contractors.length > 0
+    ? contractors.reduce((sum, c) => sum + (+c.manpower || 0), 0)
+    : (+contractor_manpower || 0);
+
+  if (!issueText) {
+    if (hindrance_category) {
+      issueText = `${hindrance_category} hindrance reported on site (DPR #${dprId})`;
+    } else if (totalContractorManpower === 0 && Array.isArray(contractors) && contractors.length > 0) {
+      issueText = `Zero Manpower deployed on site (0 workers reported)`;
+    }
+  }
+
   if (issueText && String(issueText).trim()) {
     try {
       autoTaskResult = autoCreateTaskFromDprHindrance(db, {
         dprId,
         siteId: site_id,
         hindrances: issueText,
-        hindranceCategory: hindrance_category || (issueText.toLowerCase().includes('mat') ? 'Material' : ''),
+        hindranceCategory: hindrance_category || (issueText.toLowerCase().includes('manpower') || issueText.toLowerCase().includes('worker') || totalContractorManpower === 0 ? 'Manpower' : (issueText.toLowerCase().includes('mat') ? 'Material' : '')),
         submittedBy: req.user.id,
         reportDate: report_date,
         workItems: work_items,
@@ -3043,7 +3057,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
       };
     });
 
-    // S2: Daily Report Format (Mobile) — Today's and selected week's DPR submissions
+    // S2: Daily Report Format (Mobile) — DPR submissions for selected date
     const recentDprs = all(`
       SELECT d.id AS rid, ('DPR-' || d.id) AS ref, s.name AS title,
              COALESCE(u.name, 'Site Eng') AS owner, d.report_date, d.created_at,
@@ -3056,9 +3070,9 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         FROM dpr d
         JOIN sites s ON s.id = d.site_id
         LEFT JOIN users u ON u.id = d.submitted_by
-       WHERE (d.report_date = ? OR (date(d.report_date) >= ? AND date(d.report_date) <= ?))
-       ORDER BY (d.report_date = ?) DESC, d.report_date DESC, d.id DESC LIMIT 40
-    `, today, wkStart, wkEnd, today);
+       WHERE d.report_date = ?
+       ORDER BY d.id DESC LIMIT 40
+    `, today);
 
     const s2Cards = recentDprs.map(d => ({
       ...d,
@@ -3067,8 +3081,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
       photos_n: d.photo_urls ? d.photo_urls.split(',').filter(Boolean).length : 0,
     }));
 
-    // S3: Problem-to-Task Rule Card — Unresolved Hindrances & Active PMS tasks
-    // If a task is marked 'approved' (solved), it is automatically cleared from S3 and KPIs
+    // S3: Problem-to-Task Rule Card — Hindrances & PMS tasks for selected date
     const problemDprs = all(`
       SELECT d.id AS rid, ('PRB-' || d.id) AS ref, s.name AS title,
              COALESCE(u.name, 'Site Eng') AS owner, d.report_date AS created_at,
@@ -3080,11 +3093,11 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         FROM dpr d
         JOIN sites s ON s.id = d.site_id
         LEFT JOIN users u ON u.id = d.submitted_by
-       WHERE ((d.hindrances IS NOT NULL AND TRIM(d.hindrances) != '')
+       WHERE d.report_date = ?
+         AND ((d.hindrances IS NOT NULL AND TRIM(d.hindrances) != '')
           OR (d.remarks IS NOT NULL AND TRIM(d.remarks) != ''))
-         AND COALESCE((SELECT p.status FROM pms_tasks p WHERE (p.description LIKE '%[DPR-' || d.id || ']%' OR p.attachment_url = 'dpr://' || d.id) ORDER BY p.id DESC LIMIT 1), 'pending') != 'approved'
        ORDER BY d.id DESC LIMIT 30
-    `);
+    `, today);
 
     const pmsTasks = all(`
       SELECT p.id AS rid, ('TASK-' || p.id) AS ref, p.title,
@@ -3094,9 +3107,9 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         LEFT JOIN users tu ON tu.id = p.assigned_to
         LEFT JOIN business_book bb ON bb.id = p.project_id
         LEFT JOIN sites s ON s.business_book_id = p.project_id
-       WHERE p.status != 'approved'
+       WHERE (DATE(p.created_at) = ? OR SUBSTR(COALESCE(p.created_at, ''), 1, 10) = ? OR p.description LIKE '%Report Date: ' || ? || '%')
        ORDER BY p.created_at DESC LIMIT 30
-    `);
+    `, today, today, today);
 
     const s3Cards = [
       ...pmsTasks.map(t => ({
@@ -3123,7 +3136,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     // S4: Buffer Update Rule — Weekly plan vs actual installed / variance
     const weeklyPlans = all(`
       SELECT wp.id AS rid, ('PLAN-' || wp.id) AS ref, s.name AS title,
-             COALESCE(u.name, 'PM Adarsh') AS owner, wp.week_start, wp.status, wp.created_at,
+             COALESCE(u.name, 'Lovely Sharma') AS owner, wp.week_start, wp.status, wp.created_at,
              (SELECT SUM(grand_total_a) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS actual_val,
              (SELECT SUM(planned_grand_total_b) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS planned_val
         FROM weekly_plans wp
@@ -3174,7 +3187,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         rid: s.id,
         ref: `RAG-${s.id}`,
         title: `${s.name} [${rag.toUpperCase()}]`,
-        owner: rag === 'red' ? 'Head / Ambuj' : (s.site_engineer_name || 'PM Adarsh'),
+        owner: rag === 'red' ? 'Head / Ajmer' : (s.site_engineer_name || 'Lovely Sharma'),
         rag,
         ragLabel,
         margin,
@@ -3226,8 +3239,8 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     if (redCount > 0) {
       alerts.push({
         ref: 'SOP-09.5 RED ESCALATION',
-        text: `${redCount} site(s) flagged RED. Department Head (Ambuj) action required today.`,
-        owner: 'Ambuj / Head',
+        text: `${redCount} site(s) flagged RED. Department Head (Ajmer / Lovely Sharma) action required today.`,
+        owner: 'Ajmer / Lovely Sharma',
         at: today,
         level: 'red',
       });
@@ -3236,7 +3249,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
       alerts.push({
         ref: 'SOP-09.3 UNRESOLVED PROBLEMS',
         text: `${problemDprs.length} DPR hindrance(s) reported — ensure every problem is assigned a task with one owner and one date.`,
-        owner: 'CRM / PM',
+        owner: 'CRM / Department Head',
         at: today,
         level: 'yellow',
       });
@@ -3253,10 +3266,10 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     }
 
     const tasks = [
-      { text: 'Hold daily 15-minute Red sites review meeting', tag: 'Adarsh / Ambuj' },
+      { text: 'Hold daily 15-minute Red sites review meeting', tag: 'Lovely Sharma / Ajmer' },
       { text: 'Verify photo attachments for today\'s DPR submissions', tag: 'Site Eng' },
-      { text: 'Convert open site problems into PMS tasks with target date', tag: 'CRM' },
-      { text: 'Validate Ready-Checklist before clearing work area starts', tag: 'ERP / PM' },
+      { text: 'Convert open site problems into PMS tasks with target date', tag: 'Lovely Sharma' },
+      { text: 'Validate Ready-Checklist before clearing work area starts', tag: 'ERP / Lovely Sharma' },
     ];
 
     const activity = all(`
