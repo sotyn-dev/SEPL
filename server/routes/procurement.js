@@ -5162,12 +5162,105 @@ router.get('/purchase-bills', (req, res) => {
 });
 
 // Follow-up: POs awaiting Purchase Bill (paginated + search + expected-date range + blocked_count)
-router.get('/purchase-bills/followup', (req,res)=>{
-  const result=purchaseBilling.followup(getDb(),req.query);
-  const page=Math.max(1,parseInt(req.query.page)||1),limit=Math.max(1,parseInt(req.query.limit)||15);
-  if(req.query.export || !req.query.page)return res.json(result.rows);
-  res.json({...result,rows:result.rows.slice((page-1)*limit,page*limit),total:result.rows.length,page,limit,totalPages:Math.max(1,Math.ceil(result.rows.length/limit))});
+router.get('/purchase-bills/followup', (req, res) => {
+  const db = getDb();
+  const { page, limit, from, to, q, search, export: isExport } = req.query;
+
+  // 1. Calculate blocked_count (POs waiting for bill but blocked on payment gate)
+  const blockedRow = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM vendor_pos vp
+    WHERE COALESCE(vp.cancelled, 0) = 0
+      AND vp.payment_block_status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id)
+  `).get();
+  const blocked_count = blockedRow ? blockedRow.c : 0;
+
+  // 2. Base criteria for follow-up: not cancelled, not blocked, no purchase bill
+  const whereClauses = [
+    'COALESCE(vp.cancelled, 0) = 0',
+    '(vp.payment_block_status IS NULL OR vp.payment_block_status != \'pending\')',
+    'NOT EXISTS (SELECT 1 FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id)'
+  ];
+  const params = [];
+
+  if (from) {
+    whereClauses.push('DATE(vp.expected_receipt_date) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    whereClauses.push('DATE(vp.expected_receipt_date) <= ?');
+    params.push(to);
+  }
+
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(ind.indent_number, \'\')) LIKE ? OR LOWER(COALESCE(ind.site_name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+  `).get(...params);
+  const total = totalRow ? totalRow.c : 0;
+
+  let selectSql = `
+    SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.expected_receipt_date,
+           vp.vendor_id, vp.payment_block_status, vp.delay_reason, vp.file_path,
+           v.name as vendor_name,
+           ind.indent_number, ind.site_name as indent_site_name,
+           COALESCE((
+             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             FROM vendor_po_items vpi
+             WHERE vpi.vendor_po_id = vp.id
+           ), vp.total_amount) as display_total
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+    ORDER BY (CASE WHEN vp.expected_receipt_date IS NULL OR vp.expected_receipt_date = '' THEN '9999-12-31' ELSE vp.expected_receipt_date END) ASC, vp.id DESC
+  `;
+
+  let rows;
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ' LIMIT ? OFFSET ?';
+    rows = db.prepare(selectSql).all(...params, limitNum, offset);
+  } else {
+    rows = db.prepare(selectSql).all(...params);
+  }
+
+  for (const r of rows) {
+    const stored = +r.total_amount || 0;
+    const live = +r.display_total || 0;
+    r.total_amount_drift = Math.round(Math.abs(stored - live));
+  }
+
+  if (isPaginated) {
+    return res.json({
+      rows,
+      total,
+      blocked_count,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1
+    });
+  }
+
+  res.json(rows);
 });
+
 router.get('/purchase-bills/eligible', (req,res)=>{
   const db=getDb(),vendor=+req.query.vendor_id;
   const legacy=+req.query.reconcile_bill_id||0;

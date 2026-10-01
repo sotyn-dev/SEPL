@@ -5806,9 +5806,9 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                          <td className="px-2 py-1.5 text-center">{po.reconciliation_required ? <span className="text-amber-700">Reconciliation needed</span> : chip}</td>
+                          <td className="px-2 py-1.5 text-center">{chip}</td>
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
-                            Rs {(+po.pending_value || 0).toLocaleString('en-IN')}<div className="text-[10px] font-normal">Accepted, unbilled value (before GST)</div><div className="text-[10px] font-normal whitespace-normal">{po.items?.filter(i=>i.billable_qty>0).map(i=>`${i.description}: ${i.billable_qty} ${i.unit}`).join(' · ')}</div>
+                            Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                             {+po.total_amount_drift > 1 && (
                               <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                                 ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
@@ -5880,7 +5880,7 @@ export default function Procurement() {
                         </div>
                         <div className="text-right">
                           <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                          <div className="font-semibold text-emerald-700">Rs {(+po.pending_value || 0).toLocaleString('en-IN')}<div className="text-[10px] font-normal">Accepted, unbilled value (before GST)</div><div className="text-[10px] font-normal whitespace-normal">{po.items?.filter(i=>i.billable_qty>0).map(i=>`${i.description}: ${i.billable_qty} ${i.unit}`).join(' · ')}</div></div>
+                          <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
                           {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
                         </div>
                       </div>
