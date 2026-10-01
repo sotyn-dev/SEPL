@@ -207,7 +207,10 @@ router.post('/payments', requirePermission('installation', 'create'), (req, res)
   const { type, reference_type, reference_id, amount, payment_date, payment_mode, transaction_ref, notes } = req.body;
   if (type==='payable' && ['purchase_bill','purchase_bills'].includes(reference_type)) {
     if (!Number.isFinite(Number(amount)) || Number(amount)<=0) return res.status(400).json({error:'Enter a positive payment amount'});
-    if (!getDb().prepare('SELECT id FROM purchase_bills WHERE id=?').get(reference_id)) return res.status(400).json({error:'Purchase bill not found'});
+    const bill=getDb().prepare('SELECT * FROM purchase_bills WHERE id=?').get(reference_id);
+    if (!bill) return res.status(400).json({error:'Purchase bill not found'});
+    try { require('../lib/purchaseBillMatching').assertPayment(getDb(),bill,Number(amount)); }
+    catch(e){return res.status(409).json({error:e.message});}
   }
   const r = getDb().prepare('INSERT INTO payments (type,reference_type,reference_id,amount,payment_date,payment_mode,transaction_ref,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(type, reference_type, reference_id, amount, payment_date, payment_mode, transaction_ref, notes, req.user.id);

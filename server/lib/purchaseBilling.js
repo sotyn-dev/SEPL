@@ -3,7 +3,7 @@ const money = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const json = value => { try { const a=JSON.parse(value || '[]'); return Array.isArray(a)?a:[]; } catch (_) { return []; } };
 
 function ensurePurchaseBilling(db) {
-  for (const [name,type] of [['freight_amount','REAL NOT NULL DEFAULT 0'],['reconciliation_version','INTEGER NOT NULL DEFAULT 0'],['request_key','TEXT'],['reconciliation_note','TEXT']]) {
+  for (const [name,type] of [['match_required','INTEGER NOT NULL DEFAULT 0'],['freight_amount','REAL NOT NULL DEFAULT 0'],['reconciliation_version','INTEGER NOT NULL DEFAULT 0'],['request_key','TEXT'],['reconciliation_note','TEXT']]) {
     if (!db.prepare('PRAGMA table_info(purchase_bills)').all().some(c=>c.name===name)) db.exec(`ALTER TABLE purchase_bills ADD COLUMN ${name} ${type}`);
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pb_request ON purchase_bills(request_key) WHERE request_key IS NOT NULL;
@@ -23,6 +23,10 @@ function ensurePurchaseBilling(db) {
       debit_note_id INTEGER NOT NULL UNIQUE REFERENCES debit_notes(id), amount REAL NOT NULL CHECK(amount>0),
       allocated_by INTEGER REFERENCES users(id), PRIMARY KEY(purchase_bill_id,debit_note_id));
     INSERT OR IGNORE INTO purchase_bill_pos SELECT id,vendor_po_id FROM purchase_bills WHERE vendor_po_id IS NOT NULL;`);
+  db.exec(`CREATE TABLE IF NOT EXISTS purchase_bill_match_reviews (
+    id INTEGER PRIMARY KEY, purchase_bill_id INTEGER NOT NULL REFERENCES purchase_bills(id) ON DELETE CASCADE,
+    signature TEXT NOT NULL, reason TEXT NOT NULL, reviewed_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   // Preserve uncertain history; never infer quantities by dividing an invoice total.
   db.transaction(()=>{
     for(const bill of db.prepare('SELECT * FROM purchase_bills WHERE reconciliation_version=0 AND vendor_po_id IS NOT NULL').all()) {
@@ -137,8 +141,8 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
       prepared.push({item,qty,rate,tax});
     }
     const poIds=[...states.keys()];
-    const r=legacy?{lastInsertRowid:legacy.id}:db.prepare(`INSERT INTO purchase_bills(vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,file_path,material_status,created_by,reconciliation_version,request_key)
-      VALUES(?,?,?,?,0,0,0,?,'approved',?,2,?)`).run(poIds.length===1?poIds[0]:null,vendor,number,date,filePath,userId,key);
+    const r=legacy?{lastInsertRowid:legacy.id}:db.prepare(`INSERT INTO purchase_bills(vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,file_path,material_status,created_by,reconciliation_version,request_key,match_required)
+      VALUES(?,?,?,?,0,0,0,?,'approved',?,2,?,1)`).run(poIds.length===1?poIds[0]:null,vendor,number,date,filePath,userId,key);
     for(const id of poIds)db.prepare('INSERT OR IGNORE INTO purchase_bill_pos VALUES(?,?)').run(r.lastInsertRowid,id);
     for(const {item,qty,rate,tax} of prepared) {
       let remaining=qty;

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
+import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
@@ -448,6 +449,7 @@ export default function Procurement() {
   const [employees, setEmployees] = useState([]); // for "Raised By" dropdown
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
+  const [matchingTarget, setMatchingTarget] = useState(null);
   const [balanceBill, setBalanceBill] = useState(null);
   const [reconcileBill, setReconcileBill] = useState(null);
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
@@ -5824,7 +5826,7 @@ export default function Procurement() {
                             )}
                           </td>
                           <td className="px-2 py-1.5">
-                            <button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
+                            <button className="block text-blue-700 underline text-xs mb-2" onClick={()=>setMatchingTarget({kind:'po',id:po.id,label:po.po_number})}>Receiving / bill balance</button><button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
                           </td>
                         </tr>
                       );
@@ -5897,7 +5899,7 @@ export default function Procurement() {
                         </a>
                         {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 File</a>}
                       </div>
-                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
+                      <button className="block text-blue-700 underline text-xs mb-2" onClick={()=>setMatchingTarget({kind:'po',id:po.id,label:po.po_number})}>Receiving / bill balance</button><button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
                     </div>
                   );
                 })}
@@ -5955,7 +5957,7 @@ export default function Procurement() {
                       ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
                       : <span className="text-gray-300 text-xs">—</span>}
                   </td>
-                  <td><BillPaymentSummary bill={b} /></td>
+                  <td><BillPaymentSummary bill={b} /><button className="text-xs underline text-blue-700 mt-2" onClick={()=>setMatchingTarget({kind:'bill',id:b.id,label:b.bill_number})}>{b.match_status || 'Check matching'}</button>{b.match_required===1 && b.match_hold>0 && <div className="text-xs text-amber-700">Hold ₹{b.match_hold.toLocaleString('en-IN')}</div>}</td>
                   <td className="whitespace-nowrap">
                     {b.vendor_po_id && b.reconciliation_version === 0 && <button onClick={() => setReconcileBill(b)} className="text-blue-700 text-xs mr-2">Reconcile items</button>}
                     {b.delivery_mode === 'partial' && <button onClick={() => setBalanceBill(b)} className="btn btn-secondary text-xs mr-2">{b.pending_delivery_lines > 0 ? `Balance pending (${b.pending_delivery_lines}) · Receive` : 'Delivery complete · View'}</button>}
@@ -5992,7 +5994,7 @@ export default function Procurement() {
                       {b.bill_date || '—'}
                     </div>
                   </div>
-                  <BillPaymentSummary bill={b} />
+                  <div><BillPaymentSummary bill={b} /><button className="text-xs text-blue-700 underline" onClick={()=>setMatchingTarget({kind:'bill',id:b.id,label:b.bill_number})}>{b.match_status || 'Check matching'}</button></div>
                 </div>
                 {!!b.linked_pos?.length && <div className="text-xs text-blue-700">{b.linked_pos.map(p => p.po_number).join(' · ')}</div>}
                 {b.debit_total > 0 && <div className="text-xs text-amber-700">Valid debit: ₹{b.debit_total.toLocaleString('en-IN')}</div>}
@@ -8160,6 +8162,7 @@ export default function Procurement() {
         </form>
       </Modal>
 
+      {matchingTarget && <PurchaseBillMatching key={`${matchingTarget.kind}-${matchingTarget.id}`} target={matchingTarget} canApprove={canApprove('procurement')} onClose={()=>setMatchingTarget(null)} onSaved={()=>fetchBillsListPage()} />}
       {balanceBill && <BalanceDeliveryModal key={balanceBill.id} bill={balanceBill} onClose={() => setBalanceBill(null)} onSaved={() => { setBalanceBill(null); fetchBillsListPage(); load(); }} />}
       {(modal === 'bill' || reconcileBill) && <PurchaseBillReconciliation vendors={vendors} initialVendor={form.vendor_id} initialPo={form.vendor_po_id} legacy={reconcileBill} onClose={() => { setModal(false); setReconcileBill(null); }} onSaved={() => { setModal(false); setReconcileBill(null); fetchBillsListPage(); fetchBillsFuPage(); load(); }} />}
       {/* Purchase Bill Modal */}

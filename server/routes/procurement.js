@@ -5063,13 +5063,31 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
 // Purchase Bills (paginated + search + date range + backward-compat)
 function attachDeliveryBalance(db, row) {
   Object.assign(row, purchaseBilling.financials(db,row));
+  const match = require('../lib/purchaseBillMatching').review(db,row);
+  row.match_status=match.status; row.match_hold=match.hold_amount; row.payable_now=match.payable_now;
   row.linked_pos=db.prepare('SELECT vp.id,vp.po_number FROM purchase_bill_pos bp JOIN vendor_pos vp ON vp.id=bp.vendor_po_id WHERE bp.purchase_bill_id=?').all(row.id);
 
   if (row.delivery_mode === 'partial' && row.vendor_po_id) {
     row.pending_delivery_lines = require('../lib/partialDeliveries').balanceItems(db, row.vendor_po_id).filter(it => it.remaining_qty > 0).length;
   }
 }
-router.get('/purchase-bills/:id/delivery-balance', (req, res) => {
+router.get('/purchase-bills/:id/matching', requirePermission('procurement','view'), (req,res)=>{
+  const db=getDb(), bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if(!bill)return res.status(404).json({error:'Purchase bill not found'});
+  res.json({...require('../lib/purchaseBillMatching').review(db,bill),bill_number:bill.bill_number});
+});
+router.post('/purchase-bills/:id/accept-rate', needsApprove, (req,res)=>{
+  const db=getDb(), bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if(!bill)return res.status(404).json({error:'Purchase bill not found'});
+  try { res.json(require('../lib/purchaseBillMatching').approveRate(db,bill,req.user.id,req.body.reason)); }
+  catch(e){res.status(400).json({error:e.message});}
+});
+router.get('/vendor-po/:id/matching', requirePermission('procurement','view'), (req,res)=>{
+  const result=require('../lib/purchaseBillMatching').poProgress(getDb(),+req.params.id);
+  if(!result)return res.status(404).json({error:'PO not found'});
+  res.json({pos:[result]});
+});
+router.get('/purchase-bills/:id/delivery-balance' , (req, res) => {
   const db = getDb();
   const bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
   if (!bill || bill.delivery_mode !== 'partial') return res.status(400).json({ error: 'No staged delivery for this bill' });
@@ -5386,8 +5404,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       // created_by (2026-09-07): who uploaded the bill — the row already
       // stamps debit_notes.created_by from the same handler, so the user id
       // was in hand all along.
-      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, file_path, material_status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, file_path, material_status, created_by, match_required)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
     ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, filePath, materialStatus, req.user?.id || null);
 
     if (staged) db.prepare("UPDATE purchase_bills SET delivery_mode='partial' WHERE id=?").run(r.lastInsertRowid);

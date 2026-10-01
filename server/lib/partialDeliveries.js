@@ -1,5 +1,6 @@
 function ensurePartialDeliveries(db) {
   for (const [table, column, definition] of [
+    ['purchase_bills', 'match_required', 'INTEGER NOT NULL DEFAULT 0'],
     ['purchase_bills', 'freight_amount', 'REAL NOT NULL DEFAULT 0'],
     ['purchase_bills', 'delivery_mode', "TEXT NOT NULL DEFAULT 'final'"],
     ['delivery_notes', 'supply_pending', 'INTEGER NOT NULL DEFAULT 0'],
@@ -83,8 +84,8 @@ function recordBalance(db, billId, body, date, userId) {
       if (!Number.isFinite(freight) || freight < 0) throw new Error('Freight amount must be a valid non-negative number');
       const total = Math.round((amount + gst + freight) * 100) / 100;
       newBillId = db.prepare(`INSERT INTO purchase_bills
-        (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,freight_amount,file_path,material_status,delivery_mode,created_by)
-        VALUES (?,?,?,?,?,?,?,?,?,'approved','partial',?)`).run(bill.vendor_po_id,bill.vendor_id || null,billNumber,billDate,amount,gst,total,freight,body.bill_file_path,userId).lastInsertRowid;
+        (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,freight_amount,file_path,material_status,delivery_mode,created_by,match_required)
+        VALUES (?,?,?,?,?,?,?,?,?,'approved','partial',?,1)`).run(bill.vendor_po_id,bill.vendor_id || null,billNumber,billDate,amount,gst,total,freight,body.bill_file_path,userId).lastInsertRowid;
     }
     const { nextSequence } = require('../db/nextSequence');
     const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0,4)}/`, { pad: 4 });
