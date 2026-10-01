@@ -5342,7 +5342,12 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   const bill_date = b.bill_date || null;
   const amount = +b.amount || 0;
   const gst_amount = +b.gst_amount || 0;
-  const total_amount = +b.total_amount || 0;
+  const freight_amount = Number(b.freight_amount || 0);
+  if (!Number.isFinite(freight_amount) || freight_amount < 0) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+    return res.status(400).json({ error: 'Freight amount must be a valid non-negative number' });
+  }
+  const total_amount = Math.round((amount + gst_amount + freight_amount) * 100) / 100;
   // Material acceptance (mam 2026-06-04): 'approved' (default) or 'reject'.
   const materialStatus = b.material_status === 'reject' ? 'reject' : 'approved';
 
@@ -5381,9 +5386,9 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       // created_by (2026-09-07): who uploaded the bill — the row already
       // stamps debit_notes.created_by from the same handler, so the user id
       // was in hand all along.
-      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus, req.user?.id || null);
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, file_path, material_status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, filePath, materialStatus, req.user?.id || null);
 
     if (staged) db.prepare("UPDATE purchase_bills SET delivery_mode='partial' WHERE id=?").run(r.lastInsertRowid);
 

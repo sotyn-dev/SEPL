@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 const round=n=>Math.round((n+Number.EPSILON)*100)/100;
 
 export default function PurchaseBillReconciliation({vendors,initialVendor,initialPo,legacy,onClose,onSaved}) {
+  const [freight,setFreight]=useState(legacy?.freight_amount || '');
   const [vendor,setVendor]=useState(String(legacy?.vendor_id||initialVendor||''));
   const [data,setData]=useState({pos:[],debits:[]}),[loading,setLoading]=useState(!!vendor),[error,setError]=useState('');
   const [selected,setSelected]=useState(initialPo?[+initialPo]:[]),[edits,setEdits]=useState({}),[debits,setDebits]=useState([]);
@@ -18,14 +19,14 @@ export default function PurchaseBillReconciliation({vendors,initialVendor,initia
   const rows=data.pos.filter(p=>selected.includes(p.id)).flatMap(p=>p.items.map(it=>({...it,po:p})));
   const value=it=>({quantity:edits[it.id]?.quantity??it.billable_qty,bill_rate:edits[it.id]?.bill_rate??it.po_rate,gst_percent:edits[it.id]?.gst_percent??0});
   const amounts=it=>{const v=value(it),amount=round((+v.quantity||0)*(+v.bill_rate||0)),gst=round(amount*(+v.gst_percent||0)/100);return {amount,gst,total:round(amount+gst)};};
-  const subtotal=round(rows.reduce((s,it)=>s+amounts(it).amount,0)),gst=round(rows.reduce((s,it)=>s+amounts(it).gst,0)),total=round(subtotal+gst);
+  const subtotal=round(rows.reduce((s,it)=>s+amounts(it).amount,0)),gst=round(rows.reduce((s,it)=>s+amounts(it).gst,0)),total=round(subtotal+gst+(+freight||0));
   const allowedDebits=data.debits.filter(d=>selected.includes(d.vendor_po_id));
   const adjustment=round(allowedDebits.filter(d=>debits.includes(d.id)).reduce((s,d)=>s+d.amount,0));
   const edit=(id,k,v)=>setEdits(old=>({...old,[id]:{...old[id],[k]:v}}));
   const submit=async e=>{
     e.preventDefault();if(saving)return;setSaving(true);setError('');
     try {
-      const body=new FormData();for(const [k,v] of Object.entries({vendor_id:vendor,bill_number:number,bill_date:date,request_key:key}))body.append(k,v);
+      const body=new FormData();for(const [k,v] of Object.entries({vendor_id:vendor,bill_number:number,bill_date:date,request_key:key,freight_amount:freight||0}))body.append(k,v);
       body.append('items',JSON.stringify(rows.filter(it=>+value(it).quantity>0).map(it=>({vendor_po_id:it.po.id,vendor_po_item_id:it.id,...value(it)}))));
       body.append('debit_ids',JSON.stringify(allowedDebits.filter(d=>debits.includes(d.id)).map(d=>d.id)));
       if(file)body.append('file',file);
@@ -59,6 +60,7 @@ export default function PurchaseBillReconciliation({vendors,initialVendor,initia
         {!!allowedDebits.length&&!legacy&&<fieldset className="border rounded p-3 text-sm"><legend>Apply an agreed debit adjustment (optional)</legend><p className="text-xs text-gray-600 mb-2">Select only a valid adjustment to this invoice. A quantity/rate difference alone does not apply a debit.</p>{allowedDebits.map(d=><label key={d.id} className="flex gap-2 py-1"><input type="checkbox" checked={debits.includes(d.id)} onChange={e=>setDebits(old=>e.target.checked?[...old,d.id]:old.filter(id=>id!==d.id))}/>{d.dn_number} · {d.type} · ₹{d.amount} · {d.reason}</label>)}</fieldset>}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded bg-blue-50 p-3 text-sm">{[['Subtotal',subtotal],['GST',gst],['Bill total',total],['Valid debit',adjustment],['Net payable',Math.max(0,total-adjustment)]].map(([label,n])=><div key={label}>{label}<div className="font-semibold">₹{round(n).toLocaleString('en-IN')}</div></div>)}</div>
         <div className="grid sm:grid-cols-2 gap-3"><label className="text-sm">Bill number *<input className="input mt-1" required maxLength={100} readOnly={!!legacy} value={number} onChange={e=>setNumber(e.target.value)}/></label><label className="text-sm">Bill date *<input className="input mt-1" required type="date" value={date} onChange={e=>setDate(e.target.value)}/></label></div>
+        <label className="block text-sm">Freight Amount<input className="input mt-1" type="number" min="0" step="0.01" placeholder="0" readOnly={!!legacy} value={freight} onChange={e=>setFreight(e.target.value)}/></label>
         <label className="block text-sm">Purchase bill upload {legacy?'(optional replacement)':'*'}<input className="input mt-1" type="file" required={!legacy} accept=".pdf,.jpg,.jpeg,.png,.xlsx" onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
         <button disabled={saving||loading||!rows.some(it=>+value(it).quantity>0)} className="btn btn-primary w-full">{saving?'Saving…':legacy?'Save item reconciliation':'Save Purchase Bill'}</button>
       </>}

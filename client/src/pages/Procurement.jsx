@@ -2413,6 +2413,7 @@ export default function Procurement() {
     if (form.bill_date) fd.append('bill_date', form.bill_date);
     fd.append('amount', form.amount || 0);
     fd.append('gst_amount', form.gst_amount || 0);
+    fd.append('freight_amount', form.freight_amount || 0);
     fd.append('total_amount', form.total_amount || 0);
     fd.append('material_status', form.material_status || 'approved');
     fd.append('delivery_mode', form.delivery_mode || 'final');
@@ -5694,7 +5695,7 @@ export default function Procurement() {
             for (const it of (r.data.items || [])) recv[it.vpi_id] = it.received_qty != null ? it.received_qty : it.ordered_qty;
             setBillRecv(recv);
             const amt = Math.round((r.data.items || []).reduce((s, it) => s + ((+recv[it.vpi_id] || 0) * (+it.rate || 0)), 0) * 100) / 100;
-            setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) }));
+            setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) + (+f.freight_amount || 0) }));
           }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
         };
         return (
@@ -5933,13 +5934,13 @@ export default function Procurement() {
                 </div>
               </div>
           <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Freight</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {billsListLoading && <tr><td colSpan="10" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
+              {billsListLoading && <tr><td colSpan="11" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
               {!billsListLoading && billsListPg.rows.map(b => (
                 <tr key={b.id}>
                   <td className="font-medium">{b.bill_number}<div className="text-xs text-gray-500">{b.linked_pos?.map(p=>p.po_number).join(" · ")}</div></td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
-                  <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
+                  <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td><td>Rs {(b.freight_amount || 0).toLocaleString()}</td>
                   <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
                   <td>
                     {+b.debit_total > 0 ? (
@@ -5968,7 +5969,7 @@ export default function Procurement() {
                 </tr>
               ))}
               {!billsListLoading && billsListTotal === 0 && (
-                <tr><td colSpan="10" className="text-center py-8 text-gray-400">
+                <tr><td colSpan="11" className="text-center py-8 text-gray-400">
                   {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
                 </td></tr>
               )}
@@ -8188,7 +8189,7 @@ export default function Procurement() {
               const nr = { ...billRecv, [vpiId]: v };
               setBillRecv(nr);
               const amt = Math.round(billItems.items.reduce((s, it) => s + ((nr[it.vpi_id] == null ? +it.ordered_qty : +nr[it.vpi_id]) * (+it.rate || 0)), 0) * 100) / 100;
-              setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) }));
+              setForm(f => ({ ...f, amount: amt, total_amount: amt + (+f.gst_amount || 0) + (+f.freight_amount || 0) }));
             };
             return (
               <div className="border rounded-lg overflow-hidden">
@@ -8273,10 +8274,11 @@ export default function Procurement() {
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({ ...form, bill_number: e.target.value })} /></div>
             <div><label className="label">Bill Date</label><input className="input" type="date" value={form.bill_date} onChange={e => setForm({ ...form, bill_date: e.target.value })} /></div>
             {/* `|| ''` lets backspace clear the field (mam 2026-05-25). */}
-            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount || ''} onChange={e => setForm({ ...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0) })} /></div>
-            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount || ''} onChange={e => setForm({ ...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value })} /></div>
+            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount || ''} onChange={e => setForm({ ...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0) + (form.freight_amount || 0) })} /></div>
+            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount || ''} onChange={e => setForm({ ...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value + (form.freight_amount || 0) })} /></div>
           </div>
-          <div><label className="label">Total</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
+          <div><label className="label">Freight Amount</label><input className="input" type="number" min="0" step="0.01" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({ ...form, freight_amount: +e.target.value, total_amount: Math.round(((form.amount || 0) + (form.gst_amount || 0) + +e.target.value) * 100) / 100 })} /></div>
+          <div><label className="label">Total (Amount + GST + Freight)</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
           <div>
             <label className="label">Bill File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
             <input

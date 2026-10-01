@@ -3,7 +3,7 @@ const money = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const json = value => { try { const a=JSON.parse(value || '[]'); return Array.isArray(a)?a:[]; } catch (_) { return []; } };
 
 function ensurePurchaseBilling(db) {
-  for (const [name,type] of [['reconciliation_version','INTEGER NOT NULL DEFAULT 0'],['request_key','TEXT'],['reconciliation_note','TEXT']]) {
+  for (const [name,type] of [['freight_amount','REAL NOT NULL DEFAULT 0'],['reconciliation_version','INTEGER NOT NULL DEFAULT 0'],['request_key','TEXT'],['reconciliation_note','TEXT']]) {
     if (!db.prepare('PRAGMA table_info(purchase_bills)').all().some(c=>c.name===name)) db.exec(`ALTER TABLE purchase_bills ADD COLUMN ${name} ${type}`);
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pb_request ON purchase_bills(request_key) WHERE request_key IS NOT NULL;
@@ -113,6 +113,8 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
     const prior=db.prepare('SELECT id FROM purchase_bills WHERE request_key=?').get(key);if(prior)return {...prior,existing:true};
     const legacy=legacyId?db.prepare('SELECT * FROM purchase_bills WHERE id=? AND reconciliation_version=0').get(legacyId):null;
     if(legacyId&&!legacy)throw Error('Historical bill has already been reconciled');
+    const freight=Number(legacy ? legacy.freight_amount || 0 : body.freight_amount || 0);
+    if(!Number.isFinite(freight)||freight<0)throw Error('Freight amount must be a valid non-negative number');
     const vendor=+body.vendor_id,number=String(body.bill_number||'').trim(),date=String(body.bill_date||'');
     if(!db.prepare('SELECT id FROM vendors WHERE id=?').get(vendor))throw Error('Select a vendor');
     if(!number||number.length>100)throw Error('Bill number is required');
@@ -156,7 +158,7 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
     }
     const totals=db.prepare('SELECT SUM(taxable_amount) amount,SUM(gst_amount) gst,SUM(total_amount) total FROM purchase_bill_items WHERE purchase_bill_id=?').get(r.lastInsertRowid);
     if(legacy && (money(legacy.amount)!==money(totals.amount) || money(legacy.gst_amount)!==money(totals.gst)))throw Error('Reconciled quantities, rates and GST must match the historical invoice totals');
-    db.prepare('UPDATE purchase_bills SET amount=?,gst_amount=?,total_amount=? WHERE id=?').run(money(totals.amount),money(totals.gst),money(totals.total),r.lastInsertRowid);
+    db.prepare('UPDATE purchase_bills SET amount=?,gst_amount=?,total_amount=?,freight_amount=? WHERE id=?').run(money(totals.amount),money(totals.gst),money(totals.total+freight),money(freight),r.lastInsertRowid);
     if(legacy)db.prepare("UPDATE purchase_bills SET reconciliation_version=2,request_key=?,reconciliation_note='Historical item allocation verified' WHERE id=?").run(key,legacy.id);
     const choices=eligibleDebits(db,vendor),debitIds=[...new Set(body.debit_ids||[])];let adjustment=0;
     for(const id of debitIds) {
@@ -164,7 +166,7 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
       adjustment+=+d.amount;
       db.prepare('INSERT INTO purchase_bill_debits VALUES(?,?,?,?)').run(r.lastInsertRowid,d.id,d.amount,userId);
     }
-    if(adjustment>money(totals.total))throw Error('Debit adjustment exceeds invoice total');
+    if(adjustment>money(totals.total+freight))throw Error('Debit adjustment exceeds invoice total');
     syncPaymentStatus(db,r.lastInsertRowid);
     return {id:r.lastInsertRowid,...financials(db,db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(r.lastInsertRowid))};
   }).immediate();
@@ -196,7 +198,9 @@ function poFinancials(db,poId) {
   let billed=0,paid=0;
   for(const bill of db.prepare('SELECT b.* FROM purchase_bills b JOIN purchase_bill_pos p ON p.purchase_bill_id=b.id WHERE p.vendor_po_id=?').all(poId)) {
     const amount=bill.reconciliation_version?db.prepare('SELECT COALESCE(SUM(total_amount),0) n FROM purchase_bill_items WHERE purchase_bill_id=? AND vendor_po_id=?').get(bill.id,poId).n:+bill.total_amount;
-    billed+=amount;paid+=Math.min(financials(db,bill).paid_amount,financials(db,bill).net_payable)*(bill.total_amount?amount/bill.total_amount:0);
+    const lineTotal=(+bill.total_amount||0)-(+bill.freight_amount||0);
+    const allocated= bill.reconciliation_version && lineTotal>0 ? money(amount + (+bill.freight_amount||0)*amount/lineTotal) : amount;
+    billed+=allocated;paid+=Math.min(financials(db,bill).paid_amount,financials(db,bill).net_payable)*(bill.total_amount?allocated/bill.total_amount:0);
   }
   return {billed_amount:money(billed),paid_amount:money(paid)};
 }

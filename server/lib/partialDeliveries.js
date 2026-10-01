@@ -1,5 +1,6 @@
 function ensurePartialDeliveries(db) {
   for (const [table, column, definition] of [
+    ['purchase_bills', 'freight_amount', 'REAL NOT NULL DEFAULT 0'],
     ['purchase_bills', 'delivery_mode', "TEXT NOT NULL DEFAULT 'final'"],
     ['delivery_notes', 'supply_pending', 'INTEGER NOT NULL DEFAULT 0'],
     ['delivery_notes', 'receipt_request_id', 'TEXT'],
@@ -78,10 +79,12 @@ function recordBalance(db, billId, body, date, userId) {
       if (body.amount === '' || body.amount == null || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(gst) || gst < 0) throw new Error('Amount and GST must be valid non-negative numbers');
       if (!body.bill_file_path) throw new Error('Upload the purchase bill file');
       if (db.prepare("SELECT id FROM purchase_bills WHERE vendor_id IS ? AND LOWER(TRIM(bill_number))=LOWER(?)").get(bill.vendor_id || null, billNumber)) throw new Error('This bill number is already recorded for this vendor');
-      const total = Math.round((amount + gst) * 100) / 100;
+      const freight = Number(body.freight_amount || 0);
+      if (!Number.isFinite(freight) || freight < 0) throw new Error('Freight amount must be a valid non-negative number');
+      const total = Math.round((amount + gst + freight) * 100) / 100;
       newBillId = db.prepare(`INSERT INTO purchase_bills
-        (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,file_path,material_status,delivery_mode,created_by)
-        VALUES (?,?,?,?,?,?,?,?,'approved','partial',?)`).run(bill.vendor_po_id,bill.vendor_id || null,billNumber,billDate,amount,gst,total,body.bill_file_path,userId).lastInsertRowid;
+        (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount,freight_amount,file_path,material_status,delivery_mode,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,'approved','partial',?)`).run(bill.vendor_po_id,bill.vendor_id || null,billNumber,billDate,amount,gst,total,freight,body.bill_file_path,userId).lastInsertRowid;
     }
     const { nextSequence } = require('../db/nextSequence');
     const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0,4)}/`, { pad: 4 });

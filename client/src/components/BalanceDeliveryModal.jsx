@@ -12,6 +12,7 @@ export default function BalanceDeliveryModal({ bill, onClose, onSaved }) {
   const [billNumber, setBillNumber] = useState('');
   const [billDate, setBillDate] = useState(date);
   const [amount, setAmount] = useState('');
+  const [freight, setFreight] = useState('');
   const [gst, setGst] = useState('');
   const [file, setFile] = useState(null);
   const [error, setError] = useState('');
@@ -31,7 +32,7 @@ export default function BalanceDeliveryModal({ bill, onClose, onSaved }) {
     try {
       if (addBill && !file) throw new Error('Upload the purchase bill file');
       const body = new FormData();
-      for (const [key,value] of Object.entries({request_id:requestId,delivery_date:date,notes,add_bill:addBill?'1':'0',bill_number:billNumber,bill_date:billDate,amount,gst_amount:gst || '0'})) body.append(key,value);
+      for (const [key,value] of Object.entries({request_id:requestId,delivery_date:date,notes,add_bill:addBill?'1':'0',bill_number:billNumber,bill_date:billDate,amount,gst_amount:gst || '0',freight_amount:freight || '0'})) body.append(key,value);
       body.append('items', JSON.stringify(data.items.map(it => ({ vendor_po_item_id: it.vpi_id, received_qty: quantities[it.vpi_id] || 0 }))));
       if (addBill && file) body.append('file',file);
       const r = await api.post(`/procurement/purchase-bills/${bill.id}/balance-delivery`, body);
@@ -64,7 +65,8 @@ export default function BalanceDeliveryModal({ bill, onClose, onSaved }) {
               <label className="text-sm">Bill date *<input className="input mt-1" type="date" required value={billDate} onChange={e=>setBillDate(e.target.value)} /></label>
               <label className="text-sm">Amount (before GST) *<input className="input mt-1" type="number" min="0" step="0.01" required value={amount} onChange={e=>setAmount(e.target.value)} /></label>
               <label className="text-sm">GST amount<input className="input mt-1" type="number" min="0" step="0.01" value={gst} placeholder="0" onChange={e=>setGst(e.target.value)} /></label>
-              <label className="text-sm">Total<input className="input mt-1" readOnly value={((+amount || 0)+(+gst || 0)).toFixed(2)} /></label>
+              <label className="text-sm">Freight Amount<input className="input mt-1" type="number" min="0" step="0.01" placeholder="0" value={freight} onChange={e=>setFreight(e.target.value)} /></label>
+              <label className="text-sm">Total<input className="input mt-1" readOnly value={((+amount || 0)+(+gst || 0)+(+freight || 0)).toFixed(2)} /></label>
             </div>
             <p className="text-xs text-blue-700">Amount is suggested from this delivery’s quantities. Change it to match the vendor’s bill.</p>
             <label className="block text-sm">Purchase bill file *<input className="input mt-1" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx" required onChange={e=>setFile(e.target.files?.[0] || null)} /></label>
