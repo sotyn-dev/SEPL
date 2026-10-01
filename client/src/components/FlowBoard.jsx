@@ -41,6 +41,7 @@ const StagePct = ({ pct }) => (
 // "click on record → open pop of action like po approval"); return null to
 // keep the normal deep-link behaviour for that card.
 export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, stageIcons = {}, distsOf, extraTiles, activityBadge, openTo, cardExtra, cardAction }) {
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   // "+N more" expands the column INLINE (mam 2026-08-28: "show all data
@@ -53,8 +54,12 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
     if (!card.ref || base === '#') return base;
     return `${base}${base.includes('?') ? '&' : '?'}q=${encodeURIComponent(card.ref)}`;
   };
-  const load = () => api.get(endpoint).then(r => setD(r.data)).catch(e => setErr(e.response?.data?.error || 'Failed to load'));
-  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [endpoint]);
+  const load = () => {
+    const sep = endpoint.includes('?') ? '&' : '?';
+    const url = `${endpoint}${sep}date=${selectedDate}`;
+    return api.get(url).then(r => setD(r.data)).catch(e => setErr(e.response?.data?.error || 'Failed to load'));
+  };
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [endpoint, selectedDate]);
 
   if (err) return <div className="p-10 text-center text-red-600">{err}</div>;
   if (!d) return <div className="p-10 text-center text-gray-400">Loading flow board…</div>;
@@ -71,12 +76,25 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
-          <p className="text-sm text-gray-500">{subtitle}</p>
+          {subtitle && <p className="text-sm text-gray-500">{subtitle}</p>}
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500 bg-white border rounded-lg px-3 py-1.5">This Week ({d.week.from} → {d.week.to})</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 bg-white border border-gray-300 rounded-lg px-2.5 py-1 text-xs shadow-2xs">
+            <span className="text-gray-500 font-medium">📅 Date:</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="text-xs font-semibold text-gray-800 bg-transparent border-0 focus:ring-0 focus:outline-none cursor-pointer"
+            />
+            {d?.week && (
+              <span className="text-[11px] text-gray-500 border-l border-gray-200 pl-2 hidden sm:inline">
+                Week: {d.week.from} → {d.week.to}
+              </span>
+            )}
+          </div>
           <button onClick={load} className="btn btn-secondary text-xs flex items-center gap-1"><FiRefreshCw size={13} /> Refresh</button>
-          {openTo && <Link to={openTo.link} className="btn btn-primary text-xs">{openTo.label}</Link>}
+          {openTo?.link && openTo?.label && <Link to={openTo.link} className="btn btn-primary text-xs">{openTo.label}</Link>}
           {openTo?.extra && <Link to={openTo.extra.link} className="btn btn-secondary text-xs">{openTo.extra.label}</Link>}
         </div>
       </div>

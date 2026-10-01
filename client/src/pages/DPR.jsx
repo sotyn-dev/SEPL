@@ -602,6 +602,35 @@ export default function DPR() {
       .catch(() => setActiveWorkOrders([]));
   }, []);
 
+  const openCreateDprModal = (siteId = '') => {
+    setForm({ site_id: siteId, report_date: filterDate || istTodayIso(), weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
+    setWorkItems([]); setPoItemsForSite([]);
+    setDprMaterials([]); setDprStoreName(null);
+    setCosts([
+      { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
+      { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
+      { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
+      { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
+      { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
+    ]);
+    setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
+    setContractors([{ name: '', manpower: 0 }]);
+    if (subcons.length === 0) {
+      api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => { });
+    }
+    if (siteId) handleSiteSelect(siteId);
+    setModal(true);
+  };
+
+  // Auto-open DPR modal if navigated with ?open=new or ?action=new
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('open') === 'new' || params.get('action') === 'new') {
+      const initialSite = params.get('site_id') || '';
+      openCreateDprModal(initialSite);
+    }
+  }, []);
+
   // DPR list refetches whenever the date / status filter changes — but
   // ONLY if the user is on (or has visited) the Daily Reports tab.
   useEffect(() => {
@@ -893,7 +922,7 @@ export default function DPR() {
     const over = dprMaterials.find(m => !m.from_slips && +m.consumed_today > 0 && +m.consumed_today > +m.stock_qty);
     if (over) return toast.error(`${over.material_name}: consumed ${over.consumed_today} is more than the ${over.stock_qty} in store. Correct the qty, or record the extra material IN first.`);
     try {
-      await api.post('/dpr', {
+      const res = await api.post('/dpr', {
         ...form,
         work_items: workItems.filter(w => w.po_item_id || w.description),
         manpower: costs.filter(c => c.qty > 0 || c.amount > 0),
@@ -916,7 +945,12 @@ export default function DPR() {
         grand_total_b: grandTotalB,
         profit_loss: profitLoss
       });
-      toast.success('DPR submitted!'); setModal(false); load();
+      if (res?.data?.auto_task?.created) {
+        toast.success(`DPR submitted! 📌 Auto-task created & assigned to ${res.data.auto_task.assigned_to_name} (${res.data.auto_task.category})`);
+      } else {
+        toast.success('DPR submitted!');
+      }
+      setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Error'); }
   };
 
@@ -1141,6 +1175,12 @@ export default function DPR() {
                           : 'Responsible'}
             </button>
           ))}
+          {/* SOP-09 Site Work & Daily Report Flow Board */}
+          <a href="/site-work-board"
+            className="btn btn-secondary flex items-center gap-1.5 text-xs !border-indigo-300 !text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100 flex-shrink-0 whitespace-nowrap"
+            title="Open SOP-09 Site Work & Daily Report Flow Board">
+            ⚡ SOP-09 Flow Board
+          </a>
           {/* Always-visible morning contractor-attendance punch (mam 2026-06-22:
               "where is attendance of contractor" — was hidden on the Reports tab). */}
           <button onClick={openMorningManpower}
@@ -1330,26 +1370,7 @@ export default function DPR() {
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiList /> Attendance Records</button>
-              <button onClick={() => {
-                setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
-                setWorkItems([]); setPoItemsForSite([]);
-                setDprMaterials([]); setDprStoreName(null);
-                setCosts([
-                  { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
-                  { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
-                  { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
-                  { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
-                  { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
-                ]);
-                setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
-                setContractors([{ name: '', manpower: 0 }]);
-                // Lazy-fetch the sub-contractor master so the contractor
-                // dropdown lands populated.  Cached after first open.
-                if (subcons.length === 0) {
-                  api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => { });
-                }
-                setModal(true);
-              }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-center"><FiPlus /> Submit DPR</button>
+              <button onClick={() => openCreateDprModal(form.site_id || '')} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-center"><FiPlus /> Submit DPR</button>
             </div>
           </div>
           {/* ─── MOBILE CARDS ───────────────────────────────────────
