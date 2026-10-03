@@ -340,6 +340,9 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
+      if (source === 'auto:dispatch_receiving_approved') {
+        return require('../lib/dispatchReceivingScore').dispatchReceivingScore(db, userId, sinceDate, untilDate);
+      }
       if (source === 'auto:dpr_bill_checking') {
         return require('../lib/salesBillCheckingScore').dprBillCheckingScore(db, sinceDate, untilDate);
       }

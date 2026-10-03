@@ -142,6 +142,7 @@ const SOURCE_INFO = {
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
   'auto:dispatch_sent':         { plan: 'You set',                            actual: 'Delivery notes dispatched' },
+  'auto:dispatch_receiving_approved': { plan: 'Receiving records uploaded by this user during the selected week (IST)', actual: 'Of those same uploads, currently approved by Lovely or an admin; later approvals update the upload week' },
   'auto:material_received':     { plan: 'Indents raised for user\'s sites this week', actual: 'Of those, delivered (delivery note) at the site' },
   // Inventory
   'auto:stock_in':              { plan: 'You set',                            actual: 'Stock IN movements (count)' },
@@ -1681,6 +1682,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:po_bill_pending">Purchase Bill — approved POs missing a bill (by owner)</option>
                     <option value="auto:po_bill_pending_all">Purchase Bill — approved POs missing a bill (company-wide)</option>
                     <option value="auto:dispatch_sent">dispatches sent (delivery notes)</option>
+                    <option value="auto:dispatch_receiving_approved">Dispatch Receiving — weekly uploads vs approved (by uploader)</option>
                     <option value="auto:material_received">material received (site)</option>
                   </optgroup>
                   <optgroup label="Inventory / Stock">
