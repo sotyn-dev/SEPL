@@ -3770,6 +3770,40 @@ router.get('/vendor-po/:id/print', (req, res) => {
 //   Items table:    SL · Description / Spec / Make · HSN · Qty · UOM · Remarks
 //   Transport box:  Vehicle No · Driver Name & Mobile · LR/Challan No · Total Packages
 //                   (these are filled in by HAND at dispatch time — left blank in print)
+// Both print entry points use saved delivery_notes and the same HTML renderer.
+router.get('/vendor-po/:id/delivery-notes', (req, res) => {
+  const db = getDb();
+  const po = db.prepare('SELECT id,po_number,cancelled FROM vendor_pos WHERE id=?').get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+  const delivery_notes = db.prepare(`SELECT id,document_number,delivery_date,status FROM delivery_notes
+    WHERE vendor_po_id=? AND document_type='challan' ORDER BY id DESC`).all(po.id);
+  res.json({ po, delivery_notes });
+});
+
+// Explicit creation only: opening or reprinting a PO never creates a dispatch.
+// Retry-safe even if the purchase-bill flow created the challan in the meantime.
+router.post('/vendor-po/:id/delivery-notes', needsApprove, (req, res) => {
+  const db = getDb();
+  const result = db.transaction(() => {
+    const po = db.prepare('SELECT id,cancelled FROM vendor_pos WHERE id=?').get(req.params.id);
+    if (!po) return { status: 404, error: 'Vendor PO not found' };
+    const existing = db.prepare(`SELECT id,document_number FROM delivery_notes
+      WHERE vendor_po_id=? AND document_type='challan' ORDER BY id DESC`).all(po.id);
+    if (existing.length) return { status: 200, delivery_notes: existing };
+    if (po.cancelled) return { status: 409, error: 'Cannot create a delivery note for a cancelled PO.' };
+    const { vendorItems } = require('../lib/deliveryNotePrint');
+    const items = vendorItems(db, po.id).filter(it => it.quantity > 0);
+    if (!items.length) return { status: 409, error: 'Link this PO to its material items before creating a delivery note.' };
+    const { nextSequence } = require('../db/nextSequence');
+    const date = istToday();
+    const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0,4)}/`, { pad: 4 });
+    const saved = db.prepare(`INSERT INTO delivery_notes (vendor_po_id,document_type,document_number,delivery_date,status,items_json,notes)
+      VALUES (?,'challan',?,?,'pending',?,?)`).run(po.id, number, date, JSON.stringify(items), `Created for PO delivery-note printing by user ${req.user.id}`);
+    return { status: 201, delivery_notes: [{ id: saved.lastInsertRowid, document_number: number }] };
+  }).immediate();
+  res.status(result.status).json(result);
+});
+
 router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   const db = getDb();
   const data = db.prepare(`
@@ -3935,13 +3969,9 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
     }
   }
 
-  // Pre-compute a suggested DN number — mam can override on print
-  // but most of the time today's date + PO number is enough.
-  const today = new Date();
-  const yy = String(today.getFullYear()).slice(2);
-  const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const dd = String(today.getDate()).padStart(2, '0');
-  data.dn_number_suggested = `DN-${yy}${mm}${dd}-${data.po_number?.replace(/\W+/g, '') || data.po_id}`;
+  // No date-based synthetic reference: print only the saved challan number.
+  const savedNotes = db.prepare("SELECT document_number FROM delivery_notes WHERE vendor_po_id=? AND document_type='challan'").all(req.params.id);
+  data.dn_number_suggested = savedNotes.length === 1 ? savedNotes[0].document_number : null;
 
   res.json({ po: data, items });
 });
@@ -6793,7 +6823,10 @@ router.get('/delivery-notes/:id/print', (req, res) => {
            bb.gstin AS client_gstin, bb.state_code AS client_state_code,
            bb.payment_against_delivery AS bb_delivery_terms,
            COALESCE(NULLIF(TRIM(ind.site_name), ''), bb.project_name) AS site_name,
-           ind.indent_number,
+           ind.indent_number, ind.client_name AS indent_client_name,
+           COALESCE(NULLIF(TRIM(ind.raised_by_name),''), raiser.name) AS site_engineer_name,
+           CASE WHEN NULLIF(TRIM(ind.raised_by_name),'') IS NULL OR LOWER(TRIM(ind.raised_by_name))=LOWER(TRIM(raiser.name))
+             THEN raiser.phone END AS site_engineer_phone, bb.id AS business_book_id,
            bb.lead_no AS bb_lead_no
     FROM delivery_notes dn
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
@@ -6802,12 +6835,37 @@ router.get('/delivery-notes/:id/print', (req, res) => {
     -- store-issue / RGP challans that have no vendor PO (mam 2026-06-15:
     -- store Delivery Note showed empty CLIENT / SITE because vp was NULL).
     LEFT JOIN indents ind ON ind.id = COALESCE(vp.indent_id, dn.indent_id)
+    LEFT JOIN users raiser ON raiser.id = ind.created_by
     LEFT JOIN order_planning op ON ind.planning_id = op.id
     LEFT JOIN business_book bb ON bb.id = op.business_book_id
     LEFT JOIN purchase_orders po ON op.po_id = po.id
     WHERE dn.id = ?
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
+
+  if (dn.document_type === 'challan') {
+    const { challanItems, fillChallanParties, vendorItems } = require('../lib/deliveryNotePrint');
+    let fallback = [];
+    // Preserve the legacy PO's strict vendor/total corroboration before using
+    // indent lines. Never fall back to the entire client order or another batch.
+    if (dn.vendor_po_id && !dn.items_json && !vendorItems(db, dn.vendor_po_id).length) {
+      const fb = fallbackIndentLines(db, dn.vendor_po_id);
+      const gate = db.prepare('SELECT total_amount,freight_amount FROM vendor_pos WHERE id=?').get(dn.vendor_po_id) || {};
+      const base = Math.max(0, (+gate.total_amount || 0) - (+gate.freight_amount || 0));
+      if (fb?.ids.length && base > 0 && Math.abs(fb.sum - base) <= 1) {
+        fallback = db.prepare(`SELECT ii.description,ii.quantity,ii.unit,ii.item_master_id,poi.hsn_code
+          FROM indent_items ii LEFT JOIN po_items poi ON poi.id=ii.po_item_id
+          WHERE ii.id IN (${fb.ids.map(() => '?').join(',')}) ORDER BY ii.id`).all(...fb.ids);
+      }
+    }
+    try {
+      const items = challanItems(db, dn, fallback);
+      if (!items.length) return res.status(409).json({ error: 'No dispatched items are recorded for this delivery note. Correct its items before printing.' });
+      fillChallanParties(db, dn);
+      const html = renderDispatchHTML({ dn, items, isSalesBill: false });
+      return res.type('html').send(Buffer.from(html, 'utf8'));
+    } catch (err) { return res.status(409).json({ error: err.message }); }
+  }
 
   // CLIENT + Against-Delivery % come from the Business Book ORDER the bill
   // belongs to. Resolve it robustly (mam 2026-06-15):
@@ -7064,7 +7122,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   // Build items rows (pad to 8 like the template)
   const padCount = Math.max(0, 8 - items.length);
   const rowsHtml = items.map((it, idx) => {
-    const rawDesc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const rawDesc = [it.description, it.specification, it.size, !isSalesBill && it.make ? `Make: ${it.make}` : ''].filter(Boolean).join(' / ');
     const desc = isSalesBill ? toSupplyDescription(rawDesc) : rawDesc;
     const qty = +it.quantity || 0;
     const rate = +it.rate || 0;
@@ -7088,7 +7146,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         (itemCode ? `<div style="font-size:9px;color:#666;font-family:monospace">[${esc(itemCode)}]</div>` : '') +
         `</div>`
       : '';
-    return `<tr><td class="num">${idx + 1}</td><td>${itemCellHtml}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || it.item_code || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
+    return `<tr><td class="num">${idx + 1}</td><td>${itemCellHtml}</td><td>${esc(desc)}</td><td class="num">${esc(it.hsn_code || it.item_code || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
@@ -7154,7 +7212,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     : 'DELIVERY NOTE';
   // Use the stored document_number (auto-generated INV/YYYY/#### or
   // DC/YYYY/####); only fall back to id-based if somehow blank.
-  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
+  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${String(dn.delivery_date || dn.created_at || 'LEGACY').slice(0,4)}/${dn.id}`);
   const dnNum = dn.document_number || docNo;
 
   // Best-effort state-name → GST state code lookup. Used when business_book
@@ -7225,7 +7283,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     <div class="companyblock">
       ${logoDataUri
         ? `<img src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." style="height:46px;width:auto;display:block;margin:0 auto 4px" />`
-        : `<h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>`}
+        : `<h1>SECURED ENGINEERS PVT. LTD</h1>`}
       <div class="addr"><b>HO:</b> 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003 &nbsp;|&nbsp; <b>Noida:</b> 91, Springboard, Sector 2, Noida (UP)</div>
       <div class="tag">PAN-INDIA PRESENCE : <b>LUDHIANA | NOIDA | BANGALORE | MUMBAI</b> — ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</div>
     </div>
@@ -7562,14 +7620,15 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <td style="width:50%">
           <div><b>M/s</b> ${fill(clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(clientAddr, '260px')}</div>
+          <div style="margin-left:4px;white-space:pre-wrap">${fill(clientAddr, '260px')}</div>
           <div style="margin-top:4px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
+          <div style="margin-top:4px"><b>Client Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '), '180px')}</div>
         </td>
         <td>
           <div><b>Site Name:</b> ${fill(dn.site_name || clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(siteAddr, '260px')}</div>
-          <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
+          <div style="margin-left:4px;white-space:pre-wrap">${fill(siteAddr, '260px')}</div>
+          <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${fill([dn.site_engineer_name, dn.site_engineer_phone].filter(Boolean).join(' · '), '180px')}</div>
         </td>
       </tr>
     </table>`;
