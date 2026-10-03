@@ -1140,7 +1140,12 @@ export default function DPR() {
     // Recompute the staff cost by name, attendance-filtered for this DPR's date,
     // so old + new DPRs both show who was counted (mam 2026-06-30).
     if (data?.site_id) {
-      api.get(`/dpr/sites/${data.site_id}/staff-cost`, { params: data.report_date ? { date: data.report_date } : {} })
+      api.get(`/dpr/sites/${data.site_id}/staff-cost`, {
+        params: {
+          date: data.report_date || undefined,
+          submitted_by: data.submitted_by || undefined,
+        },
+      })
         .then(r => setViewStaff(r.data || null)).catch(() => setViewStaff(null));
     }
   };
@@ -3044,8 +3049,13 @@ export default function DPR() {
           )}
 
           <div>
-            <label className="label">Notes</label>
-            <input className="input" value={slipNotes} onChange={e => setSlipNotes(e.target.value)} placeholder="Optional — e.g. 3rd floor riser work" />
+            <label className="label font-semibold text-gray-700">
+              {slipType === 'issue'
+                ? 'Work Area / Floor (SOP-10.1 Area-Wise Issue) *'
+                : 'Notes / Reference'}
+            </label>
+            <input className="input" value={slipNotes} onChange={e => setSlipNotes(e.target.value)}
+              placeholder={slipType === 'issue' ? 'e.g. 3rd Floor Riser / Basement 1 Piping (Area-wise, not project-wise)' : 'Optional notes...'} />
           </div>
 
           {/* Today's register — reprint any slip */}

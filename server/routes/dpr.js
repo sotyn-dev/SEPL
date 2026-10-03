@@ -326,25 +326,24 @@ router.get('/sites/:site_id/ta-da-cost', (req, res) => {
 // That way DPR works even if the Employees ↔ Users link wasn't set manually.
 router.get('/sites/:site_id/staff-cost', (req, res) => {
   const db = getDb();
-  const site = db.prepare('SELECT id, name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
+  const site = db.prepare('SELECT id, name, po_id, business_book_id, site_engineer_id FROM sites WHERE id=?').get(req.params.site_id);
   if (!site) return res.json({ per_day_cost: 0, engineer_count: 0, po_engineers: 0 });
 
-  const pos = db.prepare(
-    `SELECT DISTINCT site_engineer_id, site_engineer_ids FROM purchase_orders
-     WHERE id = ? OR business_book_id = ?`
-  ).all(site.po_id, site.business_book_id);
-
   const ids = new Set();
-  for (const po of pos) {
-    if (po.site_engineer_id) ids.add(po.site_engineer_id);
-    if (po.site_engineer_ids) {
-      String(po.site_engineer_ids).split(',').map(s => parseInt(s, 10)).filter(Boolean).forEach(i => ids.add(i));
-    }
+
+  // 1. If submitted_by is provided (viewing an existing DPR), use ONLY that submitter
+  if (req.query.submitted_by) {
+    ids.add(+req.query.submitted_by);
+  } else if (req.user?.id) {
+    // 2. While filling a new DPR, use ONLY the logged-in Site Engineer filling the report
+    ids.add(req.user.id);
+  } else if (site.site_engineer_id) {
+    // 3. Fallback: assigned site engineer on the site
+    ids.add(site.site_engineer_id);
+  } else if (site.po_id || site.business_book_id) {
+    const po = db.prepare('SELECT site_engineer_id FROM purchase_orders WHERE (id = ? OR business_book_id = ?) AND site_engineer_id IS NOT NULL LIMIT 1').get(site.po_id, site.business_book_id);
+    if (po?.site_engineer_id) ids.add(po.site_engineer_id);
   }
-  // Also include the DPR submitter — the person filing the report is present
-  // on site that day even if they aren't listed as a site engineer on the PO.
-  // This ensures Raushan / Samsad / etc. are counted when they submit.
-  if (req.user?.id) ids.add(req.user.id);
 
   if (ids.size === 0) return res.json({ per_day_cost: 0, engineer_count: 0, po_engineers: 0 });
 
@@ -2181,6 +2180,63 @@ router.post('/', (req, res) => {
     }
   }
 
+  // SOP-10.3 Automatic Material Difference & Leakage Check (Issued vs Installed vs Returned)
+  try {
+    const consumption = siteConsumptionFor(db, site_id, report_date);
+    const leakageItems = [];
+    for (const cons of consumption) {
+      const netIssued = +(cons.issued - cons.returned).toFixed(3);
+      if (netIssued > 0) {
+        const matRow = (materials || []).find(m => m.item_master_id === cons.item_master_id);
+        const installed = matRow ? +matRow.consumed_today || 0 : 0;
+        if (netIssued > installed) {
+          const diff = +(netIssued - installed).toFixed(3);
+          if (diff > 0) {
+            leakageItems.push(`• ${cons.item_name || 'Material'}: Issued ${netIssued} ${cons.unit || ''}, Installed in DPR ${installed} ${cons.unit || ''} (Missing / Unreturned: ${diff} ${cons.unit || ''})`);
+          }
+        }
+      }
+    }
+    if (leakageItems.length > 0) {
+      const allUsers = db.prepare(`SELECT id, name, role FROM users WHERE COALESCE(active,1)=1`).all();
+      const ajmerUser = allUsers.find(u => u.name && u.name.toLowerCase().includes('ajmer')) || allUsers[0];
+      const siteRow = db.prepare('SELECT name, business_book_id FROM sites WHERE id=?').get(site_id);
+      const leakTag = `[DPR-${dprId}][SOP-10.3-LEAKAGE]`;
+      const existingTask = db.prepare('SELECT id FROM pms_tasks WHERE description LIKE ? LIMIT 1').get(`%${leakTag}%`);
+      if (!existingTask) {
+        const leakText = [
+          `Site: ${siteRow?.name || 'Site #' + site_id} | Report Date: ${report_date}`,
+          `Department: Plant & Machinery / Store (Ajmer)`,
+          ``,
+          `🚨 SOP-10.3 Material Difference / Leakage Flag:`,
+          `Material was issued from store in morning slip but was NOT reported installed in DPR or returned in evening slip:`,
+          ``,
+          ...leakageItems,
+          ``,
+          `Action Required: Store Keeper (Ajmer) & Site Supervisor must verify on floor whether material is lying at work area or evening Return slip (RTN) needs to be created.`,
+          ``,
+          `${leakTag} Auto-assigned via SOP-10.3 Difference Flag Rule Card`
+        ].join('\n');
+
+        db.prepare(`
+          INSERT INTO pms_tasks (title, description, project_id, project_name_snapshot, assigned_by, assigned_to, due_date, attachment_url, flow_number, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '10.3', 'pending')
+        `).run(
+          `[SOP-10.3 · LEAKAGE] Material Difference Detected (${siteRow?.name || 'Site'})`.slice(0, 80),
+          leakText,
+          siteRow?.business_book_id || null,
+          siteRow?.name || 'Site Work',
+          req.user.id,
+          ajmerUser?.id || req.user.id,
+          report_date,
+          `dpr://${dprId}`
+        );
+      }
+    }
+  } catch (leakErr) {
+    console.warn('[dpr] SOP-10.3 leakage check notice:', leakErr.message);
+  }
+
   res.status(201).json({
     id: dprId,
     message: 'DPR submitted',
@@ -3084,7 +3140,8 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     // S3: Problem-to-Task Rule Card — Hindrances & PMS tasks for selected date
     const problemDprs = all(`
       SELECT d.id AS rid, ('PRB-' || d.id) AS ref, s.name AS title,
-             COALESCE(u.name, 'Site Eng') AS owner, d.report_date AS created_at,
+             COALESCE(u.name, 'Site Eng') AS owner,
+             COALESCE(d.submission_time, d.created_at, d.report_date) AS created_at,
              COALESCE(d.hindrance_category, 'Site Issue') AS category,
              COALESCE(NULLIF(d.hindrances, ''), d.remarks, '') AS problem,
              s.id AS site_id, s.business_book_id,
@@ -3099,6 +3156,33 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
        ORDER BY d.id DESC LIMIT 30
     `, today);
 
+    // Auto-create missing PMS tasks for any unassigned DPR hindrances
+    for (const p of problemDprs) {
+      if (!p.task_id) {
+        try {
+          const dprRow = db.prepare('SELECT * FROM dpr WHERE id=?').get(p.rid);
+          if (dprRow) {
+            const wItems = db.prepare('SELECT * FROM dpr_work_items WHERE dpr_id=?').all(p.rid);
+            const mPower = db.prepare('SELECT * FROM dpr_manpower WHERE dpr_id=?').all(p.rid);
+            const cTractors = db.prepare('SELECT * FROM dpr_contractors WHERE dpr_id=?').all(p.rid);
+            const mErials = db.prepare('SELECT * FROM dpr_material WHERE dpr_id=?').all(p.rid);
+            autoCreateTaskFromDprHindrance(db, {
+              dprId: p.rid,
+              siteId: dprRow.site_id,
+              hindrances: [dprRow.hindrances, dprRow.remarks].filter(Boolean).join('\n') || p.problem,
+              hindranceCategory: dprRow.hindrance_category || p.category,
+              submittedBy: dprRow.submitted_by,
+              reportDate: dprRow.report_date,
+              workItems: wItems,
+              manpower: mPower,
+              contractors: cTractors,
+              materials: mErials,
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
     const pmsTasks = all(`
       SELECT p.id AS rid, ('TASK-' || p.id) AS ref, p.title,
              COALESCE(tu.name, 'Unassigned') AS owner, p.due_date, p.status, p.created_at,
@@ -3111,27 +3195,16 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
        ORDER BY p.created_at DESC LIMIT 30
     `, today, today, today);
 
-    const s3Cards = [
-      ...pmsTasks.map(t => ({
-        rid: t.rid,
-        ref: t.ref,
-        title: `${t.site_name} · ${t.title}`,
-        owner: t.owner,
-        created_at: t.created_at,
-        due_date: t.due_date,
-        status: t.status,
-        is_pms_task: true,
-      })),
-      ...problemDprs.filter(p => !p.task_id).map(p => ({
-        rid: p.rid,
-        ref: p.ref,
-        title: `${p.category || 'Problem'}: ${p.problem || 'Site Issue'}`,
-        owner: p.owner,
-        created_at: p.created_at,
-        site_id: p.site_id,
-        is_dpr_hindrance: true,
-      })),
-    ].slice(0, 40);
+    const s3Cards = pmsTasks.map(t => ({
+      rid: t.rid,
+      ref: t.ref,
+      title: `${t.site_name} · ${t.title}`,
+      owner: t.owner,
+      created_at: t.created_at,
+      due_date: t.due_date,
+      status: t.status,
+      is_pms_task: true,
+    })).slice(0, 40);
 
     // S4: Buffer Update Rule — Weekly plan vs actual installed / variance
     const weeklyPlans = all(`

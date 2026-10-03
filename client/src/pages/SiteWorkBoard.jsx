@@ -139,20 +139,6 @@ export default function SiteWorkBoard() {
   };
 
   const cardExtra = (stageKey, card, reload) => {
-    if (stageKey === 'problem_task' && card.is_dpr_hindrance) {
-      return (
-        <button
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openAction(stageKey, card, reload);
-          }}
-          className="mt-1.5 w-full text-[10px] font-bold py-1 px-1.5 rounded bg-amber-600 text-white hover:bg-amber-700 flex items-center justify-center gap-1"
-          title="Convert problem into actionable task (one name, one date)">
-          <FiPlus size={12} /> Convert to Task
-        </button>
-      );
-    }
     if (stageKey === 'rag_status' && card.rag === 'red') {
       return (
         <div className="mt-1 px-1.5 py-0.5 rounded bg-red-100 border border-red-200 text-[10px] font-bold text-red-700 text-center">
