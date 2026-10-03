@@ -15,6 +15,7 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // auto:po_bill_pending KPI so the flow-board tile and the KPI can never
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
+const { getDispatchDocuments } = require('../lib/dispatchDocuments');
 // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
 const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
 
@@ -279,7 +280,7 @@ function buildExtraQuotation(db, indentId) {
 
 // Shared upload directory (served statically by server/index.js at /uploads).
 // Used by both the Tally PO upload and the BOQ bulk upload lower in this file.
-const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
+const uploadDir = process.env.ERP_UPLOAD_DIR || path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 // Multer for Vendor PO file uploads (PDF / images / Excel), up to 10 MB.
@@ -2593,13 +2594,9 @@ router.put('/indents/:id', (req, res) => {
               console.error('[TSK-0823 dispatchToMb store-challan trigger error]', e);
             }
 
-            // NOTE (mam 2026-06-06): we DON'T auto-cut the Sales Bill here
-            // anymore.  For billable (PO) store items the challan is left
-            // sales_bill_pending=1 (see INSERT above) so it surfaces in the
-            // "Ready to Dispatch" sub-tab's "From-Store · Sales Bill pending"
-            // card — mam creates the Sales Bill there herself via the
-            // "Add Sales Bill" button (generate-sales-bill endpoint).  FOC/RGP
-            // store items are not billable, so their challan is not pending.
+            // The store challan appears directly in Dispatch & Receiving,
+            // without a vendor PO or purchase bill. PO-type lines await a
+            // Tally bill upload; receiving can be uploaded independently.
           }
 
           // 3. Flip the indent to approved.
@@ -5442,7 +5439,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     const dnToday = istToday();
     if (vendor_po_id) {
       const existingDn = db.prepare(
-        "SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? AND document_type='challan' LIMIT 1"
+        "SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? AND document_type='challan' ORDER BY id LIMIT 1"
       ).get(vendor_po_id);
       if (existingDn) {
         autoDnId = existingDn.id;
@@ -5595,18 +5592,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-short-debit] failed (bill saved anyway):', e.message); }
     }
 
-    // Auto SALES BILL (mam 2026-06-15: "i dont want to dispatch button click
-    // auto generated"): the moment a Purchase Bill is uploaded and the
-    // material is accepted, raise the client Sales Bill automatically
-    // (BOQ×delivery% rates + client GST).  Idempotent + skips POs with no
-    // rates.  Failure never blocks the bill upload.
-    let autoSalesBill = null;
-    if (materialStatus === 'approved' && vendor_po_id) {
-      try {
-        const sb = autoGenerateSalesBillForPO(db, vendor_po_id, req.user?.id);
-        if (sb && sb.id) autoSalesBill = { id: sb.id, document_number: sb.document_number };
-      } catch (e) { console.error('[auto-sales-bill] failed (bill saved anyway):', e.message); }
-    }
+    // Sales invoices are prepared in Tally and uploaded against the challan.
+    const autoSalesBill = null;
 
     purchaseBilling.ensurePurchaseBilling(db);
     res.status(201).json({
@@ -5855,110 +5842,31 @@ router.get('/po-pipeline', (req, res) => {
   res.json(rows);
 });
 
-// Dispatch (delivery_notes) — a dispatch entry is either a Sales Bill
-// (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
-// After dispatch, mam records who received it via the /receive endpoint.
+// Dispatch rows include vendor challans and approved store issues. Purchase
+// bills are optional links, never an admission requirement for store material.
 // Dispatch (delivery_notes) — paginated + search + status + date range + backward-compat
 router.get('/delivery-notes', (req, res) => {
-  const db = getDb();
-  const { page, limit, status, from, to, q, search, export: isExport } = req.query;
-
-  const whereClauses = [];
-  const params = [];
-
+  const { page, limit, status, bill_status, from, to, q, search, export: isExport } = req.query;
+  let rows = getDispatchDocuments(getDb());
   if (status && status !== 'all') {
-    whereClauses.push('dn.status = ?');
-    params.push(status);
+    const receiving = status === 'dispatched' ? 'pending' : status;
+    rows = rows.filter(row => row.receiving_status === receiving);
   }
-
-  if (from) {
-    whereClauses.push('DATE(COALESCE(dn.received_at, dn.delivery_date)) >= ?');
-    params.push(from);
+  if (bill_status && bill_status !== 'all') rows = rows.filter(row => row.sales_bill_status === bill_status);
+  if (from) rows = rows.filter(row => row.received_at && String(row.received_at).slice(0, 10) >= from);
+  if (to) rows = rows.filter(row => row.received_at && String(row.received_at).slice(0, 10) <= to);
+  const query = String(q || search || '').trim().toLowerCase();
+  if (query) rows = rows.filter(row => [row.document_number, row.vendor_po_number, row.site_name, row.company_name,
+    row.indent_number, row.stock_issue_number, row.from_warehouse_name, row.source === 'store' ? 'From Store' : '',
+    row.vendor_name, row.received_by_name, row.raised_by_name,
+    ...row.sales_bill_documents.map(doc => doc.number), ...row.purchase_bills.map(bill => bill.bill_number)]
+    .some(value => String(value || '').toLowerCase().includes(query)));
+  const pageNum = parseInt(page, 10), limitNum = parseInt(limit, 10);
+  if (!isExport && pageNum > 0 && limitNum > 0) {
+    const total = rows.length;
+    rows = rows.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+    return res.json({ rows, total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) || 1 });
   }
-  if (to) {
-    whereClauses.push('DATE(COALESCE(dn.received_at, dn.delivery_date)) <= ?');
-    params.push(to);
-  }
-
-  const queryStr = (q || search || '').trim().toLowerCase();
-  if (queryStr) {
-    whereClauses.push('(LOWER(COALESCE(dn.document_number, \'\')) LIKE ? OR LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(dn.received_by_name, \'\')) LIKE ? OR LOWER(COALESCE(i.raised_by_name, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(i.site_name, \'\')) LIKE ?)');
-    const likeParam = `%${queryStr}%`;
-    params.push(likeParam, likeParam, likeParam, likeParam, likeParam, likeParam);
-  }
-
-  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-  const pageNum = parseInt(page, 10);
-  const limitNum = parseInt(limit, 10);
-  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
-
-  if (isPaginated) {
-    const totalRow = db.prepare(`
-      SELECT COUNT(*) as c
-      FROM delivery_notes dn
-      LEFT JOIN users u ON dn.received_by = u.id
-      LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
-      LEFT JOIN vendors v ON vp.vendor_id = v.id
-      LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
-      ${whereSql}
-    `).get(...params);
-    const total = totalRow ? totalRow.c : 0;
-
-    const offset = (pageNum - 1) * limitNum;
-    const rows = db.prepare(`
-      SELECT dn.*,
-        u.name as received_by_user_name,
-        vp.po_number as vendor_po_number,
-        vp.indent_id as vendor_po_indent_id,
-        v.name as vendor_name,
-        i.indent_number as indent_number,
-        NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
-        NULLIF(TRIM(i.site_name), '') as site_name,
-        (SELECT mb.id FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_id,
-        (SELECT mb.bill_number FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_number,
-        (SELECT mb.status FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_status
-      FROM delivery_notes dn
-      LEFT JOIN users u ON dn.received_by = u.id
-      LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
-      LEFT JOIN vendors v ON vp.vendor_id = v.id
-      LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
-      ${whereSql}
-      ORDER BY dn.created_at DESC
-      LIMIT ? OFFSET ?
-    `).all(...params, limitNum, offset);
-
-    return res.json({
-      rows,
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum) || 1
-    });
-  }
-
-  // Raw array for export or backward compat
-  const rows = db.prepare(`
-    SELECT dn.*,
-      u.name as received_by_user_name,
-      vp.po_number as vendor_po_number,
-      vp.indent_id as vendor_po_indent_id,
-      v.name as vendor_name,
-      i.indent_number as indent_number,
-      NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
-      NULLIF(TRIM(i.site_name), '') as site_name,
-      (SELECT mb.id FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_id,
-      (SELECT mb.bill_number FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_number,
-      (SELECT mb.status FROM mb_bills mb WHERE mb.delivery_note_id = dn.id LIMIT 1) as mb_bill_status
-    FROM delivery_notes dn
-    LEFT JOIN users u ON dn.received_by = u.id
-    LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
-    LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
-    ${whereSql}
-    ORDER BY dn.created_at DESC
-  `).all(...params);
-
   res.json(rows);
 });
 
@@ -5967,28 +5875,13 @@ router.get('/delivery-notes/ready', (req, res) => {
   const db = getDb();
   const { page, limit, q, search, export: isExport } = req.query;
 
-  // 1. From-store challans pending Sales Bill
-  const sbPendingDNs = db.prepare(`
-    SELECT dn.*, NULLIF(TRIM(i.site_name), '') as site_name
-    FROM delivery_notes dn
-    LEFT JOIN indents i ON i.id = dn.indent_id
-    WHERE dn.sales_bill_pending = 1
-      AND dn.sales_bill_number IS NULL
-      AND dn.document_type = 'challan'
-      AND dn.vendor_po_id IS NULL
-    ORDER BY dn.id DESC
-  `).all();
-
-  // 2. Ready to Dispatch POs: billed, not cancelled, no sales bill delivery note
+  const sbPendingDNs = [];
   const whereClauses = [
     'COALESCE(vp.cancelled, 0) = 0',
     'EXISTS (SELECT 1 FROM purchase_bill_pos pb WHERE pb.vendor_po_id = vp.id)',
-    `NOT EXISTS (
-      SELECT 1 FROM delivery_notes dn
-      WHERE dn.vendor_po_id = vp.id
-        AND (dn.document_type = 'sales_bill' OR dn.sales_bill_number IS NOT NULL)
-    )`
+    'NOT EXISTS (SELECT 1 FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id)'
   ];
+
   const params = [];
 
   const queryStr = (q || search || '').trim().toLowerCase();
@@ -6101,6 +5994,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
   const delivery_date = b.delivery_date || null;
   const notes = b.notes || null;
+  if (b.document_type === 'sales_bill') return res.status(409).json({ error: 'Upload the Tally sales bill against its delivery challan.' });
   const document_type = b.document_type || null;     // 'sales_bill' or 'challan'
   if (!document_type || !['sales_bill', 'challan'].includes(document_type)) {
     return res.status(400).json({ error: 'Dispatch type (Sales Bill or Challan) is required' });
@@ -6211,11 +6105,12 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
 router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
   const db = getDb();
-  const dn = db.prepare('SELECT id, document_type, sales_bill_pending FROM delivery_notes WHERE id=?').get(req.params.id);
+  const dn = getDispatchDocuments(db).find(row => row.id === +req.params.id);
   if (!dn) return res.status(404).json({ error: 'Dispatch not found' });
-  if (!dn.sales_bill_pending) {
-    return res.status(400).json({ error: 'This dispatch is not marked sales_bill_pending. Nothing to add.' });
+  if (dn.sales_bill_required === false && !dn.sales_bill_documents.length) {
+    return res.status(400).json({ error: 'A sales bill is not required for FOC/RGP-only material.' });
   }
+  if (!req.file) return res.status(400).json({ error: 'Upload the Tally sales bill file.' });
   const sales_bill_number = String(b.sales_bill_number || '').trim();
   if (!sales_bill_number) {
     return res.status(400).json({ error: 'Sales Bill number is required' });
@@ -6275,97 +6170,12 @@ router.post('/indents/:id/tally-bill', requirePermission('procurement', 'edit'),
   res.json({ ok: true, tally_bill_file_path: filePath, tally_bill_remarks: remarks || null });
 });
 
-// GENERATE a Sales Bill (invoice) from a challan — mam (2026-06-04):
-// "sales bill generate, not upload".  Builds a new sales_bill delivery
-// note from the challan's items (from-store challan → its items_json;
-// PO challan → the BOQ items at selling rates), links it back to the
-// challan, and flags is_draft when client GSTIN / rates are missing.
-// Returns the new sales bill id so the client can open its printable
-// invoice.  Idempotent: returns the existing one if already generated.
+// Old clients must not create invoices or edit invoice rates in this flow.
 router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) => {
-  const db = getDb();
-  const challan = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
-  if (!challan) return res.status(404).json({ error: 'Dispatch not found' });
-  if (challan.document_type !== 'challan') return res.status(400).json({ error: 'A Sales Bill can only be generated from a challan.' });
-
-  // Already generated?  Return the linked Sales Bill.
-  if (challan.sales_bill_number) {
-    const existing = db.prepare("SELECT id, document_number, is_draft FROM delivery_notes WHERE document_type='sales_bill' AND document_number=?").get(challan.sales_bill_number);
-    if (existing) return res.json({ id: existing.id, document_number: existing.document_number, is_draft: existing.is_draft, existing: true });
-  }
-
-  let items = [];
-  let indentId = challan.indent_id || null;
-  if (challan.source === 'store') {
-    try {
-      const arr = JSON.parse(challan.items_json || '[]');
-      items = (arr || []).map(it => ({
-        description: it.description || '', qty: +it.qty || +it.quantity || 0, unit: it.unit || '',
-        rate: +it.rate || 0, amount: (+it.qty || +it.quantity || 0) * (+it.rate || 0),
-        hsn: it.hsn || '', item_code: it.item_code || '',
-      }));
-    } catch (_) {}
-  } else if (challan.vendor_po_id) {
-    const billable = db.prepare(`
-      SELECT vpi.id as vpi_id, vpi.quantity,
-             COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), ''), poi.description) as description,
-             COALESCE(ii.unit, poi.unit, im.uom) as unit, COALESCE(poi.rate, 0) as rate, poi.hsn_code, im.item_code
-        FROM vendor_po_items vpi
-        LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
-        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-        LEFT JOIN item_master im ON im.id = ii.item_master_id
-       WHERE vpi.vendor_po_id = ? AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-    `).all(challan.vendor_po_id);
-    if (challan.supply_pending) {
-      let batch = [];
-      try { batch = JSON.parse(challan.items_json || '[]'); } catch (_) {}
-      for (const it of billable) it.quantity = +batch.find(row => +row.vendor_po_item_id === it.vpi_id)?.received_qty || 0;
-    }
-    items = billable.filter(it => +it.quantity > 0).map(it => ({
-      description: it.description || '', qty: +it.quantity || 0, unit: it.unit || '',
-      rate: +it.rate || 0, amount: (+it.quantity || 0) * (+it.rate || 0), hsn: it.hsn_code || '', item_code: it.item_code || '',
-    }));
-    if (!indentId) indentId = db.prepare('SELECT indent_id FROM vendor_pos WHERE id=?').get(challan.vendor_po_id)?.indent_id || null;
-  }
-  if (!items.length) return res.status(400).json({ error: 'No billable items found on this challan to generate a Sales Bill.' });
-
-  const client = db.prepare(`SELECT bb.gstin FROM indents i LEFT JOIN order_planning op ON op.id=i.planning_id LEFT JOIN business_book bb ON bb.id=op.business_book_id WHERE i.id=?`).get(indentId) || {};
-  const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
-  const { nextSequence } = require('../db/nextSequence');
-  const year = new Date().getFullYear();
-  const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-  const today = istToday();
-  const sb = db.prepare(`
-    INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
-    VALUES (?, ?, ?, ?, 'sales_bill', ?, 'pending', ?, ?, ?)
-  `).run(challan.vendor_po_id || null, indentId, challan.source || 'po', today, invNum, isDraft, JSON.stringify(items),
-         isDraft ? 'Generated Sales Bill — DRAFT (fill client GSTIN / selling rates before sending)' : 'Generated Sales Bill');
-  db.prepare("UPDATE delivery_notes SET sales_bill_pending=0, sales_bill_number=? WHERE id=?").run(invNum, req.params.id);
-  require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
-  res.json({ id: sb.lastInsertRowid, document_number: invNum, is_draft: isDraft, items: items.length });
+  res.status(409).json({ error: 'Upload the Tally sales bill against its delivery challan.' });
 });
-
-// Edit the SELLING rate per line on a generated Sales Bill (mam 2026-06-30: "also
-// with rate"). Updates items_json (rate + amount = qty × rate) and clears the
-// DRAFT flag once every line has a rate, so the Tax Invoice shows real amounts.
-// Writes both qty + quantity so whichever field the print reads is populated.
 router.put('/delivery-notes/:id/rates', needsApprove, (req, res) => {
-  const db = getDb();
-  const dn = db.prepare("SELECT * FROM delivery_notes WHERE id=? AND document_type='sales_bill'").get(req.params.id);
-  if (!dn) return res.status(404).json({ error: 'Sales bill not found' });
-  let items = [];
-  try { items = JSON.parse(dn.items_json || '[]'); } catch (_) { items = []; }
-  if (!items.length) return res.status(400).json({ error: 'No items on this sales bill' });
-  const rates = Array.isArray(req.body?.rates) ? req.body.rates : [];
-  const updated = items.map((it, i) => {
-    const r = (rates[i] != null && rates[i] !== '') ? +rates[i] : (+it.rate || 0);
-    const qty = +it.qty || +it.quantity || 0;
-    return { ...it, qty, quantity: qty, rate: r, amount: Math.round(qty * r * 100) / 100 };
-  });
-  const allRated = updated.every(it => (+it.rate || 0) > 0);
-  db.prepare('UPDATE delivery_notes SET items_json=?, is_draft=? WHERE id=?')
-    .run(JSON.stringify(updated), allRated ? 0 : 1, dn.id);
-  res.json({ ok: true, is_draft: allRated ? 0 : 1, lines: updated.length });
+  res.status(409).json({ error: 'Sales bills are prepared in Tally. Upload the corrected file.' });
 });
 
 // Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
@@ -6432,11 +6242,10 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
   // no warehouse selected (legacy behavior).
   const warehouseId = b.warehouse_id ? +b.warehouse_id : null;
 
-  // sales_bill_pending — mam (2026-05-25): when the receipt is a DN
-  // and the Sales Bill is still pending.  Stored on the dispatch row
-  // so the amber "📋 SB PENDING" chip shows in the list until SB
-  // arrives via /sales-bill endpoint.
-  const sbPendingFlag = (b.sales_bill_pending === '1' || b.sales_bill_pending === 1 || b.sales_bill_pending === true) ? 1 : null;
+  // Receiving cannot clear billing or create an invoice. Only an uploaded
+  // sales-bill file completes billing; ignore any client-supplied pending flag.
+  const workflow = getDispatchDocuments(db).find(row => row.id === +req.params.id);
+  const sbPendingFlag = workflow?.sales_bill_status === 'pending' ? 1 : 0;
 
   // Mam (2026-06-02): "according to delivery note all items and qty
   // show here may delivery note item of qty 10 but when erec its 9".
@@ -6453,13 +6262,21 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
       const raw = typeof b.items_received === 'string' ? JSON.parse(b.items_received) : b.items_received;
       if (Array.isArray(raw)) {
         // Coerce and clamp received_qty: must be ≥ 0 and ≤ ordered_qty.
-        itemsReceivedArr = raw.map(r => ({
+        let originalLines = [];
+        try { originalLines = JSON.parse(db.prepare('SELECT items_json FROM delivery_notes WHERE id=?').get(req.params.id)?.items_json || '[]'); } catch (_) {}
+        itemsReceivedArr = raw.map((r, index) => {
+          const original = originalLines.find(it => r.vendor_po_item_id && +it.vendor_po_item_id === +r.vendor_po_item_id)
+            || (originalLines[index]?.description === r.description ? originalLines[index] : null);
+          return ({
+          item_type: original?.item_type || null,
+          unit: original?.unit || null,
+          qty: original?.qty ?? original?.quantity ?? original?.ordered_qty ?? null,
           vendor_po_item_id: r.vendor_po_item_id ? +r.vendor_po_item_id : null,
           ordered_qty:       Number.isFinite(+r.ordered_qty) ? +r.ordered_qty : 0,
           received_qty:      Number.isFinite(+r.received_qty) ? Math.max(0, +r.received_qty) : 0,
           short_reason:      r.short_reason ? String(r.short_reason).slice(0, 200) : null,
           description:       r.description || null,
-        }));
+        }); });
         itemsReceivedJson = JSON.stringify(itemsReceivedArr);
       }
     } catch (e) {
@@ -6807,56 +6624,7 @@ function computeClientPoItems(db, vendorPoId, isSalesBill) {
 // (only bills when EVERY line has a rate — partial/unrated POs are left for
 // manual handling so we never bill a wrong amount).  Returns {id,
 // document_number} on create, or {skipped:<reason>}.
-function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
-  if (!vendorPoId) return { skipped: 'no_po' };
-  const existing = db.prepare(
-    `SELECT id, document_number FROM delivery_notes WHERE vendor_po_id=? AND document_type='sales_bill' LIMIT 1`
-  ).get(vendorPoId);
-  if (existing) return { skipped: 'exists', id: existing.id, document_number: existing.document_number };
-
-  const data = computeClientPoItems(db, vendorPoId, true);
-  // Rate = full BOQ SITC rate (MD 2026-06-15: bill the full rate, no
-  // Against-Delivery % reduction).
-  const items = (data.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
-  if (!items.length) return { skipped: 'no_items' };
-  if (items.some(r => !(+r.rate > 0))) return { skipped: 'unrated' };
-
-  const bt = db.prepare(`
-    SELECT bb.state AS client_state, bb.state_code AS client_state_code
-      FROM vendor_pos vp
-      LEFT JOIN indents i ON i.id = vp.indent_id
-      LEFT JOIN order_planning op ON op.id = i.planning_id
-      LEFT JOIN business_book bb ON bb.id = op.business_book_id
-     WHERE vp.id = ?`).get(vendorPoId) || {};
-  const sameState = String(bt.client_state || '').toLowerCase() === 'punjab';
-  const cgst_pct = sameState ? 9 : 0, sgst_pct = sameState ? 9 : 0, igst_pct = sameState ? 0 : 18;
-
-  const r2 = n => Math.round((+n || 0) * 100) / 100;
-  const payloadItems = items.map(it => {
-    const qty = +it.quantity || 0, rate = +it.rate || 0;
-    return {
-      description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-      hsn: it.hsn_code || '', unit: it.unit || '',
-      quantity: qty, rate, disc_pct: 0, amount: r2(qty * rate),
-      item_code: it.item_code || '', specification: it.specification || '', size: it.size || '', item_name: it.item_name || '',
-    };
-  });
-  const subtotal = r2(payloadItems.reduce((s, it) => s + (it.amount || 0), 0));
-  const grand = r2(subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100);
-
-  const { nextSequence } = require('../db/nextSequence');
-  const document_number = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-
-  const ins = db.prepare(
-    `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, document_type, document_number,
-        place_of_supply, state_code, reverse_charge, cgst_pct, sgst_pct, igst_pct,
-        freight_amount, round_off_amount, subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
-     VALUES (?, ?, ?, 'sales_bill', ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, 0)`
-  ).run(vendorPoId, istToday(), userId || null, document_number,
-        bt.client_state || null, bt.client_state_code || null,
-        cgst_pct, sgst_pct, igst_pct, subtotal, grand, JSON.stringify(payloadItems));
-  return { id: ins.lastInsertRowid, document_number };
-}
+// Sales invoices are uploaded from Tally; no background generation.
 
 router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const db = getDb();
@@ -6869,31 +6637,9 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   return res.json(computeClientPoItems(db, req.params.id, isSalesBill));
 });
 
-// Sweep: auto-generate the client Sales Bill for every PO that's ready to
-// dispatch (has a Purchase Bill, no sales bill yet) — fired automatically
-// when mam opens the Dispatch tab so bills appear with NO click.
+// Keep the old tab-opening endpoint harmless for clients that have not refreshed.
 router.post('/auto-sales-bills/sweep', needsApprove, (req, res) => {
-  const db = getDb();
-  let candidates = [];
-  try {
-    candidates = db.prepare(`
-      SELECT DISTINCT vp.id AS id
-        FROM vendor_pos vp
-        JOIN purchase_bills pb ON pb.vendor_po_id = vp.id
-       WHERE vp.id NOT IN (
-               SELECT vendor_po_id FROM delivery_notes
-                WHERE document_type='sales_bill' AND vendor_po_id IS NOT NULL)
-    `).all();
-  } catch (e) { return res.status(500).json({ error: e.message }); }
-  const generated = [], skipped = [];
-  for (const c of candidates) {
-    try {
-      const r = autoGenerateSalesBillForPO(db, c.id, req.user?.id);
-      if (r && r.id) generated.push({ vendor_po_id: c.id, ...r });
-      else skipped.push({ vendor_po_id: c.id, reason: r?.skipped || 'unknown' });
-    } catch (e) { skipped.push({ vendor_po_id: c.id, reason: e.message }); }
-  }
-  res.json({ generated_count: generated.length, generated, skipped });
+  res.json({ generated_count: 0, generated: [], skipped: [], upload_only: true });
 });
 
 // Legacy alias retained for clarity — original inline body kept below was

@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
+import DispatchDocuments from '../components/DispatchDocuments';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
@@ -639,25 +640,15 @@ export default function Procurement() {
   const [sbTarget, setSbTarget] = useState(null);
   const [sbForm, setSbForm] = useState({ sales_bill_number: '', file: null });
   const [sbSaving, setSbSaving] = useState(false);
-  // Generate (not upload) a Sales Bill from a challan, then open its
-  // printable invoice — mam (2026-06-04): "sales bill generate, not upload".
-  const generateSalesBill = async (d) => {
-    // Park the print tab synchronously (popup blockers eat window.open
-    // after an await) — navigate it once the bill is ready.
-    const printWin = window.open('', '_blank');
-    try {
-      const r = await api.post(`/procurement/delivery-notes/${d.id}/generate-sales-bill`);
-      toast.success(`Sales Bill ${r.data.document_number} ${r.data.existing ? 'already exists' : 'generated'}${r.data.is_draft ? ' · DRAFT — fill client GSTIN / rates' : ''}`, { duration: 6000 });
-      load();
-      const res = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html;charset=utf-8' }));
-      if (printWin) printWin.location = url; else window.open(url, '_blank');
-    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
+  const openSalesBillUpload = (row) => {
+    setSbTarget(row);
+    setSbForm({ sales_bill_number: row.sales_bill_documents?.[0]?.number || '', file: null });
   };
   const submitSalesBill = async () => {
     if (!sbTarget) return;
     const num = String(sbForm.sales_bill_number || '').trim();
     if (!num) { toast.error('Sales Bill number is required'); return; }
+    if (!sbForm.file) { toast.error('Upload the Tally sales bill file'); return; }
     setSbSaving(true);
     try {
       const fd = new FormData();
@@ -873,6 +864,7 @@ export default function Procurement() {
     setPaymentSearch(q);
   }, []);
   const [dispListStatus, setDispListStatus]             = useState('all');
+  const [dispListBillStatus, setDispListBillStatus] = useState('all');
   const [dispListFrom, setDispListFrom]                 = useState('');
   const [dispListTo, setDispListTo]                     = useState('');
   const [dispListPage, setDispListPage]                 = useState(1);
@@ -946,7 +938,7 @@ export default function Procurement() {
   dispReadyParamsRef.current = { page: dispReadyPage, limit: dispReadyPerPage, search: dispReadySearch };
 
   const dispListParamsRef = useRef({});
-  dispListParamsRef.current = { page: dispListPage, limit: dispListPerPage, status: dispListStatus, from: dispListFrom, to: dispListTo, search: dispListSearch };
+  dispListParamsRef.current = { page: dispListPage, limit: dispListPerPage, status: dispListStatus, bill_status: dispListBillStatus, from: dispListFrom, to: dispListTo, search: dispListSearch };
 
   const activeTabRef = useRef(tab);
   activeTabRef.current = tab;
@@ -1153,13 +1145,14 @@ export default function Procurement() {
   // Central paginated loader for Dispatch & Receiving Notes
   const fetchDispListPage = async () => {
     setDispListLoading(true);
-    const { page, limit, status, from, to, search } = dispListParamsRef.current;
+    const { page, limit, status, bill_status, from, to, search } = dispListParamsRef.current;
     try {
       const res = await api.get('/procurement/delivery-notes', {
         params: {
           page,
           limit,
           status: status !== 'all' ? status : undefined,
+          bill_status: bill_status !== 'all' ? bill_status : undefined,
           from: from || undefined,
           to: to || undefined,
           q: search ? search.trim() : undefined,
@@ -1210,19 +1203,7 @@ export default function Procurement() {
       fetchBillsFuPage(),
       fetchBillsListPage(),
     ]),
-    // Mam (2026-06-15) "auto generated, no Dispatch click": opening this tab
-    // first sweeps every Ready-to-Dispatch PO and auto-creates its client
-    // Sales Bill server-side (idempotent; skips unrated POs), THEN loads — so
-    // bills appear on their own with the PDF viewable, no button press.
-    delivery: () => api.post('/procurement/auto-sales-bills/sweep')
-      .then(r => {
-        const n = r.data?.generated_count || 0;
-        if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 });
-      })
-      .catch(() => {}).then(() => Promise.all([
-        fetchDispReadyPage(),
-        fetchDispListPage(),
-      ])),
+    delivery: () => Promise.all([fetchDispReadyPage(), fetchDispListPage()]),
   };
 
   // Fetch a tab's data, honouring cache.  Pass force=true after a CRUD
@@ -1339,7 +1320,7 @@ export default function Procurement() {
   // When Ready to Dispatch pagination / search change while on the delivery tab:
   const isFirstDispReadyLoad = useRef(true);
   useEffect(() => {
-    if (tab !== 'delivery' || dispatchSubTab !== 'ready') return;
+    if (tab !== 'delivery') return;
     if (isFirstDispReadyLoad.current) {
       isFirstDispReadyLoad.current = false;
       return;
@@ -1351,14 +1332,14 @@ export default function Procurement() {
   // When Dispatch List pagination / filters / search change while on the delivery tab:
   const isFirstDispListLoad = useRef(true);
   useEffect(() => {
-    if (tab !== 'delivery' || dispatchSubTab !== 'list') return;
+    if (tab !== 'delivery') return;
     if (isFirstDispListLoad.current) {
       isFirstDispListLoad.current = false;
       return;
     }
     fetchDispListPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dispatchSubTab, dispListPage, dispListPerPage, dispListStatus, dispListFrom, dispListTo, dispListSearch]);
+  }, [tab, dispatchSubTab, dispListPage, dispListPerPage, dispListStatus, dispListBillStatus, dispListFrom, dispListTo, dispListSearch]);
 
   // Deep-link from the War Room "My Approvals" inbox: ?approve=<indentId>
   // opens that indent's FULL qty-wise approval modal (mam 2026-06-24: dashboard
@@ -2377,31 +2358,6 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
   };
 
-  // Edit the selling RATE per line on a generated Sales Bill (mam 2026-06-30: "also
-  // with rate"). Reads the bill's lines from items_json, lets mam type the rate,
-  // saves it back so the Tax Invoice shows amounts and stops being a draft.
-  const openEditRate = (d) => {
-    let items = [];
-    try { items = JSON.parse(d.items_json || '[]'); } catch (_) { items = []; }
-    setEditRate({
-      dnId: d.id, document_number: d.document_number,
-      items: items.map(it => ({
-        description: it.description || '', qty: +it.qty || +it.quantity || 0,
-        unit: it.unit || '', rate: (+it.rate || 0) || '',
-      })),
-    });
-    setModal('editrate');
-  };
-  const saveEditRate = async () => {
-    if (!editRate?.dnId) return;
-    try {
-      await api.put(`/procurement/delivery-notes/${editRate.dnId}/rates`, {
-        rates: editRate.items.map(it => (it.rate === '' ? 0 : +it.rate || 0)),
-      });
-      toast.success('Rates saved — the Tax Invoice now shows amounts');
-      setModal(false); setEditRate(null); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to save rates'); }
-  };
 
   const savePurchaseBill = async (e) => {
     e.preventDefault();
@@ -2451,100 +2407,6 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  const saveDeliveryNote = async (e) => {
-    e.preventDefault();
-    if (!form.document_type) return toast.error('Pick Sales Bill or Delivery Note');
-    // document_number is now auto-generated server-side when blank — no
-    // user-side required check. Mam can still type one to override.
-    // File is OPTIONAL now — the SOTYN.AI generates the document; the signed
-    // copy is uploaded later via Mark Received. Mam: "like po I want from
-    // erp create sales bill or dispatch which i give you format".
-    const fd = new FormData();
-    if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
-    if (form.delivery_date) fd.append('delivery_date', form.delivery_date);
-    if (form.document_type) fd.append('document_type', form.document_type);
-    // Only append a document_number if the user explicitly typed one
-    // (mam can override the auto-generated value). When blank, the server
-    // generates INV/YYYY/#### or DC/YYYY/#### automatically.
-    if (form.document_number && form.document_number.trim()) fd.append('document_number', form.document_number.trim());
-    if (form.notes) fd.append('notes', form.notes);
-    // Document-type-specific fields driven by the conditional cards.
-    if (form.document_type === 'challan') {
-      ['vehicle_no', 'driver_name', 'driver_mobile', 'lr_challan_no', 'total_packages']
-        .forEach(k => { if (form[k] != null && form[k] !== '') fd.append(k, form[k]); });
-    } else {
-      ['place_of_supply', 'state_code', 'e_way_bill_no', 'vehicle_no',
-        'cgst_pct', 'sgst_pct', 'igst_pct', 'freight_amount', 'round_off_amount']
-        .forEach(k => { if (form[k] != null && form[k] !== '') fd.append(k, form[k]); });
-      if (form.reverse_charge) fd.append('reverse_charge', '1');
-    }
-    // Per-line-item overrides — only ship rows the user kept (include=true).
-    // The server stores this in items_json and the print endpoint uses it
-    // in preference to po_items / vendor_po_items. Each row carries qty,
-    // rate and disc% so we can rebuild the taxable amount server-side.
-    const includedItems = (dispatchItems || []).filter(it => it.include !== false);
-    if (includedItems.length) {
-      const payload = includedItems.map(it => {
-        const qty = +it.quantity || 0;
-        const rate = +it.rate || 0;
-        const discPct = +it.disc_pct || 0;
-        return {
-          description: it.description || '',
-          hsn: it.hsn || '',
-          unit: it.unit || '',
-          quantity: qty,
-          rate,
-          disc_pct: discPct,
-          amount: +(qty * rate * (1 - discPct / 100)).toFixed(2),
-          item_code: it.item_code || '',
-          specification: it.specification || '',
-          size: it.size || '',
-          item_name: it.item_name || '',
-        };
-      });
-      fd.append('items', JSON.stringify(payload));
-      // Send computed subtotal + grand-total to the row too so the list
-      // view can show the invoice value without re-joining items_json.
-      const subtotal = payload.reduce((s, it) => s + it.amount, 0);
-      const cgst = subtotal * (+form.cgst_pct || 0) / 100;
-      const sgst = subtotal * (+form.sgst_pct || 0) / 100;
-      const igst = subtotal * (+form.igst_pct || 0) / 100;
-      const freight = +form.freight_amount || 0;
-      const roundOff = +form.round_off_amount || 0;
-      const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
-      fd.append('subtotal_amount', subtotal.toFixed(2));
-      fd.append('grand_total_amount', grandTotal.toFixed(2));
-    }
-    if (form.dispatch_file) fd.append('file', form.dispatch_file);
-    // Open the print tab NOW, synchronously, while we're still inside the
-    // click gesture. If we wait until after the awaits below, the popup
-    // blocker silently eats window.open and nothing appears — that was
-    // mam's "not showing pdf sales bill". We park a blank tab here and
-    // navigate it to the bill once it's generated; the bill's own page
-    // auto-fires the print → Save-as-PDF dialog.
-    const printWin = window.open('', '_blank');
-    try {
-      const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const which = form.document_type === 'challan' ? 'Delivery Challan' : 'Sales Bill';
-      // Show the auto-generated number in the toast so mam knows what
-      // INV/DC number was assigned.
-      const generatedNo = r.data?.document_number;
-      toast.success(generatedNo ? `${which} ${generatedNo} created` : `${which} created`);
-      setModal(false); load();
-      // Auto-open the generated document in the parked tab so mam can print
-      // immediately, matching the "create like a PO" feel she asked for.
-      if (r.data?.id) {
-        try {
-          // Pull as arraybuffer + tag the blob as UTF-8 so ₹ / em-dash
-          // don't render as mojibake when opened via blob: URL.
-          const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
-          const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          if (printWin) printWin.location = url; else window.open(url, '_blank');
-        } catch (_) { if (printWin) printWin.close(); /* user can still click 🖨 Print in the list */ }
-      } else if (printWin) { printWin.close(); }
-    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed'); }
-  };
 
   // Mark a dispatch row as "Received by <name> on <date>" + attach the
   // stamped/signed receipt photo. Multipart so the file rides along.
@@ -2626,8 +2488,7 @@ export default function Procurement() {
         : `Marked as received${shortNote}`);
       const ad = r.data?.auto_debit;
       if (ad) toast.success(`Auto short-supply debit ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} raised — see Debit Notes`, { duration: 6000 });
-      const asb = r.data?.auto_sales_bill;
-      if (asb) toast.success(`Sales Bill ${asb.document_number} auto-generated${asb.is_draft ? ' as DRAFT — fill client GSTIN / rates' : ''}`, { duration: 7000 });
+
       setModal(false);
       setReceiveItems([]);
       load();
@@ -2968,6 +2829,7 @@ export default function Procurement() {
                   params: {
                     export: 1,
                     status: dispListStatus !== 'all' ? dispListStatus : undefined,
+                    bill_status: dispListBillStatus !== 'all' ? dispListBillStatus : undefined,
                     from: dispListFrom || undefined,
                     to: dispListTo || undefined,
                     q: dispListSearch.trim() || undefined,
@@ -2975,7 +2837,7 @@ export default function Procurement() {
                 }).then(res => {
                   toast.dismiss(toastId);
                   const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
-                  exportCsv('dispatch', ['ID', 'Type', 'Doc No', 'PO', 'Site', 'Indent By', 'Date', 'Received By', 'Received On', 'Status'], rows.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
+                  exportCsv('dispatch', ['ID', 'Type', 'Doc No', 'PO', 'Site', 'Indent By', 'Date', 'Received By', 'Received On', 'Receiving Status', 'Sales Bill Status'], rows.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.receiving_status, d.sales_bill_status]));
                 }).catch(err => {
                   toast.dismiss(toastId);
                   toast.error('Export failed: ' + (err.response?.data?.error || err.message));
@@ -6094,164 +5956,14 @@ export default function Procurement() {
           hasPrev: dispListPage > 1,
           hasNext: dispListPage < dispListTotalPages,
         };
-        // Detect item-type hint for each PO (if any indent_item linked is type=PO,
-        // suggest Sales Bill; else suggest Challan). We don't have per-item info
-        // on the client, so the dropdown defaults to Sales Bill and user can switch.
-        const openAddDispatch = (po = null, docType = 'sales_bill') => {
-          // docType param (mam 2026-05-25: "here also add delivery note
-          // for rec"): pass 'challan' to open the modal as a Delivery
-          // Note for FOC / RGP / receipt-only goods.  Defaults to
-          // 'sales_bill' for backward compat with existing callers.
-          setForm({
-            vendor_po_id: po?.id || '',
-            vendor_po_number: po?.po_number || '',
-            document_type: docType,
-            document_number: '',
-            delivery_date: new Date().toISOString().slice(0, 10),
-            notes: '',
-            dispatch_file: null,
-          });
-          setDispatchItems([]);
-          setDispatchItemsSource('empty');
-          setDispatchBillTo(null);
-          setModal('delivery');
-          if (po?.id) {
-            setDispatchItemsLoading(true);
-            // Fire both fetches in parallel — items + bill-to.
-            // Pass doc_type so the backend can refuse vendor-cost
-            // fallback for sales_bill (mam, 2026-05-16: "if sales
-            // bill we enter BOQ SITC rate").  openAddDispatch is
-            // always called from a "create sales bill" path, so the
-            // default is sales_bill; user can flip to challan in the
-            // modal and we'll respect either way.
-            Promise.all([
-              // Pass the actual docType so the server picks the right
-              // rate-fallback rule (challan allows vendor cost; sales_bill
-              // enforces BOQ SITC and warns if missing).
-              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: docType } }).catch(() => ({ data: { items: [], source: 'empty' } })),
-              api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
-            ]).then(([itemsRes, billRes]) => {
-              const rawRows = (itemsRes.data?.items || []).map(it => ({
-                include: true,
-                description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-                hsn: it.hsn_code || '',  // gst_text was misnamed — drop it (it's the rate, not HSN)
-                unit: it.unit || '',
-                quantity: +it.quantity || 0,
-                rate: +it.rate || 0,
-                disc_pct: 0,
-                item_code: it.item_code || '',
-                specification: it.specification || '',
-                size: it.size || '',
-                item_name: it.item_name || '',
-              }));
-              // Filter out ghost rows — anything with no description AND
-              // (zero qty or zero rate) is junk that confuses mam (was
-              // showing as "Item descrip · 0 · nos · 0 · 0" placeholders).
-              const rows = rawRows.filter(r => {
-                if (r.description && r.description.trim()) return true;
-                return (+r.quantity > 0) || (+r.rate > 0);
-              });
-              setDispatchItems(rows);
-              setDispatchItemsSource(rows.length ? (itemsRes.data?.source || 'po_items') : 'empty');
-              setDispatchRateInfo({
-                source: itemsRes.data?.rate_source || null,
-                warning: itemsRes.data?.warning || null,
-                rated: +itemsRes.data?.rated_count || 0,
-                total: +itemsRes.data?.total_count || rows.length,
-              });
-              setDispatchBillTo(billRes.data || null);
-              // Pre-fill GST defaults from the bill-to state (intra
-              // vs inter-state).  Punjab = CGST/SGST 9% each.
-              const sameState = (billRes.data?.client_state || '').toLowerCase() === 'punjab';
-              setForm(f => ({
-                ...f,
-                cgst_pct: f.cgst_pct ?? (sameState ? 9 : 0),
-                sgst_pct: f.sgst_pct ?? (sameState ? 9 : 0),
-                igst_pct: f.igst_pct ?? (sameState ? 0 : 18),
-                place_of_supply: f.place_of_supply || billRes.data?.client_state || '',
-                state_code: f.state_code || billRes.data?.client_state_code || '',
-              }));
-            }).finally(() => setDispatchItemsLoading(false));
-          }
-        };
-        // Mam (2026-06-15) "fully auto on Dispatch": clicking Dispatch on a
-        // Ready-to-Dispatch PO instantly generates the SALES BILL — items +
-        // BOQ×delivery% rates from the PO, GST defaulted from the client
-        // state (Punjab → CGST/SGST 9% each, else IGST 18%) — and opens its
-        // PDF, with NO modal / no fields to fill. Falls back to the manual
-        // modal only when the PO has no billable items.
-        const autoDispatchSalesBill = async (po) => {
-          if (!po?.id) return;
-          // Park the PDF tab synchronously so the popup blocker can't eat it.
-          const printWin = window.open('', '_blank');
-          const closeWin = () => { try { if (printWin) printWin.close(); } catch (_) {} };
+        const createChallan = async (po) => {
           try {
-            const [itemsRes, billRes] = await Promise.all([
-              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
-              api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
-            ]);
-            const rows = (itemsRes.data?.items || []).map(it => {
-              const qty = +it.quantity || 0;
-              const rate = +it.rate || 0;
-              return {
-                description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-                hsn: it.hsn_code || '',
-                unit: it.unit || '',
-                quantity: qty,
-                rate,
-                disc_pct: 0,
-                amount: +(qty * rate).toFixed(2),
-                item_code: it.item_code || '',
-                specification: it.specification || '',
-                size: it.size || '',
-                item_name: it.item_name || '',
-              };
-            }).filter(r => (r.description && r.description.trim()) || r.quantity > 0 || r.rate > 0);
-            if (!rows.length) {
-              closeWin();
-              toast.error('No PO items to bill — opening manual entry');
-              openAddDispatch(po);
-              return;
-            }
-            // Mirror the server's safety rule: never auto-bill a line with no
-            // rate. If any line is unrated, open the manual modal so mam can
-            // fill the selling rate instead of billing zero.
-            if (rows.some(r => !(+r.rate > 0))) {
-              closeWin();
-              toast('Some items have no rate — fill rates to bill', { icon: '✏️' });
-              openAddDispatch(po);
-              return;
-            }
-            const sameState = (billRes.data?.client_state || '').toLowerCase() === 'punjab';
-            const cgst_pct = sameState ? 9 : 0;
-            const sgst_pct = sameState ? 9 : 0;
-            const igst_pct = sameState ? 0 : 18;
-            const subtotal = rows.reduce((s, it) => s + (it.amount || 0), 0);
-            const grandTotal = subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100;
             const fd = new FormData();
             fd.append('vendor_po_id', po.id);
-            fd.append('document_type', 'sales_bill');
-            fd.append('delivery_date', new Date().toISOString().slice(0, 10));
-            if (billRes.data?.client_state) fd.append('place_of_supply', billRes.data.client_state);
-            if (billRes.data?.client_state_code) fd.append('state_code', billRes.data.client_state_code);
-            fd.append('cgst_pct', cgst_pct);
-            fd.append('sgst_pct', sgst_pct);
-            fd.append('igst_pct', igst_pct);
-            fd.append('items', JSON.stringify(rows));
-            fd.append('subtotal_amount', subtotal.toFixed(2));
-            fd.append('grand_total_amount', grandTotal.toFixed(2));
-            const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-            toast.success(`Sales Bill ${r.data?.document_number || ''} generated`);
-            load();
-            if (r.data?.id) {
-              const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
-              const url = URL.createObjectURL(new Blob([printRes.data], { type: 'text/html;charset=utf-8' }));
-              if (printWin) printWin.location = url; else window.open(url, '_blank');
-            } else { closeWin(); }
-          } catch (err) {
-            closeWin();
-            toast.error(err.response?.data?.error || 'Failed to generate Sales Bill');
-          }
+            fd.append('document_type', 'challan');
+            await api.post('/procurement/delivery-notes', fd);
+            toast.success('Delivery challan created'); load();
+          } catch (err) { toast.error(err.response?.data?.error || 'Could not create challan'); }
         };
         // Helper — fetch the items on the linked vendor PO so mam can
         // adjust received qty per line in the modal (mam 2026-06-02:
@@ -6321,7 +6033,7 @@ export default function Procurement() {
           try { arr = JSON.parse(itemsJson || '[]') || []; } catch (_) {}
           if (!Array.isArray(arr) || arr.length === 0) { setReceiveItems([blankManualRow()]); return; }
           setReceiveItems(arr.map(it => {
-            const qty = +it.qty || +it.quantity || 0;
+            const qty = Number(it.qty ?? it.quantity ?? it.received_qty ?? it.ordered_qty ?? 0);
             return {
               vpi_id: it.vendor_po_item_id || null,
               description: it.description || it.master_name || '—',
@@ -6351,7 +6063,7 @@ export default function Procurement() {
           setReceiveItems([]);
           // From-store (no PO) → read lines from the note's items_json;
           // PO-linked → pull from the PO's delivery-note-data as before.
-          if (d.supply_pending) loadReceiveItemsFromJson(d.items_json);
+          if (d.items_json && d.items_json !== '[]') loadReceiveItemsFromJson(d.items_json);
           else if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
           else loadReceiveItemsFromJson(d.items_json);
           setModal('receive');
@@ -6372,497 +6084,26 @@ export default function Procurement() {
           loadReceiveItems(po.id);
           setModal('receive');
         };
-        return (
-        <>
-          {/* Sub-tabs (mam 2026-05-25) */}
-          <div className="flex justify-between items-center flex-wrap gap-2">
-            <div className="flex gap-1 border-b border-gray-200 -mb-px">
-              <button onClick={() => setDispatchSubTab('ready')}
-                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({dispReadyTotal + (sbPendingDNs.length)})</span>
-              </button>
-              <button onClick={() => setDispatchSubTab('list')}
-                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({dispListTotal})</span>
-              </button>
-            </div>
-          </div>
-
-          {/* ===== Sub-tab 1: Ready to dispatch ===== */}
-          {dispatchSubTab === 'ready' && dispReadyTotal === 0 && sbPendingDNs.length === 0 && !dispReadyLoading && (
-            <div className="card text-center py-8 text-gray-400 text-xs">
-              {(dispReadySearchInput || dispReadySearch) ? 'No POs match the current search.' : 'Nothing awaiting a Sales Bill / dispatch. 🎉'}
-            </div>
-          )}
-          {/* From-store (no-PO) challans awaiting a Sales Bill — mam 2026-06-04. */}
-          {dispatchSubTab === 'ready' && sbPendingDNs.length > 0 && (
-            <div className="card p-3 bg-amber-50 border border-amber-200 mb-3">
-              <h4 className="font-semibold text-amber-800 text-sm mb-2">
-                From-Store · Sales Bill pending
-                <span className="text-xs font-normal text-amber-700 ml-2">({sbPendingDNs.length})</span>
-              </h4>
-              <div className="overflow-auto max-h-[40vh]">
-                <table className="text-xs w-full">
-                  <thead><tr className="bg-amber-100/50">
-                    <th className="px-2 py-1 text-left">Challan No</th>
-                    <th className="px-2 py-1 text-left">Site / Company</th>
-                    <th className="px-2 py-1">Date</th>
-                    <th className="px-2 py-1 text-right">Actions</th>
-                  </tr></thead>
-                  <tbody>
-                    {sbPendingDNs.map(d => (
-                      <tr key={d.id} className="border-b border-amber-100">
-                        <td className="px-2 py-1.5 font-semibold text-blue-800 whitespace-nowrap">{d.document_number}<span className="ml-1 text-[9px] text-indigo-600">📦 FROM STORE</span></td>
-                        <td className="px-2 py-1.5 max-w-[260px] truncate">{d.site_name || '—'}</td>
-                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{d.delivery_date || '—'}</td>
-                        <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                          <button onClick={async () => { const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' })); window.open(url, '_blank'); }} className="text-[10px] px-2 py-1 mr-1 rounded border border-gray-300 hover:bg-gray-50">Print</button>
-                          <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-          {dispatchSubTab === 'ready' && (dispReadyTotal > 0 || dispReadyLoading) && (
-            <div className="card p-3 bg-indigo-50 border border-indigo-200">
-              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-                <h4 className="font-semibold text-indigo-800 text-sm">
-                  Ready to Dispatch
-                  <span className="text-xs font-normal text-indigo-600 ml-2">({dispReadyTotal} PO{dispReadyTotal === 1 ? '' : 's'})</span>
-                </h4>
-                <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
-              </div>
-              {/* Search strip (mam 2026-05-25) */}
-              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-indigo-200">
-                <div className="flex-1 min-w-[200px]">
-                  <label className="label text-[10px] mb-0.5 text-indigo-900">Search · PO no / vendor / indent</label>
-                  <input className="input text-xs" placeholder="e.g. VPO-0042"
-                    value={dispReadySearchInput} onChange={e => { setDispReadySearchInput(e.target.value); setDispReadyPage(1); }} />
-                </div>
-                {(dispReadySearchInput || dispReadySearch) && (
-                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setDispReadySearchInput(''); setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
-                )}
-                <div className="ml-auto text-[11px] text-indigo-900">
-                  Showing <span className="font-semibold">{dispReadyTotal > 0 ? `${readyPg.from + 1}–${readyPg.to}` : 0}</span> of {dispReadyTotal}
-                </div>
-              </div>
-              <div className="hidden md:block overflow-auto max-h-[70vh]">
-                <table className="text-xs freeze-head">
-                  <thead><tr className="bg-indigo-100/50">
-                    <th className="px-2 py-1 text-left">PO Number</th>
-                    <th className="px-2 py-1 text-left">Vendor</th>
-                    <th className="px-2 py-1">PO Date</th>
-                    <th className="px-2 py-1">Expected Receipt</th>
-                    <th className="px-2 py-1 text-right">Amount</th>
-                    <th className="px-2 py-1"></th>
-                  </tr></thead>
-                  <tbody>
-                    {dispReadyLoading && (
-                      <tr><td colSpan="6" className="text-center py-8 text-indigo-700">
-                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading ready to dispatch POs...
-                      </td></tr>
-                    )}
-                    {!dispReadyLoading && readyPg.rows.map(po => (
-                      <tr key={po.id} className="border-b border-indigo-100">
-                        <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
-                          {po.po_number}
-                          <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-red-600 hover:text-red-800 underline font-normal">📄 View PO</a>
-                          <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-emerald-700 hover:text-emerald-900 underline font-normal">🚚 Delivery Note</a>
-                        </td>
-                        <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
-                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
-                          Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
-                          {+po.total_amount_drift > 1 && (
-                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
-                              ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Auto-generate the Sales Bill PDF (BOQ×delivery% rates + client GST) and open it — no form to fill. The PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
-                        </td>
-                      </tr>
-                    ))}
-                    {!dispReadyLoading && dispReadyTotal === 0 && (
-                      <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current search.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobile cards — polished pattern matching Indents (mam). */}
-              <div className="md:hidden space-y-3">
-                {dispReadyLoading && (
-                  <div className="card p-6 text-center text-indigo-700 text-sm">
-                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
-                  </div>
-                )}
-                {!dispReadyLoading && readyPg.rows.map(po => (
-                  <div key={po.id} className="card p-3 space-y-2">
-                    <div className="flex justify-between items-start gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
-                        <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
-                        <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                          <FiCalendar size={10} className="text-gray-400" />
-                          {po.po_date || '—'}
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-300 bg-indigo-50 text-indigo-700 uppercase">Ready</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                      <div>
-                        <div className="text-[9px] uppercase text-gray-400">Vendor</div>
-                        <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name || '—'}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] uppercase text-gray-400">Expected</div>
-                        <div className="font-medium text-gray-700">{po.expected_receipt_date || '—'}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                        <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
-                        {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
-                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                        <FiPrinter size={11} /> Print PO
-                      </a>
-                      <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
-                        🚚 Delivery Note
-                      </a>
-                    </div>
-                    <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
-                  </div>
-                ))}
-                {!dispReadyLoading && dispReadyTotal === 0 && (
-                  <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current search.</div>
-                )}
-              </div>
-              <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
-            </div>
-          )}
-
-          {/* ===== Sub-tab 2: Main dispatch list ===== */}
-          {dispatchSubTab === 'list' && (
-            <>
-              <div className="flex justify-between items-center flex-wrap gap-2">
-                <h3 className="font-semibold">Dispatch & Receiving</h3>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Add Delivery Note · mam (2026-05-25): "here also add
-                      delivery note for rec".  Opens the same modal but
-                      pre-set to document_type='challan' — used for FOC
-                      / RGP / receipt-only goods where no Sales Bill is
-                      issued. */}
-                  <button onClick={() => openAddDispatch(null, 'challan')} className="btn btn-secondary flex items-center gap-2 text-sm">
-                    <FiPlus /> Add Delivery Note
-                  </button>
-                  <button onClick={() => openAddDispatch(null, 'sales_bill')} className="btn btn-primary flex items-center gap-2">
-                    <FiPlus /> Add Sales Bill
-                  </button>
-                </div>
-              </div>
-              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
-                <div className="flex-1 min-w-[200px]">
-                  <label className="label text-[10px] mb-0.5">Search · PO no / doc no / received by</label>
-                  <input className="input text-xs" placeholder="e.g. VPO-0042"
-                    value={dispListSearchInput} onChange={e => { setDispListSearchInput(e.target.value); setDispListPage(1); }} />
-                </div>
-                <div>
-                  <label className="label text-[10px] mb-0.5">Status</label>
-                  <select className="select text-xs" value={dispListStatus}
-                    onChange={e => { setDispListStatus(e.target.value); setDispListPage(1); }}>
-                    <option value="all">All</option>
-                    <option value="dispatched">Dispatched</option>
-                    <option value="received">Received</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label text-[10px] mb-0.5">Received From</label>
-                  <input className="input text-xs" type="date" value={dispListFrom}
-                    onChange={e => { setDispListFrom(e.target.value); setDispListPage(1); }} />
-                </div>
-                <div>
-                  <label className="label text-[10px] mb-0.5">Received To</label>
-                  <input className="input text-xs" type="date" value={dispListTo}
-                    onChange={e => { setDispListTo(e.target.value); setDispListPage(1); }} />
-                </div>
-                {(dispListSearchInput || dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
-                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setDispListSearchInput(''); setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
-                )}
-                <div className="ml-auto text-[11px] text-gray-500">
-                  Showing <span className="font-semibold text-gray-700">{dispListTotal > 0 ? `${dispListPg.from + 1}–${dispListPg.to}` : 0}</span> of {dispListTotal}
-                </div>
-              </div>
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-            {/* Mam (2026-06-02): "site name also show here delivery note
-                number and against it we will upload receiving".  Bill-
-                upload now auto-creates the DN row (commit c7e86ac).
-                For legacy billed POs that don't have a DN yet (the
-                backfill in schema.js may not have fired on the VPS),
-                we ALSO render synthetic "AWAITING" rows below — so
-                mam always sees the data and can still Upload Receiving
-                which creates the DN inline. */}
-            <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Indent By</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>
-              {/* Receiving (signed receipt) is only against CLIENT delivery
-                  notes — NOT vendor POs (mam 2026-06-06: "this vendor wise not
-                  required rec; rec is only against client for delivery note").
-                  The old synthetic "auto on receive / Upload Receiving" rows for
-                  billed Vendor POs were removed. Those POs still live in the
-                  "Ready to Dispatch" sub-tab where the client Sales Bill /
-                  Delivery Note is created; once created, the real DN shows here
-                  for the client's signed receipt. */}
-              {dispListLoading && <tr><td colSpan="12" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading dispatches...</td></tr>}
-              {!dispListLoading && dispListPg.rows.map(d => (
-                <tr key={d.id}>
-                  <td className="font-mono font-semibold text-blue-800">
-                    {d.document_number || <span className="text-gray-300 font-sans">—</span>}
-                    <div className="text-[10px] text-gray-400 font-sans font-normal">#{d.id}</div>
-                  </td>
-                  <td>
-                    <div className="flex flex-col gap-1 items-start">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
-                      </span>
-                      {d.source === 'store' && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-300" title="Material issued from store — no Vendor PO">📦 FROM STORE</span>
-                      )}
-                      {d.is_draft === 1 && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300" title="Auto-generated Sales Bill — needs client GSTIN / selling rates before sending">✏️ DRAFT</span>
-                      )}
-                      {/* Sales Bill pending chip — mam (2026-05-25): when
-                          dispatched with Challan only and SB will follow
-                          later, this amber chip lingers until SB is
-                          uploaded via the Add Sales Bill button below. */}
-                      {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
-                          📋 SB PENDING
-                        </span>
-                      )}
-                      {d.sales_bill_number && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200" title={`Sales Bill ${d.sales_bill_number} uploaded`}>
-                          ✓ SB {d.sales_bill_number}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="text-xs">{d.vendor_po_number || (d.source === 'store' ? <span className="text-indigo-600 text-[10px] font-semibold">From Store</span> : <span className="text-gray-300">—</span>)}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
-                  {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
-                  <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
-                  {/* Indent By (mam 2026-06-29) — who raised the originating indent
-                      (indents.raised_by_name), resolved via the same JOIN. Blank for
-                      dispatches with no linked indent. */}
-                  <td className="text-xs">{d.raised_by_name || <span className="text-gray-300">—</span>}</td>
-                  <td>{d.delivery_date}</td>
-                  <td>
-                    {d.file_path
-                      ? <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View</a>
-                      : <span className="text-gray-300 text-xs">—</span>}
-                  </td>
-                  <td>{d.received_by_name || <span className="text-gray-300 text-xs">—</span>}</td>
-                  <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
-                  <td>
-                    {d.receipt_file_path
-                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">{d.source_challan_id ? 'Challan proof ✓' : 'Signed ✓'}</a>
-                      : d.received_by_name
-                        ? <span className="text-amber-600 text-[11px]">No photo</span>
-                        : <span className="text-gray-300 text-xs">—</span>}
-                  </td>
-                  <td>
-                    <StatusBadge status={d.status} />
-                    {d.mb_bill_number && (
-                      <div className="mt-1">
-                        <span className="inline-flex items-center text-[10px] font-mono bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200" title={`Measurement Book Entry #${d.mb_bill_number} (${d.mb_bill_status || 'draft'})`}>
-                          📐 {d.mb_bill_number}
-                        </span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap">
-                    {/* Print the auto-generated SEPL Delivery Note / Sales
-                        Bill PDF (mam's templates). Fetched via axios so the
-                        Bearer token rides along, then opened as a Blob URL —
-                        plain window.open with a header-auth API would 401. */}
-                    <button
-                      onClick={async () => {
-                        try {
-                          // arraybuffer + utf-8 blob so ₹ / em-dash /
-                          // 🖨 emoji don't render as Latin-1 mojibake.
-                          const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
-                          const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
-                          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-                        } catch (err) {
-                          toast.error(err.response?.data?.error || 'Could not generate document');
-                        }
-                      }}
-                      className="btn btn-secondary text-[10px] px-2 py-1 mr-1"
-                      title={`Print SEPL ${d.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}`}
-                    >🖨 Print</button>
-                    {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
-                      <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
-                    )}
-                    {!d.received_by_name && !d.source_challan_id && (
-                      <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
-                    )}
-                    {/* Add Sales Bill — only when this dispatch was marked
-                        sales_bill_pending=1 AND no SB has been uploaded yet
-                        (mam 2026-05-25). */}
-                    {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                      <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
-                        Add Sales Bill
-                      </button>
-                    )}
-                    {canDelete('procurement') && <button onClick={async () => {
-                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                  </td>
-                </tr>
-              ))}
-              {!dispListLoading && dispListTotal === 0 && (
-                <tr><td colSpan="12" className="text-center py-8 text-gray-400">
-                  {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
-                </td></tr>
-              )}
-            </tbody>
-            <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
-          </table></div>
-
-          {/* Mobile cards.  Each card leads with the DN number (mam
-              2026-06-02: "delivery note number and against it we will
-              upload receiving").  Synthetic AWAITING cards appear at
-              the top as a fallback for billed POs that don't yet have
-              a delivery_notes row — they still let mam Upload Receiving
-              and SOTYN.AI will mint the real DN number on submit. */}
-          <div className="md:hidden space-y-3">
-            {/* Vendor-PO "Upload Receiving" cards removed — receiving is only
-                against client delivery notes (mam 2026-06-06). */}
-            {dispListLoading && (
-              <div className="card p-6 text-center text-gray-500 text-sm">
-                <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
-              </div>
-            )}
-            {!dispListLoading && dispListPg.rows.map(d => (
-              <div key={d.id} className="card p-3 space-y-2">
-                <div className="flex justify-between items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
-                      </span>
-                      <span className="text-[10px] text-gray-400">#{d.id}</span>
-                    </div>
-                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Delivery Note No</div>
-                    <div className="text-lg font-bold text-gray-900 truncate">{d.document_number || <span className="text-gray-300 text-sm">— pending —</span>}</div>
-                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                      <FiCalendar size={10} className="text-gray-400" />
-                      {d.delivery_date || '—'}
-                    </div>
-                  </div>
-                  <StatusBadge status={d.status} />
-                </div>
-                {/* Site (mam 2026-06-02) */}
-                {d.site_name && (
-                  <div className="flex items-start gap-1.5 text-xs">
-                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-[10px] uppercase text-gray-400">Site</div>
-                      <div className="font-medium text-gray-800">{d.site_name}</div>
-                    </div>
-                  </div>
-                )}
-                {/* Indent By (mam 2026-06-29) — who raised the originating indent */}
-                {d.raised_by_name && (
-                  <div className="flex items-start gap-1.5 text-xs">
-                    <FiUser size={12} className="mt-0.5 text-gray-400 flex-shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-[10px] uppercase text-gray-400">Indent By</div>
-                      <div className="font-medium text-gray-800">{d.raised_by_name}</div>
-                    </div>
-                  </div>
-                )}
-                {(d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number) && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
-                )}
-                {d.sales_bill_number && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block">✓ SB {d.sales_bill_number}</span>
-                )}
-                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                  <div>
-                    <div className="text-[9px] uppercase text-gray-400">PO</div>
-                    <div className="font-mono font-semibold text-blue-800 truncate">{d.vendor_po_number || '—'}</div>
-                    {d.vendor_name && <div className="text-[10px] text-gray-500 truncate" title={d.vendor_name}>{d.vendor_name}</div>}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[9px] uppercase text-gray-400">Received By</div>
-                    <div className="font-medium text-gray-700 truncate">{d.received_by_name || <span className="text-gray-300">—</span>}</div>
-                    {d.received_at && <div className="text-[10px] text-gray-500">{new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>}
-                  </div>
-                </div>
-                {(d.file_path || d.receipt_file_path) && (
-                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
-                    {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
-                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">{d.source_challan_id ? '✓ Challan proof' : '✓ Signed Receipt'}</a>}
-                  </div>
-                )}
-                {/* Primary action — Mark Received (when not yet received) */}
-                {!d.received_by_name && !d.source_challan_id && (
-                  <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
-                )}
-                {/* Secondary actions row */}
-                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
-                  <button
-                    onClick={async () => {
-                      try {
-                        const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
-                        const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
-                        window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-                      } catch (err) {
-                        toast.error(err.response?.data?.error || 'Could not generate document');
-                      }
-                    }}
-                    className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
-                  >🖨 Print</button>
-                  {d.document_type === 'challan' && d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
-                  )}
-                  {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
-                  {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => openEditRate(d)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit rate</button>
-                  )}
-                  {canDelete('procurement') && (
-                    <button onClick={async () => {
-                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                      <FiTrash2 size={11} /> Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-            {!dispListLoading && dispListTotal === 0 && (
-              <div className="card p-6 text-center text-gray-400 text-sm">
-                {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
-              </div>
-            )}
-            <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
-          </div>
-            </>
-          )}
-        </>
-        );
+        return <DispatchDocuments
+          rows={dispListPg.rows} loading={dispListLoading} pagination={dispListPg} setPerPage={setDispListPerPage}
+          filters={{ search: dispListSearchInput, bill: dispListBillStatus, receiving: dispListStatus, from: dispListFrom, to: dispListTo }}
+          onFilter={(field, value) => {
+            const setters = { search: setDispListSearchInput, bill: setDispListBillStatus, receiving: setDispListStatus, from: setDispListFrom, to: setDispListTo };
+            setters[field](value); setDispListPage(1);
+          }}
+          canUpload={canApprove('procurement') || isAdmin()}
+          onSalesBill={openSalesBillUpload} onReceive={openMarkReceived}
+          onPrint={async row => {
+            const printWin = window.open('', '_blank');
+            try {
+              const result = await api.get('/procurement/delivery-notes/' + row.id + '/print', { responseType: 'arraybuffer' });
+              const url = URL.createObjectURL(new Blob([result.data], { type: 'text/html;charset=utf-8' }));
+              if (printWin) printWin.location = url; else window.open(url, '_blank');
+            } catch (err) { if (printWin) printWin.close(); toast.error('Could not open delivery challan'); }
+          }}
+          readyRows={readyPg.rows} readyPagination={readyPg} readyLoading={dispReadyLoading}
+          onCreateChallan={createChallan} onReceivePo={openReceivePo} setReadyPerPage={setDispReadyPerPage}
+        />;
       })()}
 
       {/* ===== Debit Notes tab (mam 2026-06-04 post-PO chart, stage 7) ===== */}
@@ -8346,52 +7587,7 @@ export default function Procurement() {
       </Modal>
 
       {/* Edit selling rate per line on a generated Sales Bill (mam 2026-06-30). */}
-      <Modal isOpen={modal === 'editrate'} onClose={() => { setModal(false); setEditRate(null); }} title={`Edit selling rate — ${editRate?.document_number || ''}`}>
-        {!editRate ? null : (editRate.items.length === 0) ? (
-          <div className="text-sm text-gray-500 py-6 text-center">This sales bill has no line items to rate.</div>
-        ) : (() => {
-          const sub = editRate.items.reduce((s, it) => s + ((+it.qty || 0) * (it.rate === '' ? 0 : +it.rate || 0)), 0);
-          return (
-            <div className="space-y-3">
-              <p className="text-[11px] text-gray-500">Type the selling rate per line. The amount, subtotal and GST on the Tax Invoice fill in, and the bill stops being a draft.</p>
-              <div className="border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto max-h-72">
-                  <table className="text-[11px] w-full">
-                    <thead className="bg-gray-50 sticky top-0"><tr>
-                      <th className="px-2 py-1 text-left">Item</th>
-                      <th className="px-2 py-1 text-right">Qty</th>
-                      <th className="px-2 py-1 text-right">Rate ₹</th>
-                      <th className="px-2 py-1 text-right">Amount ₹</th>
-                    </tr></thead>
-                    <tbody>
-                      {editRate.items.map((it, i) => {
-                        const amt = Math.round((+it.qty || 0) * (it.rate === '' ? 0 : +it.rate || 0) * 100) / 100;
-                        return (
-                          <tr key={i} className="border-t">
-                            <td className="px-2 py-1">{it.description}</td>
-                            <td className="px-2 py-1 text-right tabular-nums">{(+it.qty || 0).toLocaleString('en-IN')} {it.unit}</td>
-                            <td className="px-2 py-1 text-right">
-                              <NumInput step="any" min="0" value={it.rate}
-                                onChange={(v) => setEditRate(er => ({ ...er, items: er.items.map((x, j) => j === i ? { ...x, rate: v } : x) }))}
-                                className="border border-gray-300 rounded px-1 py-0.5 w-20 text-right text-[11px] focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
-                            </td>
-                            <td className="px-2 py-1 text-right tabular-nums">{amt ? `₹${amt.toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot><tr className="border-t bg-gray-50 font-semibold"><td className="px-2 py-1" colSpan="3">Sub Total</td><td className="px-2 py-1 text-right tabular-nums">₹{(Math.round(sub * 100) / 100).toLocaleString('en-IN')}</td></tr></tfoot>
-                  </table>
-                </div>
-              </div>
-              <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => { setModal(false); setEditRate(null); }} className="btn btn-secondary">Cancel</button>
-                <button type="button" onClick={saveEditRate} className="btn btn-primary">Save rates</button>
-              </div>
-            </div>
-          );
-        })()}
-      </Modal>
+
 
       {/* Create Sales Bill / Delivery Note — mam: "like po I want from erp
           create sales bill or dispatch". The form gathers everything the
@@ -8406,395 +7602,16 @@ export default function Procurement() {
       {/* Modal title adapts to document_type so it's clear whether you're
           creating a billable Sales Bill or a non-billable Delivery Note
           / Challan (mam 2026-05-25: "here also add delivery note for rec"). */}
-      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={(() => {
-        const kind = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
-        return form.vendor_po_number ? `Create ${kind} — ${form.vendor_po_number}` : `Create ${kind}`;
-      })()} wide>
-        <form onSubmit={saveDeliveryNote} className="space-y-4">
-          {form.vendor_po_number && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
-              Linked to <strong>source Vendor PO</strong> <b>{form.vendor_po_number}</b>. Once this dispatch is recorded, the PO moves off the "Ready to Dispatch" list.
-            </div>
-          )}
-
-          {/* Mam (2026-05-22): "here only sales bill of po item with
-              only show delivery note as data which is created with po"
-              — the Sales Bill form needs client GSTIN + BOQ rates and
-              fails on incomplete BB rows.  For routine deliveries the
-              admin just needs the auto-generated DN that pulls
-              everything from the PO.  Shortcut banner — when admin
-              picks a PO they can skip this form entirely. */}
-          {form.vendor_po_id && (
-            <div className="bg-blue-50 border border-blue-300 rounded-lg px-3 py-2.5 flex items-center justify-between gap-2 flex-wrap">
-              <div className="text-[12px] text-blue-900 flex-1 min-w-[200px]">
-                🚚 <b>Just need a Delivery Note?</b> Skip this form — the
-                auto-generated DN is already filled in from the PO
-                (vendor / client / site / items / HSN).
-              </div>
-              <a
-                href={`/vendor-po/${form.vendor_po_id}/delivery-note`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setModal(false)}
-                className="btn btn-primary text-[12px] py-1.5 px-3 bg-emerald-700 hover:bg-emerald-800 border-emerald-700 whitespace-nowrap"
-              >
-                Open Auto-Generated DN →
-              </a>
-            </div>
-          )}
-
-          {/* BILL TO block — mam (2026-05-16): "no client / bill-to block"
-              was issue #1.  Surfaces every field a tax invoice needs:
-              client name + address + GSTIN + state + state code +
-              linked client PO.  Pulled live when a Vendor PO is
-              selected.  Yellow warning when any critical field is
-              missing so mam knows to fix BB before saving. */}
-          {form.document_type === 'sales_bill' && (
-            <div className="border-2 border-blue-200 bg-blue-50/40 rounded p-3 space-y-2 text-xs">
-              <div className="text-[10px] font-bold uppercase text-blue-700">Bill To · Customer</div>
-              {!dispatchBillTo ? (
-                <div className="text-gray-400 italic">Pick a Vendor PO to load client details…</div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <div className="font-bold text-sm">{dispatchBillTo.client_company || <span className="text-amber-700">— client_company missing in BB —</span>}</div>
-                      {dispatchBillTo.client_person_name && <div className="text-gray-600">Attn: {dispatchBillTo.client_person_name}</div>}
-                      {dispatchBillTo.client_address && <div className="text-gray-600 mt-1">{dispatchBillTo.client_address}</div>}
-                      <div className="text-gray-600">
-                        {[dispatchBillTo.client_district, dispatchBillTo.client_state].filter(Boolean).join(', ')}
-                      </div>
-                      {(dispatchBillTo.client_phone || dispatchBillTo.client_email) && (
-                        <div className="text-gray-600 mt-1">
-                          {dispatchBillTo.client_phone && <>📞 {dispatchBillTo.client_phone}</>}
-                          {dispatchBillTo.client_phone && dispatchBillTo.client_email && ' · '}
-                          {dispatchBillTo.client_email}
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-0.5">
-                      <div><span className="text-gray-500">GSTIN:</span> <span className="font-mono font-semibold">{dispatchBillTo.client_gstin || <span className="text-amber-700">— not set —</span>}</span></div>
-                      <div><span className="text-gray-500">State Code:</span> <span className="font-mono">{dispatchBillTo.client_state_code || <span className="text-amber-700">—</span>}</span></div>
-                      <div><span className="text-gray-500">Lead:</span> <span className="font-mono">{dispatchBillTo.lead_no || '—'}</span></div>
-                      <div><span className="text-gray-500">Client PO:</span> <span className="font-mono">{dispatchBillTo.client_po_number || '—'}</span></div>
-                      <div><span className="text-gray-500">Site:</span> {dispatchBillTo.site_name || '—'}</div>
-                    </div>
-                  </div>
-                  {(!dispatchBillTo.client_company || !dispatchBillTo.client_gstin) && (
-                    <div className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-2 py-1 mt-1">
-                      ⚠ Customer details incomplete in Business Book. Fix BB row before saving — a tax invoice without
-                      {!dispatchBillTo.client_company && ' a client name'}
-                      {!dispatchBillTo.client_company && !dispatchBillTo.client_gstin && ' /'}
-                      {!dispatchBillTo.client_gstin && ' GSTIN'} is not legally valid.
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-          {/* Mam (2026-05-22): "only here sales bill" — Dispatch Type
-              chooser removed.  This modal is now strictly for Sales
-              Bill (formal GST tax invoice tracked in delivery_notes).
-              The old Delivery Challan radio is gone — that use case
-              (FOC / RGP / "send paper with the truck") is handled by
-              the auto-generated Delivery Note at /vendor-po/:id/
-              delivery-note, which doesn't need BB completeness or
-              BOQ SITC rates.  document_type is locked to 'sales_bill'
-              for any new save from this modal. */}
-          {!form.vendor_po_number && (
-            <div>
-              <label className="label">Source Vendor PO <span className="text-[10px] text-gray-400 font-normal">(supply — items came from this PO)</span></label>
-              <SearchableSelect
-                options={vendorPos.map(v => ({ ...v, label: v.po_number + ' — ' + (v.vendor_name || '') }))}
-                value={form.vendor_po_id || null}
-                valueKey="id" displayKey="label"
-                placeholder="— Not linked — search PO…"
-                onChange={(v) => setForm({ ...form, vendor_po_id: v?.id || '' })}
-              />
-            </div>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} Number</label>
-              {/* Auto-generated on save unless mam expands "Override" and
-                  types her own. Keeps the modal clean and prevents
-                  duplicate / inconsistent numbering. */}
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
-                <span className="font-mono font-semibold">
-                  {form.document_type === 'challan'
-                    ? `DC/${new Date().getFullYear()}/####`
-                    : `GST/26-26/##`}
-                </span>
-                <span className="text-emerald-600">— auto-generated on save</span>
-              </div>
-              <details className="mt-1 text-[10px] text-gray-500">
-                <summary className="cursor-pointer hover:text-gray-700">Override manually</summary>
-                <input
-                  className="input mt-1"
-                  value={form.document_number || ''}
-                  onChange={e => setForm({ ...form, document_number: e.target.value })}
-                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. GST/26-26/61'}
-                />
-              </details>
-            </div>
-            <div>
-              <label className="label">Dispatch Date</label>
-              <input className="input" type="date" value={form.delivery_date || ''} onChange={e => setForm({ ...form, delivery_date: e.target.value })} />
-            </div>
-          </div>
-
-          {/* Editable line items — pulled from the Client PO (po_items) so
-              the rate column is the SELLING price, not vendor cost. Mam:
-              "give option for edit" — she wants to tweak qty / rate /
-              disc % per row before the bill is generated. */}
-          <div className="border border-red-200 bg-red-50/40 rounded p-3 space-y-2">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <div className="text-[10px] font-bold uppercase text-red-700">Line Items</div>
-                <div className="text-[10px] text-gray-500">
-                  {dispatchItemsLoading ? 'Loading from Client PO…'
-                    : form.document_type === 'challan'
-                      ? 'Delivery Challan — no rate column (FOC / RGP, not billable). Uncheck items you\'re not dispatching today.'
-                      : dispatchItemsSource === 'po_items'
-                        ? <>Rate column = <strong className="text-emerald-700">BOQ SITC selling rate</strong> from Client PO. Tweak qty / disc % if needed, or uncheck rows you\'re not billing today.{dispatchRateInfo.rated < dispatchRateInfo.total && <span className="text-amber-700"> ⚠ {dispatchRateInfo.total - dispatchRateInfo.rated} of {dispatchRateInfo.total} BOQ rows have ₹0 rate — fill them in or skip.</span>}</>
-                        : dispatchItemsSource === 'indent_fallback'
-                          ? <>Pre-filled <strong>{dispatchItems.length}</strong> line(s) from the indent (qty / description / unit). <strong className="text-amber-700">Selling rates left blank</strong> — enter the SITC rate per row before saving.</>
-                          : dispatchItemsSource === 'vendor_po' ? 'No Client PO items found — falling back to Vendor PO items (vendor cost). Verify rates before saving.'
-                            : 'No items pre-filled. Add rows manually below.'}
-                </div>
-                {/* Mam (2026-05-22): two-tier warning.
-                    rate_source='rate_missing' → AMBER (form is pre-filled,
-                       just needs rates) → recoverable in seconds
-                    rate_source=null (empty)   → RED (nothing pre-filled,
-                       admin has to add rows manually) → needs more work */}
-                {form.document_type === 'sales_bill' && !dispatchItemsLoading && dispatchRateInfo.warning && (
-                  <div className={`text-[11px] rounded p-2 mt-1 ${dispatchRateInfo.source === 'rate_missing'
-                      ? 'bg-amber-50 border border-amber-300 text-amber-900'
-                      : 'bg-red-100 border border-red-300 text-red-800'
-                    }`}>
-                    {dispatchRateInfo.source === 'rate_missing'
-                      ? <>⚠ <strong>Selling rates needed.</strong> {dispatchRateInfo.warning}</>
-                      : <>❌ <strong>BOQ SITC rates missing.</strong> {dispatchRateInfo.warning}</>
-                    }
-                  </div>
-                )}
-              </div>
-              {/* "+ Add row" REMOVED on mam's instruction (2026-05-25):
-                  "dont add row because already pick according indent".
-                  Lines are auto-populated from the indent / BOQ; manual
-                  rows let users add ghost items that aren't tied to any
-                  PO line, leading to billing mistakes.  If a line really
-                  is missing, the source data (BOQ or indent) needs to be
-                  fixed — not papered over with a manual row here. */}
-            </div>
-            {/* Challan = FOC / RGP, not billable, so we hide Rate / Disc /
-                Amount columns entirely. Sales Bill keeps the full set. */}
-            <div className="overflow-x-auto -mx-3">
-              {(() => {
-                const isChallan = form.document_type === 'challan';
-                const emptyColspan = isChallan ? 6 : 9;
-                const subtotalLabelColspan = isChallan ? 5 : 7;
-                return (
-                  <table className="w-full text-[11px]">
-                    <thead className="bg-red-100/60 text-red-800 uppercase">
-                      <tr>
-                        <th className="px-1 py-1 text-center" style={{ width: '32px' }}>✓</th>
-                        <th className="px-2 py-1 text-left">Description</th>
-                        <th className="px-1 py-1 text-left" style={{ width: '70px' }}>HSN</th>
-                        <th className="px-1 py-1 text-right" style={{ width: '70px' }}>Qty</th>
-                        <th className="px-1 py-1 text-left" style={{ width: '60px' }}>UOM</th>
-                        {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '90px' }}>Rate (₹)</th>}
-                        {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '60px' }}>Disc %</th>}
-                        {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '100px' }}>Amount (₹)</th>}
-                        <th className="px-1 py-1" style={{ width: '32px' }}></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dispatchItems.length === 0 && !dispatchItemsLoading && (
-                        <tr><td colSpan={emptyColspan} className="px-2 py-3 text-center text-gray-400 italic">No line items found for this PO. Check that the source indent has BOQ-linked items.</td></tr>
-                      )}
-                      {dispatchItems.map((it, idx) => {
-                        const qty = +it.quantity || 0;
-                        const rate = +it.rate || 0;
-                        const discPct = +it.disc_pct || 0;
-                        const amount = qty * rate * (1 - discPct / 100);
-                        const update = (patch) => {
-                          setDispatchItems(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
-                        };
-                        return (
-                          <tr key={idx} className={`border-b border-red-100 ${it.include === false ? 'opacity-40 bg-gray-50' : ''}`}>
-                            <td className="px-1 py-1 text-center">
-                              <input type="checkbox" checked={it.include !== false} onChange={e => update({ include: e.target.checked })} className="w-3.5 h-3.5" />
-                            </td>
-                            <td className="px-2 py-1 align-top min-w-[240px]">
-                              {/* Description is now the INDENT-wise item name
-                              (mam 2026-06-04).  item_code chip + a readable,
-                              editable, wrapping field. */}
-                              {it.item_code && <div className="font-mono text-[9px] text-gray-500 leading-none mb-0.5">[{it.item_code}]</div>}
-                              <textarea rows={1} className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[11px] text-gray-800 font-medium resize-y leading-snug" value={it.description || ''} onChange={e => update({ description: e.target.value })} placeholder="Item / billing description" />
-                            </td>
-                            <td className="px-1 py-1">
-                              <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.hsn || ''} onChange={e => update({ hsn: e.target.value })} placeholder="HSN" />
-                            </td>
-                            <td className="px-1 py-1 text-right">
-                              <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.quantity ?? ''} onChange={e => update({ quantity: e.target.value })} />
-                            </td>
-                            <td className="px-1 py-1">
-                              <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.unit || ''} onChange={e => update({ unit: e.target.value })} placeholder="nos" />
-                            </td>
-                            {!isChallan && (
-                              <td className="px-1 py-1 text-right">
-                                <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.rate ?? ''} onChange={e => update({ rate: e.target.value })} />
-                              </td>
-                            )}
-                            {!isChallan && (
-                              <td className="px-1 py-1 text-right">
-                                <input type="number" step="0.01" min="0" max="100" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.disc_pct ?? ''} onChange={e => update({ disc_pct: e.target.value })} placeholder="0" />
-                              </td>
-                            )}
-                            {!isChallan && (
-                              <td className="px-1 py-1 text-right font-mono">{amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            )}
-                            <td className="px-1 py-1 text-center">
-                              <button type="button" className="text-red-400 hover:text-red-600 text-sm leading-none" title="Remove row" onClick={() => setDispatchItems(prev => prev.filter((_, i) => i !== idx))}>×</button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    {!isChallan && dispatchItems.some(it => it.include !== false) && (() => {
-                      // Compute live tax preview — mam (2026-05-16): "no
-                      // GST preview before save".  Subtotal × form rates,
-                      // shown right under the table so the grand total is
-                      // visible while the user is still editing items.
-                      const subtotal = dispatchItems.filter(it => it.include !== false).reduce((s, it) => {
-                        const qty = +it.quantity || 0;
-                        const rate = +it.rate || 0;
-                        const discPct = +it.disc_pct || 0;
-                        return s + qty * rate * (1 - discPct / 100);
-                      }, 0);
-                      const cgst = subtotal * (+form.cgst_pct || 0) / 100;
-                      const sgst = subtotal * (+form.sgst_pct || 0) / 100;
-                      const igst = subtotal * (+form.igst_pct || 0) / 100;
-                      const freight = +form.freight_amount || 0;
-                      const roundOff = +form.round_off_amount || 0;
-                      const grand = subtotal + cgst + sgst + igst + freight + roundOff;
-                      const fmt2 = (n) => (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      return (
-                        <tfoot>
-                          <tr className="border-t-2 border-red-300 font-semibold">
-                            <td colSpan={subtotalLabelColspan} className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
-                            <td className="px-1 py-1 text-right font-mono text-red-800">{fmt2(subtotal)}</td>
-                            <td></td>
-                          </tr>
-                          {cgst > 0 && (
-                            <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">CGST @ {form.cgst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(cgst)}</td><td></td></tr>
-                          )}
-                          {sgst > 0 && (
-                            <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">SGST @ {form.sgst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(sgst)}</td><td></td></tr>
-                          )}
-                          {igst > 0 && (
-                            <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">IGST @ {form.igst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(igst)}</td><td></td></tr>
-                          )}
-                          {freight > 0 && (
-                            <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">Freight</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(freight)}</td><td></td></tr>
-                          )}
-                          {roundOff !== 0 && (
-                            <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">Round-off</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(roundOff)}</td><td></td></tr>
-                          )}
-                          <tr className="border-t-2 border-red-400 font-extrabold bg-red-100/40">
-                            <td colSpan={subtotalLabelColspan} className="px-2 py-1.5 text-right text-red-900 text-sm">GRAND TOTAL</td>
-                            <td className="px-1 py-1.5 text-right font-mono text-red-900 text-sm">₹ {fmt2(grand)}</td>
-                            <td></td>
-                          </tr>
-                        </tfoot>
-                      );
-                    })()}
-                  </table>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* Conditional fields per document type — fed into the auto-generated
-              print page so it matches mam's SEPL Delivery Note / Sales Bill
-              templates 1:1. */}
-          {form.document_type === 'challan' && (
-            <div className="border border-sky-200 bg-sky-50/40 rounded p-3 space-y-3">
-              <div className="text-[10px] font-bold uppercase text-sky-700">Vehicle / Transport Details</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} placeholder="e.g. PB10AB1234" /></div>
-                <div><label className="label">Driver Name & Mobile</label><div className="grid grid-cols-2 gap-2"><input className="input" placeholder="Driver name" value={form.driver_name || ''} onChange={e => setForm({ ...form, driver_name: e.target.value })} /><input className="input" placeholder="Mobile" value={form.driver_mobile || ''} onChange={e => setForm({ ...form, driver_mobile: e.target.value })} /></div></div>
-                <div><label className="label">LR / Challan No.</label><input className="input" value={form.lr_challan_no || ''} onChange={e => setForm({ ...form, lr_challan_no: e.target.value })} /></div>
-                <div><label className="label">Total Packages</label><input className="input" value={form.total_packages || ''} onChange={e => setForm({ ...form, total_packages: e.target.value })} placeholder="e.g. 3 boxes + 2 bundles" /></div>
-              </div>
-            </div>
-          )}
-          {form.document_type === 'sales_bill' && (
-            <div className="border border-emerald-200 bg-emerald-50/40 rounded p-3 space-y-3">
-              <div className="text-[10px] font-bold uppercase text-emerald-700">Tax Invoice Details</div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div><label className="label">Place of Supply</label>
-                  <select className="select" value={form.place_of_supply || ''} onChange={e => {
-                    // Pick the client's state → auto-fill State Code + the
-                    // intra/inter-state GST split (Punjab=home → CGST+SGST,
-                    // else IGST). All stay editable for the odd exception.
-                    const st = e.target.value;
-                    const home = st.trim().toLowerCase() === SEPL_HOME_STATE;
-                    setForm({
-                      ...form, place_of_supply: st, state_code: gstStateCode(st),
-                      cgst_pct: home ? 9 : 0, sgst_pct: home ? 9 : 0, igst_pct: home ? 0 : 18
-                    });
-                  }}>
-                    <option value="">Select state</option>
-                    {STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div><label className="label">State Code <span className="text-gray-400 text-[10px]">(auto)</span></label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="auto from state" /></div>
-                <div><label className="label">E-Way Bill No.</label><input className="input" value={form.e_way_bill_no || ''} onChange={e => setForm({ ...form, e_way_bill_no: e.target.value })} /></div>
-                <div className="flex items-center gap-2"><input type="checkbox" id="rev_charge" checked={!!form.reverse_charge} onChange={e => setForm({ ...form, reverse_charge: e.target.checked })} className="w-4 h-4" /><label htmlFor="rev_charge" className="text-sm">Reverse Charge</label></div>
-                <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} /></div>
-              </div>
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-                <div><label className="label">CGST %</label><input className="input" type="number" min="0" step="0.01" value={form.cgst_pct || ''} onChange={e => setForm({ ...form, cgst_pct: +e.target.value })} placeholder="9" /></div>
-                <div><label className="label">SGST %</label><input className="input" type="number" min="0" step="0.01" value={form.sgst_pct || ''} onChange={e => setForm({ ...form, sgst_pct: +e.target.value })} placeholder="9" /></div>
-                <div><label className="label">IGST %</label><input className="input" type="number" min="0" step="0.01" value={form.igst_pct || ''} onChange={e => setForm({ ...form, igst_pct: +e.target.value })} placeholder="0" /></div>
-                <div><label className="label">Freight (Rs)</label><input className="input" type="number" min="0" value={form.freight_amount || ''} onChange={e => setForm({ ...form, freight_amount: +e.target.value })} /></div>
-                <div><label className="label">Round Off (Rs)</label><input className="input" type="number" step="0.01" value={form.round_off_amount || ''} onChange={e => setForm({ ...form, round_off_amount: +e.target.value })} /></div>
-              </div>
-              <p className="text-[10px] text-emerald-700">For Punjab clients: CGST 9% + SGST 9% = 18%. For other states: IGST 18%.</p>
-            </div>
-          )}
-
-          {/* Existing-document attachment is now optional + de-emphasised
-              since the SOTYN.AI itself generates the SEPL-format document.
-              Use this only if you already have a paper copy you want to
-              attach for reference. The signed copy goes in via Mark
-              Received after delivery. */}
-          <details className="text-[11px] text-gray-500">
-            <summary className="cursor-pointer hover:text-gray-700">Optionally attach an existing scan now (not required)</summary>
-            <div className="mt-2">
-              <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
-              {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
-            </div>
-          </details>
-          <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
-          <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2 text-[11px] text-blue-800">
-            On <b>Create</b>, the SOTYN.AI will generate the SEPL-format <b>{form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</b> from this PO's items and client info, and open it in a new tab ready to print. The signed copy gets uploaded later via Mark Received.
-          </div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create {form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</button></div>
-        </form>
-      </Modal>
 
       {/* Add Sales Bill modal — mam (2026-05-25): for Challan-only
           dispatches that were marked sales_bill_pending=1, this lets
           her upload the formal Sales Bill once it arrives.  Clears
           the pending flag on save. */}
-      <Modal isOpen={!!sbTarget} onClose={() => { setSbTarget(null); setSbForm({ sales_bill_number: '', file: null }); }} title={sbTarget ? `Add Sales Bill — Dispatch #${sbTarget.id}` : 'Add Sales Bill'}>
+      <Modal isOpen={!!sbTarget} onClose={() => { setSbTarget(null); setSbForm({ sales_bill_number: '', file: null }); }} title={sbTarget ? `Upload Tally Bill — ${sbTarget.document_number || '#' + sbTarget.id}` : 'Upload Tally Bill'}>
         {sbTarget && (
           <div className="space-y-4">
             <div className="text-xs bg-amber-50 border border-amber-200 rounded p-3">
-              <div className="font-semibold text-amber-800 mb-1">📋 Sales Bill pending — adding now</div>
+              <div className="font-semibold text-amber-800 mb-1">Upload the sales bill prepared in Tally</div>
               <div className="text-amber-700 grid grid-cols-2 gap-1">
                 <div><span className="text-gray-500">Dispatch:</span> <b>{sbTarget.document_number || '#' + sbTarget.id}</b></div>
                 <div><span className="text-gray-500">PO:</span> <b>{sbTarget.vendor_po_number || '—'}</b></div>
@@ -8809,7 +7626,7 @@ export default function Procurement() {
                 onChange={(e) => setSbForm(f => ({ ...f, sales_bill_number: e.target.value }))} />
             </div>
             <div>
-              <label className="label">Sales Bill File <span className="text-gray-400 text-[10px] font-normal">(optional · PDF / image / xlsx)</span></label>
+              <label className="label">Tally Sales Bill File <span className="text-red-600">*</span></label>
               <input type="file" className="input"
                 accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
                 onChange={(e) => setSbForm(f => ({ ...f, file: e.target.files?.[0] || null }))} />
@@ -8817,8 +7634,8 @@ export default function Procurement() {
             </div>
             <div className="flex justify-end gap-3 pt-2 border-t">
               <button type="button" onClick={() => { setSbTarget(null); setSbForm({ sales_bill_number: '', file: null }); }} className="btn btn-secondary">Cancel</button>
-              <button type="button" onClick={submitSalesBill} disabled={sbSaving || !sbForm.sales_bill_number.trim()} className="btn btn-primary">
-                {sbSaving ? 'Saving…' : 'Add Sales Bill'}
+              <button type="button" onClick={submitSalesBill} disabled={sbSaving || !sbForm.sales_bill_number.trim() || !sbForm.file} className="btn btn-primary">
+                {sbSaving ? 'Uploading…' : 'Upload Tally Bill'}
               </button>
             </div>
           </div>
@@ -9062,23 +7879,9 @@ export default function Procurement() {
             {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
             <p className="text-[10px] text-gray-400 mt-0.5">On mobile, tapping this opens the camera directly — take the photo of the stamped sales bill / challan.</p>
           </div>
-          {/* Sales Bill pending — mam (2026-05-25): "rec is against some
-              time delivery note so can upload but show sales bill is
-              pending".  Lets mam mark "the receipt I'm uploading is the
-              DN — Sales Bill is still coming".  Adds the amber chip
-              "📋 SB PENDING" to the dispatch row + enables the "Add
-              Sales Bill" button once the SB arrives. */}
-          {form.receive_document_type !== 'sales_bill' && <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
-            <input type="checkbox" className="mt-0.5"
-              checked={!!form.sales_bill_pending}
-              onChange={(e) => setForm({ ...form, sales_bill_pending: e.target.checked })} />
-            <span>
-              <span className="font-semibold text-amber-800">Sales Bill is pending</span>
-              <span className="text-amber-700 block mt-0.5">
-                Billable PO items remain Sales Bill Pending after receiving. Create the Sales Bill later from this challan; receiving proof stays on the same delivery.
-              </span>
-            </span>
-          </label>}
+          <p className="text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-800">
+            This saves receiving proof against the challan. Sales-bill status changes only when the Tally bill is uploaded.
+          </p>
           {/* Optional inventory link — pick a warehouse to auto-add the
               vendor PO's items as stock. Leave blank to skip. */}
           {warehouses.length > 0 && (
