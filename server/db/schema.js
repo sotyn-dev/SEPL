@@ -7560,6 +7560,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('./dailyWork').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
   require('../lib/deliveryReceipts').initialize(db);
+  require('../lib/indentHelp').initialize(db);
   require('./complianceSchema').initializeComplianceSchema(db);
 
   console.log('Database initialized successfully');

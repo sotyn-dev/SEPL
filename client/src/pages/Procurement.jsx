@@ -18,6 +18,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import IndentHelp from '../components/IndentHelp';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLoader } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
@@ -294,7 +295,7 @@ export default function Procurement() {
   // deep link to ?tab=payment silently fell back to 'indents' — the Payment
   // tab could not be linked to, and an Export there exported indents
   // (mam 2026-09-03).
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'tallybill', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'tallybill', 'delivery', 'debitnotes', 'pipeline', 'responsible', 'indenthelp'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -2434,6 +2435,7 @@ export default function Procurement() {
     // Per-record RACI / SLA "Responsible" board for the indent→dispatch flow,
     // right where the purchase team works (mam 2026-06-29: "where is RACI?").
     { id: 'responsible', label: '⚙ Responsible', show: canPurchaseOps },
+    { id: 'indenthelp', label: 'Indent Help', show: canView('procurement') || isAdmin() },
   ];
   const tabs = allTabs.filter(t => t.show);
 
@@ -2674,7 +2676,7 @@ export default function Procurement() {
               );
             })}
           </nav>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className={tab === 'indenthelp' ? 'hidden' : 'flex flex-wrap items-center justify-end gap-2'}>
             {/* One Export button — exports current tab's data */}
             <button onClick={() => {
               if (tab === 'indents') {
@@ -2812,6 +2814,7 @@ export default function Procurement() {
       <ApprovalSettingsModal open={approvalSettingsOpen} onClose={() => setApprovalSettingsOpen(false)} />
 
       {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
+      {tab === 'indenthelp' && <IndentHelp user={user} />}
 
       {/* ─── TALLY BILL tab (mam 2026-09-12) ───
           Only the indents that carry a delivery bill: the billable amount, the

@@ -33,6 +33,7 @@ const normUnit = (u) => {
 const router = express.Router();
 const { makeDeliveryBillResolver } = require('../lib/indentDeliveryBill');
 router.use(authMiddleware);
+router.use('/indent-help', require('./indentHelp')({ canSeeAllIndents }));
 
 // Build the merge context for an indent email event (mam 2026-06-03 email
 // triggers). Resolves the dynamic recipient emails (raiser / CRM owner /
