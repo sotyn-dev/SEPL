@@ -7,6 +7,7 @@ import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import DispatchDocuments from '../components/DispatchDocuments';
+import DeliveryReceivingModal from '../components/DeliveryReceivingModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
@@ -461,7 +462,7 @@ export default function Procurement() {
   // openReceivePo) — each entry: {vpi_id, description, ordered_qty,
   // received_qty (editable), short_reason (editable), unit, item_code,
   // master_name, make}.
-  const [receiveItems, setReceiveItems] = useState([]);
+  const [receiveTarget, setReceiveTarget] = useState(null);
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
   // PPE Kit category — inline "item not in the list" quick-add. Creates the
   // item in Item Master (type=PPE_KIT) on the spot and drops it straight
@@ -2407,93 +2408,6 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-
-  // Mark a dispatch row as "Received by <name> on <date>" + attach the
-  // stamped/signed receipt photo. Multipart so the file rides along.
-  const markReceived = async (e) => {
-    e.preventDefault();
-    if (!form.received_by_name || !form.received_by_name.trim()) return toast.error('Receiver name is required');
-    if (!form.receipt_file) return toast.error('Receipt proof photo is required — attach the stamped + signed document');
-
-    // Receiving a Ready-to-Dispatch PO directly (mam 2026-05-30: "show
-    // ready POs here + upload receiving"). No dispatch record exists yet,
-    // so create a Challan dispatch first with an AUTO-generated DC number
-    // (sales_bill_pending=1 — office adds the formal Sales Bill later),
-    // then mark THAT received with the uploaded proof.
-    let receiveId = form.receive_id;
-    if (!receiveId && form.receive_po_id) {
-      try {
-        const fd0 = new FormData();
-        fd0.append('vendor_po_id', form.receive_po_id);
-        fd0.append('document_type', 'challan');                 // blank doc# → server auto-generates DC/YYYY/####
-        fd0.append('delivery_date', new Date().toISOString().slice(0, 10));
-        fd0.append('sales_bill_pending', '1');
-        const dn = await api.post('/procurement/delivery-notes', fd0, { headers: { 'Content-Type': 'multipart/form-data' } });
-        receiveId = dn.data?.id;
-        // Remember the DN we just created: if the receive below fails (e.g.
-        // the SPOS late-delivery 400 asking for a reason), the retry must
-        // reuse THIS challan — not mint a duplicate (audit 2026-07-31).
-        setForm(f => ({ ...f, receive_id: receiveId }));
-      } catch (err) { return toast.error(err.response?.data?.error || 'Could not create dispatch record'); }
-    }
-    if (!receiveId) return toast.error('No dispatch to receive against');
-
-    const fd = new FormData();
-    fd.append('received_by_name', form.received_by_name);
-    if (form.received_at) fd.append('received_at', form.received_at);
-    // SPOS: reason for delay — server rejects a late receive without one
-    // (only when the PO carries an expected delivery date).
-    if (form.delay_reason && form.delay_reason.trim()) fd.append('delay_reason', form.delay_reason.trim());
-    if (form.receipt_file) fd.append('file', form.receipt_file);
-    // Optional inventory hook — when mam picks a warehouse, the linked
-    // vendor PO's items auto-land as stock IN at that warehouse on the
-    // server side. Skipped silently if no warehouse selected.
-    if (form.warehouse_id) fd.append('warehouse_id', form.warehouse_id);
-    // sales_bill_pending — mam (2026-05-25): flag at receipt time so the
-    // dispatch shows the amber "📋 SB PENDING" chip until SB is uploaded.
-    if (form.sales_bill_pending) fd.append('sales_bill_pending', '1');
-    // Per-line received qty + short reason (mam 2026-06-02).  Server
-    // persists this to delivery_notes.items_json AND uses received_qty
-    // (not ordered) for the stock-IN amount, so a 10-ordered/9-received
-    // PO only adds 9 to inventory.  Drop empty manual rows (no
-    // description AND no qty) so the seeded blank row doesn't pollute
-    // the payload if mam didn't fill it in.
-    if (Array.isArray(receiveItems) && receiveItems.length > 0) {
-      const filtered = receiveItems.filter(it => {
-        const hasText = (it.description || '').trim().length > 0;
-        const hasQty = (+it.ordered_qty > 0) || (+it.received_qty > 0);
-        return hasText || hasQty;
-      });
-      if (filtered.length > 0) {
-        const payload = filtered.map(it => ({
-          vendor_po_item_id: it.vpi_id,
-          ordered_qty: +it.ordered_qty || 0,
-          received_qty: +it.received_qty || 0,
-          short_reason: it.short_reason || null,
-          description: it.description || null,
-        }));
-        fd.append('items_received', JSON.stringify(payload));
-      }
-    }
-    try {
-      const r = await api.patch(`/procurement/delivery-notes/${receiveId}/receive`, fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const ins = r.data?.stock_ins || 0;
-      // Count short receipts so mam sees them in the toast — useful audit cue.
-      const shortLines = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
-      const shortNote = shortLines > 0 ? ` · ${shortLines} short` : '';
-      toast.success(ins > 0
-        ? `Marked as received · ${ins} item${ins === 1 ? '' : 's'} added to stock${shortNote}`
-        : `Marked as received${shortNote}`);
-      const ad = r.data?.auto_debit;
-      if (ad) toast.success(`Auto short-supply debit ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} raised — see Debit Notes`, { duration: 6000 });
-
-      setModal(false);
-      setReceiveItems([]);
-      load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
 
   // Order matches the flow: raise an indent first, purchase team collects
   // 3 vendor quotes + finalizes per item, then turns it into a vendor PO,
@@ -5965,124 +5879,15 @@ export default function Procurement() {
             toast.success('Delivery challan created'); load();
           } catch (err) { toast.error(err.response?.data?.error || 'Could not create challan'); }
         };
-        // Helper — fetch the items on the linked vendor PO so mam can
-        // adjust received qty per line in the modal (mam 2026-06-02:
-        // "delivery note item of qty 10 but when erec its 9" +
-        // "item wise not showing" → console.warn + indent fallback +
-        // "by deault pick which items in delivery note" → when nothing
-        // comes back, seed ONE blank manual row so mam can just start
-        // typing instead of clicking "+ Add Item" first).
-        const blankManualRow = () => ({
-          vpi_id: `manual-${Date.now()}-0`,
-          description: '',
-          master_name: '',
-          item_code: '',
-          specification: '',
-          size: '',
-          unit: '',
-          ordered_qty: 0,
-          received_qty: 0,
-          short_reason: '',
-        });
-        const loadReceiveItems = async (vendorPoId) => {
-          if (!vendorPoId) { setReceiveItems([blankManualRow()]); return; }
+        const openReceivePo = async po => {
           try {
-            // Mam (2026-06-02): "only qty show but editable like if
-            // challan then show same items".  Source items from the
-            // SAME endpoint that drives the printed Delivery Note PDF
-            // (/vendor-po/:id/delivery-note-data) — guarantees the
-            // modal shows exactly the rows mam sees on the challan
-            // she's holding.  Description / unit / qty are locked;
-            // only Received qty (and Short reason on shortage) edit.
-            const r = await api.get(`/procurement/vendor-po/${vendorPoId}/delivery-note-data`);
-            const raw = r.data?.items || [];
-            if (raw.length === 0) {
-              console.warn(`[receive-items] PO ${vendorPoId} delivery-note-data returned 0 items — seeding 1 blank manual row.`);
-              setReceiveItems([blankManualRow()]);
-              return;
-            }
-            const items = raw.map(it => ({
-              vpi_id: it.id,
-              description: it.description || it.master_name || '—',
-              master_name: it.description || '',  // DN uses 'description' as primary label
-              item_code: it.item_code || '',
-              specification: it.specification || '',
-              size: it.size || '',
-              make: it.make || '',
-              unit: it.uom || '',
-              hsn: it.hsn_code || it.gst_text || '',
-              ordered_qty: +it.quantity || 0,
-              received_qty: +it.quantity || 0,   // defaults to full delivery
-              short_reason: '',
-            }));
-            setReceiveItems(items);
-          } catch (err) {
-            console.error('[receive-items] delivery-note-data fetch failed:', err?.response?.status, err?.message);
-            // Even on fetch failure, seed a blank row so mam isn't blocked.
-            setReceiveItems([blankManualRow()]);
-          }
-        };
-
-        // Build receive rows from a delivery note's own items_json. Used for
-        // from-store challans / Sales Bills (mam 2026-06-06: "items not show")
-        // — they have no Vendor PO, so loadReceiveItems(vendor_po_id) came up
-        // empty and seeded a blank row. Their lines live in items_json
-        // ({description, qty|quantity, unit, rate, ...}).
-        const loadReceiveItemsFromJson = (itemsJson) => {
-          let arr = [];
-          try { arr = JSON.parse(itemsJson || '[]') || []; } catch (_) {}
-          if (!Array.isArray(arr) || arr.length === 0) { setReceiveItems([blankManualRow()]); return; }
-          setReceiveItems(arr.map(it => {
-            const qty = Number(it.qty ?? it.quantity ?? it.received_qty ?? it.ordered_qty ?? 0);
-            return {
-              vpi_id: it.vendor_po_item_id || null,
-              description: it.description || it.master_name || '—',
-              master_name: it.description || '',
-              item_code: it.item_code || '',
-              specification: it.specification || '',
-              size: it.size || '',
-              make: it.make || '',
-              unit: it.unit || it.uom || '',
-              hsn: it.hsn || it.hsn_code || '',
-              ordered_qty: qty,
-              received_qty: qty,
-              short_reason: '',
-            };
-          }));
-        };
-
-        const openMarkReceived = (d) => {
-          setForm({
-            receive_id: d.id,
-            receive_document_type: d.document_type,
-            receive_vendor_po_id: d.vendor_po_id,
-            receive_doc: `${d.document_type === 'challan' ? 'Challan' : 'Sales Bill'} ${d.document_number || '#' + d.id}`,
-            received_by_name: '',
-            received_at: new Date().toISOString().slice(0, 10),
-          });
-          setReceiveItems([]);
-          // From-store (no PO) → read lines from the note's items_json;
-          // PO-linked → pull from the PO's delivery-note-data as before.
-          if (d.items_json && d.items_json !== '[]') loadReceiveItemsFromJson(d.items_json);
-          else if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
-          else loadReceiveItemsFromJson(d.items_json);
-          setModal('receive');
-        };
-        // Upload receiving for a Ready-to-Dispatch PO directly (no dispatch
-        // doc yet). The receive modal collects the receiver + signed proof;
-        // markReceived() auto-creates the Challan dispatch (auto DC number)
-        // then records the receipt against it.
-        const openReceivePo = (po) => {
-          setForm({
-            receive_po_id: po.id,
-            receive_vendor_po_id: po.id,
-            receive_doc: `${po.po_number}${po.vendor_name ? ' · ' + po.vendor_name : ''}`,
-            received_by_name: '',
-            received_at: new Date().toISOString().slice(0, 10),
-          });
-          setReceiveItems([]);
-          loadReceiveItems(po.id);
-          setModal('receive');
+            const form = new FormData(); form.append('vendor_po_id',po.id); form.append('document_type','challan');
+            const created = await api.post('/procurement/delivery-notes',form);
+            const result = await api.get('/procurement/delivery-notes');
+            const row = result.data.find(d => d.id === created.data.id);
+            if (!row) throw new Error('Challan not found');
+            setReceiveTarget(row); load();
+          } catch (error) { toast.error(error.response?.data?.error || 'Could not open receiving'); }
         };
         return <DispatchDocuments
           rows={dispListPg.rows} loading={dispListLoading} pagination={dispListPg} setPerPage={setDispListPerPage}
@@ -6092,7 +5897,7 @@ export default function Procurement() {
             setters[field](value); setDispListPage(1);
           }}
           canUpload={canApprove('procurement') || isAdmin()}
-          onSalesBill={openSalesBillUpload} onReceive={openMarkReceived}
+          onSalesBill={openSalesBillUpload} onReceive={setReceiveTarget}
           onPrint={async row => {
             const printWin = window.open('', '_blank');
             try {
@@ -7642,266 +7447,8 @@ export default function Procurement() {
         )}
       </Modal>
 
-      {/* Mark Received Modal — captures who received the dispatch AND the
-          client's stamped + signed receipt photo as proof of delivery. This
-          receipt is critical for mam because without it clients sometimes
-          deny receiving the material and SEPL has to absorb the loss. */}
-      <Modal isOpen={modal === 'receive'} onClose={() => { setModal(false); setReceiveItems([]); }} title="Mark Received" wide>
-        <form onSubmit={markReceived} className="space-y-3">
-          <div className="bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-xs text-indigo-700">
-            Recording receipt for <b>{form.receive_doc}</b>.
-          </div>
-          {/* Per-line received qty (mam 2026-06-02: "according to
-              delivery note all items and qty show here may delivery
-              note item of qty 10 but when erec its 9").  Editable
-              received qty + optional short reason per item.  Section
-              always renders so mam can see whether items loaded or
-              not (mam follow-up: "item wise not showing"). */}
-          <div className="border border-gray-200 rounded-lg overflow-hidden">
-            <div className="flex items-center justify-between bg-gray-50 px-3 py-2 border-b border-gray-200">
-              <span className="text-xs font-semibold text-gray-700">Items received <span className="text-gray-400 font-normal">({receiveItems.length})</span></span>
-              {receiveItems.length > 0 && (() => {
-                const short = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
-                return short > 0
-                  ? <span className="text-[10px] font-bold text-amber-700">⚠ {short} short line{short === 1 ? '' : 's'}</span>
-                  : <span className="text-[10px] text-emerald-700">Full delivery</span>;
-              })()}
-            </div>
-            {/* Add-item helper — footer "+ Add another" button.  Pushes
-                a manual row with synthetic vpi_id so the backend
-                stock-IN fallback kicks in.  Empty-state CTA dropped
-                since loadReceiveItems() now always seeds at least 1
-                row (mam 2026-06-02: "by deault pick which items in
-                delivery note"). */}
-            {receiveItems.length > 0 && (
-              <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/40 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setReceiveItems(prev => [
-                    ...prev,
-                    {
-                      vpi_id: `manual-${Date.now()}-${prev.length}`,
-                      description: '',
-                      master_name: '',
-                      item_code: '',
-                      specification: '',
-                      size: '',
-                      unit: '',
-                      ordered_qty: 0,
-                      received_qty: 0,
-                      short_reason: '',
-                    },
-                  ])}
-                  className="text-xs text-blue-700 font-semibold flex items-center gap-1 hover:underline"
-                >
-                  <FiPlus size={11} /> Add another item
-                </button>
-              </div>
-            )}
-            {receiveItems.length > 0 && (
-              <>
-                <div className="overflow-x-auto">
-                  <table className="text-xs w-full">
-                    <thead className="bg-gray-50 text-gray-600">
-                      <tr>
-                        <th className="text-left px-2 py-1 w-8">#</th>
-                        <th className="text-left px-2 py-1">Item</th>
-                        <th className="text-right px-2 py-1 w-20">Ordered</th>
-                        <th className="text-right px-2 py-1 w-24">Received</th>
-                        <th className="text-left px-2 py-1 w-12">Unit</th>
-                        <th className="text-left px-2 py-1">Short reason</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {receiveItems.map((it, idx) => {
-                        const isShort = +it.received_qty < +it.ordered_qty;
-                        // Mam (2026-06-02): manual rows have no vpi_id —
-                        // their description + unit are editable so mam
-                        // can type "MS PIPE 25mm · qty 10" when the PO
-                        // doesn't pre-link items.  Auto-linked rows lock
-                        // those fields (display only).
-                        const isManual = !it.vpi_id || String(it.vpi_id).startsWith('manual-');
-                        return (
-                          <tr key={it.vpi_id || `manual-${idx}`} className={`border-b border-gray-100 ${isShort ? 'bg-amber-50/30' : ''}`}>
-                            <td className="px-2 py-1.5 text-gray-500">{idx + 1}</td>
-                            <td className="px-2 py-1.5">
-                              {isManual ? (
-                                <input
-                                  type="text"
-                                  className="input text-xs py-1 px-2 w-full"
-                                  placeholder="e.g. MS PIPE / C CLASS / 25mm"
-                                  value={it.description}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, description: v } : r));
-                                  }}
-                                />
-                              ) : (
-                                <>
-                                  {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}] </span>}
-                                  <span className="font-medium">{it.master_name || it.description}</span>
-                                  {(it.specification || it.size) && (
-                                    <div className="text-[10px] text-gray-500">{[it.size, it.specification].filter(Boolean).join(' / ')}</div>
-                                  )}
-                                </>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5 text-right">
-                              {isManual ? (
-                                <NumInput
-                                  step="any" min="0"
-                                  value={it.ordered_qty}
-                                  onChange={(v) => {
-                                    const ord = Math.max(0, +v || 0);
-                                    setReceiveItems(prev => prev.map((r, i) => i === idx
-                                      ? { ...r, ordered_qty: ord, received_qty: Math.min(ord, +r.received_qty || ord) }
-                                      : r));
-                                  }}
-                                  className="border border-gray-300 rounded px-2 py-1 w-16 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                                />
-                              ) : (
-                                <span className="text-gray-700 font-medium">{it.ordered_qty}</span>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <NumInput
-                                step="any" min="0" max={isManual ? undefined : it.ordered_qty}
-                                value={it.received_qty}
-                                onChange={(v) => {
-                                  const max = isManual ? Infinity : +it.ordered_qty;
-                                  const clamped = Math.max(0, Math.min(max, +v || 0));
-                                  setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, received_qty: clamped } : r));
-                                }}
-                                className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${isShort ? 'border-amber-400 bg-amber-50 text-amber-800 font-semibold' : 'border-gray-300 focus:border-emerald-500'}`}
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              {isManual ? (
-                                <input
-                                  type="text"
-                                  className="input text-xs py-1 px-2 w-14"
-                                  placeholder="kg / m / nos"
-                                  value={it.unit}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, unit: v } : r));
-                                  }}
-                                />
-                              ) : (
-                                <span>{it.unit || '—'}</span>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <div className="flex items-center gap-1">
-                                <input
-                                  className="input text-xs py-1 px-2 flex-1"
-                                  placeholder={isShort ? 'damaged / short / etc.' : '— (no shortage)'}
-                                  value={it.short_reason}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, short_reason: v } : r));
-                                  }}
-                                  disabled={!isShort}
-                                />
-                                {isManual && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setReceiveItems(prev => prev.filter((_, i) => i !== idx))}
-                                    className="text-red-500 hover:text-red-700 p-1"
-                                    title="Remove this row"
-                                  >
-                                    <FiTrash2 size={11} />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="bg-gray-50/60 px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-100">
-                  Tip: lower the Received qty if the delivery is short. Short lines turn amber and unlock the reason field.
-                </div>
-              </>
-            )}
-          </div>
-          <div>
-            <label className="label">Received By (name) *</label>
-            {/* Mam (2026-06-02): "receiver name in drop down with search".
-                Native <datalist> combobox — mam picks from the employee
-                list with autocomplete-as-she-types, OR types a custom
-                name for external receivers (customer rep, sub-contractor,
-                anyone not in HR). Works on iPhone Safari too. */}
-            <input
-              className="input"
-              list="receive-by-suggestions"
-              placeholder="Type name or pick from list…"
-              value={form.received_by_name || ''}
-              onChange={e => setForm({ ...form, received_by_name: e.target.value })}
-              required
-            />
-            <datalist id="receive-by-suggestions">
-              {(employees || []).map(emp => (
-                <option key={emp.id} value={emp.name}>
-                  {emp.role ? `${emp.role}` : ''}{emp.email ? ` · ${emp.email}` : ''}
-                </option>
-              ))}
-            </datalist>
-            <p className="text-[10px] text-gray-400 mt-0.5">
-              Start typing to filter SEPL staff, or type any name for an external receiver.
-            </p>
-          </div>
-          <div>
-            <label className="label">Received On</label>
-            <input className="input" type="date" value={form.received_at || ''} onChange={e => setForm({ ...form, received_at: e.target.value })} />
-            <p className="text-[10px] text-gray-400 mt-0.5">Defaults to today if left blank.</p>
-          </div>
-          {/* SPOS (mam 2026-07-29): late arrivals need a logged reason. The
-              server blocks a late receive (vs the PO's expected delivery
-              date) until a reason is on record. */}
-          <div>
-            <label className="label">Reason for delay <span className="text-gray-400 font-normal">(required only if arriving after the PO's expected delivery date)</span></label>
-            <textarea className="input" rows="2" placeholder="e.g. Vendor production hold-up / transporter strike / payment released late…"
-              value={form.delay_reason || ''}
-              onChange={e => setForm({ ...form, delay_reason: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">Receipt Proof * <span className="text-red-500 font-normal">(stamped + signed photo — prevents client denial disputes)</span></label>
-            <input
-              className="input"
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
-              required
-              onChange={e => setForm({ ...form, receipt_file: e.target.files?.[0] || null })}
-            />
-            {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
-            <p className="text-[10px] text-gray-400 mt-0.5">On mobile, tapping this opens the camera directly — take the photo of the stamped sales bill / challan.</p>
-          </div>
-          <p className="text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-800">
-            This saves receiving proof against the challan. Sales-bill status changes only when the Tally bill is uploaded.
-          </p>
-          {/* Optional inventory link — pick a warehouse to auto-add the
-              vendor PO's items as stock. Leave blank to skip. */}
-          {warehouses.length > 0 && (
-            <div>
-              <label className="label">Add to Inventory at Warehouse <span className="text-gray-400 font-normal">(optional)</span></label>
-              <select className="select" value={form.warehouse_id || ''} onChange={e => setForm({ ...form, warehouse_id: e.target.value })}>
-                <option value="">— don't add to stock (manual entry later) —</option>
-                {warehouses.filter(w => w.active).map(w => (
-                  <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
-                ))}
-              </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">If selected, every item from this vendor PO automatically lands in that warehouse with the PO rate. Skip if you'll record stock manually in Inventory.</p>
-            </div>
-          )}
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => { setModal(false); setReceiveItems([]); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Mark as Received</button>
-          </div>
-        </form>
-      </Modal>
+      {receiveTarget && <DeliveryReceivingModal key={receiveTarget.id} row={receiveTarget} employees={employees || []} warehouses={warehouses}
+        onClose={() => setReceiveTarget(null)} onSaved={() => { setReceiveTarget(null); load(); }} />}
 
       {/* Finalize Rate Modal — Step 2 of the item-wise rate flow */}
       <Modal isOpen={!!finalModal} onClose={() => { setFinalModal(null); setFinalForm({}); }} title={finalModal ? `Finalize — ${finalModal.description?.slice(0, 60) || 'Item'}` : 'Finalize'}>

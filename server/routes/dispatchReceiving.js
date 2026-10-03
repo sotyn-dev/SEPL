@@ -62,7 +62,12 @@ router.get('/', requirePermission('procurement', 'view'), (req, res) => {
     LEFT JOIN users au ON au.id=r.approved_by
     LEFT JOIN users eu ON eu.id=r.updated_by
     ORDER BY r.id DESC`).all();
-  res.json(rows.map(r => ({ ...r, approver_names: approverNames, can_approve: approver && r.status === 'pending' })));
+  res.json(rows.map(r => {
+    const receipt = r.delivery_receipt_id ? db.prepare('SELECT files_json,items_json,received_at FROM delivery_receipts WHERE id=?').get(r.delivery_receipt_id) : null;
+    return { ...r, receiving_files: receipt ? JSON.parse(receipt.files_json) : [r.receiving_url],
+      receiving_items: receipt ? JSON.parse(receipt.items_json) : [], received_at: receipt?.received_at,
+      approver_names: approverNames, can_approve: approver && r.status === 'pending' };
+  }));
 });
 
 router.post('/', requirePermission('procurement', 'create'), async (req, res, next) => {
@@ -89,6 +94,22 @@ router.put('/:id', requirePermission('procurement', 'create'), async (req, res, 
     const db = getDb();
     const row = db.prepare('SELECT * FROM dispatch_receiving WHERE id=?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Receiving not found' });
+    if (row.delivery_receipt_id) {
+      if (normalize(req.body.site) !== normalize(row.site_name) || String(req.body.indent_number || '').trim() !== row.indent_number || String(req.body.bill_number || '').trim() !== row.bill_number) {
+        return res.status(400).json({ error: 'This receiving is linked to a challan. Its site, indent and bill must stay linked; you can correct the proof here.' });
+      }
+      const url = req.body.receiving_url || row.receiving_url;
+      if (!(await validProof(url))) return res.status(400).json({ error: 'Upload a valid receiving image or PDF.' });
+      db.transaction(() => {
+        const receipt = db.prepare('SELECT files_json FROM delivery_receipts WHERE id=?').get(row.delivery_receipt_id);
+        const files = [...new Set([url, ...JSON.parse(receipt.files_json)])];
+        db.prepare('UPDATE delivery_receipts SET files_json=? WHERE id=?').run(JSON.stringify(files),row.delivery_receipt_id);
+        db.prepare(`UPDATE dispatch_receiving SET receiving_url=?,status='pending',approved_by=NULL,approved_at=NULL,
+          rejected_reason=NULL,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(url,req.user.id,row.id);
+      })();
+      notifyApprovers(db, db.prepare('SELECT * FROM dispatch_receiving WHERE id=?').get(row.id), req.user, 'Edited');
+      return res.json({ message: 'Proof updated — receiving sent for approval again' });
+    }
     const f = readFields(db, req.body);
     if (f.error) return res.status(400).json({ error: f.error });
     let url = row.receiving_url;

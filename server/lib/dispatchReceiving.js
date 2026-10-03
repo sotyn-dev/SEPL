@@ -42,6 +42,7 @@ function initialize(db) {
   addColumn('rejected_reason', 'rejected_reason TEXT');
   addColumn('updated_by', 'updated_by INTEGER REFERENCES users(id)');
   addColumn('updated_at', 'updated_at TEXT');
+  addColumn('delivery_receipt_id', 'delivery_receipt_id INTEGER');
 }
 
 // A Business Book lead's site name: its project, else its company, else its

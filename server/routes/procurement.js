@@ -5883,8 +5883,10 @@ router.get('/delivery-notes', (req, res) => {
     rows = rows.filter(row => row.receiving_status === receiving);
   }
   if (bill_status && bill_status !== 'all') rows = rows.filter(row => row.sales_bill_status === bill_status);
-  if (from) rows = rows.filter(row => row.received_at && String(row.received_at).slice(0, 10) >= from);
-  if (to) rows = rows.filter(row => row.received_at && String(row.received_at).slice(0, 10) <= to);
+  if (from || to) rows = rows.filter(row => (row.receiving_documents || []).some(receipt => {
+    const date = String(receipt.received_at || '').slice(0,10);
+    return date && (!from || date >= from) && (!to || date <= to);
+  }));
   const query = String(q || search || '').trim().toLowerCase();
   if (query) rows = rows.filter(row => [row.document_number, row.vendor_po_number, row.site_name, row.company_name,
     row.indent_number, row.stock_issue_number, row.from_warehouse_name, row.source === 'store' ? 'From Store' : '',
@@ -6208,296 +6210,54 @@ router.put('/delivery-notes/:id/rates', needsApprove, (req, res) => {
   res.status(409).json({ error: 'Sales bills are prepared in Tally. Upload the corrected file.' });
 });
 
-// Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
-// signed receipt photo as proof. Mam flagged this as business-critical: without
-// the signed proof, clients sometimes deny receipt and SEPL eats the loss.
-// Multipart so the receipt photo can ride along with the metadata.
-router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single('file'), (req, res) => {
-  const b = req.body || {};
-  const received_by_name = b.received_by_name;
-  const received_at = b.received_at;
-  if (!received_by_name || !String(received_by_name).trim()) {
-    return res.status(400).json({ error: 'Received-by name is required' });
-  }
-  if (!req.file) {
-    return res.status(400).json({ error: 'Receipt proof photo is required — attach the stamped + signed document' });
-  }
-  const db = getDb();
-  const existing = db.prepare('SELECT id, vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
-
-  // SPOS late-delivery rule (mam 2026-07-29): when material lands AFTER the
-  // PO's expected date, a delay reason must be on record — either sent with
-  // this receive or already logged on the PO from the pipeline view. Old POs
-  // with no expected date are exempt (nothing to be late against).
-  // IST business date (audit 2026-07-31: UTC misjudged 00:00–05:30 IST).
-  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const istToday = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}-${String(istNow.getDate()).padStart(2, '0')}`;
-  if (received_at && String(received_at).slice(0, 10) > istToday) {
-    return res.status(400).json({ error: 'Received-on date cannot be in the future.' });
-  }
-  if (existing.vendor_po_id) {
-    const vp = db.prepare('SELECT expected_receipt_date, delay_reason FROM vendor_pos WHERE id=?').get(existing.vendor_po_id);
-    const receiveDate = (received_at ? String(received_at) : istToday).slice(0, 10);
-    const sentReason = String(b.delay_reason || '').trim();
-    if (vp?.expected_receipt_date && receiveDate > vp.expected_receipt_date && !sentReason && !vp.delay_reason) {
-      const daysLate = Math.round((new Date(receiveDate) - new Date(vp.expected_receipt_date)) / 86400000);
-      return res.status(400).json({
-        error: `Material is ${daysLate} day(s) later than the expected delivery (${vp.expected_receipt_date}) — enter the Reason for delay before marking received (SPOS rule).`,
-        needs_delay_reason: true, days_late: daysLate, expected_receipt_date: vp.expected_receipt_date,
-      });
-    }
-    if (sentReason) {
-      db.prepare('UPDATE vendor_pos SET delay_reason=?, delay_reason_by=?, delay_reason_at=CURRENT_TIMESTAMP WHERE id=?')
-        .run(sentReason, req.user.id, existing.vendor_po_id);
-    }
-  }
-
-  // Rename + persist the uploaded receipt photo under /uploads
-  let receiptPath = null;
-  if (req.file) {
-    try {
-      const safeName = (req.file.originalname || 'receipt').replace(/[^a-zA-Z0-9._-]/g, '_');
-      const newName = `${Date.now()}-${safeName}`;
-      const newPath = path.join(path.dirname(req.file.path), newName);
-      fs.renameSync(req.file.path, newPath);
-      receiptPath = `/uploads/${newName}`;
-    } catch (e) {
-      receiptPath = `/uploads/${req.file.filename}`;
-    }
-  }
-
-  // Optional inventory hook — if mam picked a warehouse_id, the items
-  // from the linked vendor_po auto-land as stock IN. Skipped silently if
-  // no warehouse selected (legacy behavior).
-  const warehouseId = b.warehouse_id ? +b.warehouse_id : null;
-
-  // Receiving cannot clear billing or create an invoice. Only an uploaded
-  // sales-bill file completes billing; ignore any client-supplied pending flag.
-  const workflow = getDispatchDocuments(db).find(row => row.id === +req.params.id);
-  const sbPendingFlag = workflow?.sales_bill_status === 'pending' ? 1 : 0;
-
-  // Mam (2026-06-02): "according to delivery note all items and qty
-  // show here may delivery note item of qty 10 but when erec its 9".
-  // The receive form now sends `items_received` — a JSON array per
-  // line with { vendor_po_item_id, ordered_qty, received_qty,
-  // short_reason }.  We persist it to delivery_notes.items_json for
-  // the audit trail (claim vs received) AND use received_qty as the
-  // stock-IN amount instead of vendor_po_items.quantity, so partial
-  // receipts (delivery short by 1) don't over-credit inventory.
-  let itemsReceivedJson = null;
-  let itemsReceivedArr = null;
-  if (b.items_received) {
-    try {
-      const raw = typeof b.items_received === 'string' ? JSON.parse(b.items_received) : b.items_received;
-      if (Array.isArray(raw)) {
-        // Coerce and clamp received_qty: must be ≥ 0 and ≤ ordered_qty.
-        let originalLines = [];
-        try { originalLines = JSON.parse(db.prepare('SELECT items_json FROM delivery_notes WHERE id=?').get(req.params.id)?.items_json || '[]'); } catch (_) {}
-        itemsReceivedArr = raw.map((r, index) => {
-          const original = originalLines.find(it => r.vendor_po_item_id && +it.vendor_po_item_id === +r.vendor_po_item_id)
-            || (originalLines[index]?.description === r.description ? originalLines[index] : null);
-          return ({
-          item_type: original?.item_type || null,
-          unit: original?.unit || null,
-          qty: original?.qty ?? original?.quantity ?? original?.ordered_qty ?? null,
-          vendor_po_item_id: r.vendor_po_item_id ? +r.vendor_po_item_id : null,
-          ordered_qty:       Number.isFinite(+r.ordered_qty) ? +r.ordered_qty : 0,
-          received_qty:      Number.isFinite(+r.received_qty) ? Math.max(0, +r.received_qty) : 0,
-          short_reason:      r.short_reason ? String(r.short_reason).slice(0, 200) : null,
-          description:       r.description || null,
-        }); });
-        itemsReceivedJson = JSON.stringify(itemsReceivedArr);
-      }
-    } catch (e) {
-      // Bad JSON — ignore silently and fall back to ordered qty stock-IN.
-    }
-  }
-
-  if (itemsReceivedArr) {
-    const allocated = db.prepare('SELECT vendor_po_item_id,SUM(quantity) qty FROM purchase_bill_items WHERE delivery_note_id=? GROUP BY vendor_po_item_id').all(req.params.id);
-    if (allocated.some(a => itemsReceivedArr.filter(r => r.vendor_po_item_id === a.vendor_po_item_id).reduce((s,r) => s+r.received_qty,0) < a.qty)) return res.status(400).json({ error: 'Received quantity cannot be reduced below quantities already invoiced.' });
-  }
-  const stagedNote = db.prepare('SELECT supply_pending, items_json FROM delivery_notes WHERE id=?').get(req.params.id);
-  if (stagedNote?.supply_pending) {
-    let planned;
-    try { planned = JSON.parse(stagedNote.items_json || '[]'); } catch (_) { planned = []; }
-    const submitted = itemsReceivedArr || planned;
-    if (!planned.length || submitted.length !== planned.length) return res.status(400).json({ error: 'Receive only the items on this delivery challan' });
-    const seen = new Set();
-    const merged = [];
-    for (const row of submitted) {
-      const original = planned.find(it => +it.vendor_po_item_id === +row.vendor_po_item_id);
-      const qty = +row.received_qty;
-      if (!original || seen.has(+row.vendor_po_item_id) || !Number.isFinite(qty) || qty < 0 || qty > +original.received_qty) return res.status(400).json({ error: 'Received quantity exceeds this delivery batch' });
-      seen.add(+row.vendor_po_item_id);
-      merged.push({ ...original, received_qty: qty, quantity: qty, ordered_qty: +original.received_qty });
-    }
-    itemsReceivedArr = merged;
-    itemsReceivedJson = JSON.stringify(merged);
-  }
-
+// Each upload is a new physical receiving; never overwrite previous proof.
+router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.array('file', 10), (req, res) => {
+  const db = getDb(), b = req.body || {}, uploaded = req.files || [];
+  const files = [];
+  let saved = false;
+  const cleanup = () => {
+    for (const file of uploaded) { try { fs.unlinkSync(file.path); } catch (_) {} }
+    for (const file of files) { try { fs.unlinkSync(path.join(uploadDir, path.basename(file))); } catch (_) {} }
+  };
   try {
-    db.prepare(
-      `UPDATE delivery_notes
-         SET received_by_name = ?,
-             received_at = COALESCE(?, CURRENT_TIMESTAMP),
-             receipt_file_path = COALESCE(?, receipt_file_path),
-             status = 'received',
-             warehouse_id = COALESCE(?, warehouse_id),
-             sales_bill_pending = COALESCE(?, sales_bill_pending),
-             items_json = COALESCE(?, items_json)
-       WHERE id = ?`
-    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, sbPendingFlag, itemsReceivedJson, req.params.id);
-
-    // INVENTORY AUTO-IN — best effort; never blocks the receipt save.
-    let stockIns = 0;
-    if (warehouseId) {
+    const existing = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
+    if (!existing) { cleanup(); return res.status(404).json({ error: 'Dispatch not found' }); }
+    const today = require('../lib/istDate').istToday();
+    const date = b.received_at || today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > today) {
+      cleanup(); return res.status(400).json({ error: 'Enter a valid receiving date, no later than today.' });
+    }
+    const po = existing.vendor_po_id ? db.prepare('SELECT expected_receipt_date,delay_reason FROM vendor_pos WHERE id=?').get(existing.vendor_po_id) : null;
+    if (po?.expected_receipt_date && date > po.expected_receipt_date && !String(b.delay_reason || '').trim() && !po.delay_reason) {
+      cleanup(); return res.status(400).json({ error: 'Enter the reason for delayed delivery.', needs_delay_reason: true });
+    }
+    if (!uploaded.length || uploaded.some(file => !/\.(pdf|jpe?g|png|webp)$/i.test(file.originalname))) {
+      cleanup(); return res.status(400).json({ error: 'Upload receiving proof as PDF or images (up to 10 files).' });
+    }
+    for (const file of uploaded) {
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = file.filename + '-' + safeName;
+      fs.renameSync(file.path, path.join(uploadDir, newName));
+      files.push('/uploads/' + newName);
+    }
+    const workflow = getDispatchDocuments(db).find(row => row.id === +req.params.id || row.related_document_ids.includes(+req.params.id));
+    const result = require('../lib/deliveryReceipts').addReceipt(db, +req.params.id, { ...b, received_at: date }, files, req.user, workflow);
+    if (result.existing) cleanup();
+    saved = true;
+    if (!result.existing) {
+      if (existing.vendor_po_id && String(b.delay_reason || '').trim()) db.prepare('UPDATE vendor_pos SET delay_reason=?,delay_reason_by=?,delay_reason_at=CURRENT_TIMESTAMP WHERE id=?').run(String(b.delay_reason).trim(),req.user.id,existing.vendor_po_id);
+      require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
+      try { require('../lib/dispatchToMb').syncDispatchToMb(db, req.params.id, req.user); } catch (error) { console.error('[receive] MB sync failed:',error.message); }
       try {
-        // Pull the line items via vendor_po → vendor_po_items → indent_items.
-        // When mam sent per-line received_qty (items_received), build a
-        // {vendor_po_item_id → received_qty} map and use it for stock IN.
-        // Falls back to ordered qty (vpi.quantity) if no override sent.
-        const dn = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
-        if (dn?.vendor_po_id) {
-          const items = db.prepare(
-            `SELECT vpi.id as vpi_id, vpi.quantity, vpi.rate, ii.item_master_id, ii.description
-               FROM vendor_po_items vpi
-               LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
-              WHERE vpi.vendor_po_id = ?`
-          ).all(dn.vendor_po_id);
-
-          const receivedByVpi = new Map();
-          if (Array.isArray(itemsReceivedArr)) {
-            for (const r of itemsReceivedArr) {
-              if (r.vendor_po_item_id != null) receivedByVpi.set(+r.vendor_po_item_id, +r.received_qty);
-            }
-          }
-
-          // Idempotency: skip if movements for this delivery_note already exist
-          const refId = `DN-${req.params.id}`;
-          const existingMv = db.prepare(
-            `SELECT 1 FROM stock_movements WHERE reference_type='RECEIVE' AND reference_id=? LIMIT 1`
-          ).get(refId);
-          if (!existingMv) {
-            const tx = db.transaction(() => {
-              for (const i of items) {
-                if (!i.item_master_id) continue;
-                // Prefer per-line received qty when mam supplied it; else
-                // ordered qty.  Skip rows that ended up at 0 (e.g. 10
-                // ordered, 0 received → don't increment stock).
-                const recOverride = receivedByVpi.has(i.vpi_id) ? receivedByVpi.get(i.vpi_id) : null;
-                const qty = recOverride != null ? +recOverride : (Array.isArray(itemsReceivedArr) ? 0 : +i.quantity);
-                if (!(qty > 0)) continue;
-                const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(warehouseId, i.item_master_id);
-                const prevQty = cur ? +cur.quantity : 0;
-                const prevRate = cur ? +cur.avg_rate : 0;
-                const rate = +(i.rate || 0);
-                const newQty = prevQty + qty;
-                const newAvg = newQty > 0 ? ((prevQty * prevRate) + (qty * rate)) / newQty : 0;
-                if (cur) db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(newQty, newAvg, cur.id);
-                else db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)').run(warehouseId, i.item_master_id, newQty, newAvg);
-                const noteSuffix = recOverride != null && recOverride < +i.quantity
-                  ? ` (short receipt: ${recOverride}/${i.quantity})`
-                  : '';
-                db.prepare(
-                  `INSERT INTO stock_movements
-                    (warehouse_id, item_master_id, type, quantity, rate, total_value,
-                     reference_type, reference_id, notes, created_by)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)`
-                ).run(warehouseId, i.item_master_id, 'IN', qty, rate, qty * rate, 'RECEIVE', refId, `Auto-IN from delivery note #${req.params.id}${noteSuffix}`, req.user.id);
-                stockIns += 1;
-              }
-            });
-            tx();
-          }
-        }
-      } catch (e) {
-        console.error('[receive] auto-IN failed (receipt saved anyway):', e.message);
-      }
+        const approvers = require('../lib/dispatchReceiving').receivingApprovers(db);
+        const insert = db.prepare('INSERT INTO notifications(user_id,type,title,body,link_url,channel_sent,dedupe_key) VALUES (?,?,?,?,?,?,?)');
+        for (const user of approvers.filter(u => u.id !== req.user.id)) insert.run(user.id,'dispatch_receiving','Receiving awaiting approval',req.user.name + ' uploaded receiving for ' + (existing.document_number || existing.id),'/dispatch-receiving','in_app','delivery-receipt-' + result.id + '-' + user.id);
+      } catch (error) { console.error('[receive] approval notification failed:',error.message); }
     }
-
-    // Auto SHORT-SUPPLY DEBIT NOTE (mam 2026-06-04): when material is
-    // received SHORT (received < ordered), raise a short-supply debit
-    // automatically — mirrors the auto extra-rate debit at bill entry.
-    // Value = shortfall qty × PO rate. One per delivery note (guarded via
-    // a [DN-<id>] marker in the reason).
-    let autoDebit = null;
-    try {
-      if (!db.prepare('SELECT supply_pending FROM delivery_notes WHERE id=?').get(req.params.id)?.supply_pending && Array.isArray(itemsReceivedArr) && itemsReceivedArr.some(r => +r.received_qty < +r.ordered_qty)) {
-        const dnRow = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
-        const poId = dnRow?.vendor_po_id || null;
-        if (poId) {
-          const po = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(poId);
-          const rateByVpi = new Map();
-          for (const it of db.prepare('SELECT id, rate FROM vendor_po_items WHERE vendor_po_id=?').all(poId)) rateByVpi.set(it.id, +it.rate || 0);
-          const lines = []; let amt = 0;
-          for (const r of itemsReceivedArr) {
-            const shortQty = Math.max(0, (+r.ordered_qty || 0) - (+r.received_qty || 0));
-            if (shortQty <= 0) continue;
-            const rate = r.vendor_po_item_id != null ? (rateByVpi.get(+r.vendor_po_item_id) || 0) : 0;
-            const lineAmt = shortQty * rate;
-            amt += lineAmt;
-            lines.push({ description: r.description || 'Item', unit: '', qty: shortQty, rate, amount: lineAmt, remarks: r.short_reason || '' });
-          }
-          const marker = `[DN-${req.params.id}]`;
-          const exists = db.prepare("SELECT id FROM debit_notes WHERE vendor_po_id=? AND type='short_supply' AND reason LIKE ?").get(poId, '%' + marker + '%');
-          if (lines.length && amt > 0 && !exists) {
-            const { nextSequence } = require('../db/nextSequence');
-            const year = new Date().getFullYear();
-            const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
-            const dr = db.prepare(
-              `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, amount, reason, items_json, status, created_by)
-               VALUES (?, 'short_supply', ?, ?, ?, ?, ?, 'open', ?)`
-            ).run(dnNum, poId, po?.vendor_id || null, Math.round(amt * 100) / 100,
-              `Auto-raised on receiving: short supply (ordered vs received shortfall). ${marker}`,
-              JSON.stringify(lines), req.user.id);
-            autoDebit = { id: dr.lastInsertRowid, dn_number: dnNum, type: 'short_supply', amount: Math.round(amt * 100) / 100 };
-          }
-        }
-      }
-    } catch (e) { console.error('[receive] auto short-supply debit failed (receipt saved anyway):', e.message); }
-
-    // S16 (mam 2026-06-09): notify the site engineer (the indent raiser)
-    // ONLY when there's a receiving MISMATCH (a short-supply debit was
-    // auto-raised). WhatsApp + SMS + email, all best-effort — never blocks
-    // the receipt. No notification on a clean, fully-matched receipt.
-    if (autoDebit) {
-      try {
-        const eng = db.prepare(`
-          SELECT u.name, u.email, u.phone
-            FROM delivery_notes dn
-            JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
-            JOIN indents i ON i.id = vp.indent_id
-            JOIN users u ON u.id = i.created_by
-           WHERE dn.id = ?`).get(req.params.id);
-        if (eng) {
-          const msg = `Material received SHORT on receiving. Debit note ${autoDebit.dn_number} (Rs ${autoDebit.amount}) auto-raised — please verify physically. — Secured Engineers`;
-          if (eng.phone) require('../services/notify').sendText({ mobile: eng.phone, body: msg }).catch(() => {});
-          if (eng.email) {
-            const { sendEmail } = require('../lib/email');
-            sendEmail({ to: eng.email, subject: `Short supply on receiving — ${autoDebit.dn_number}`, html: `<p>Hi ${eng.name || ''},</p><p>${msg}</p>` }).catch(() => {});
-          }
-        }
-      } catch (e) { console.error('[receive] S16 engineer mismatch notify failed:', e.message); }
-    }
-
-    // Record billing outstanding; receiving must never create an invoice.
-    require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
-    const autoSalesBill = null;
-
-    // TSK-0823: Dispatch to MB (installation) auto (update on site receive / shortage)
-    try {
-      const { syncDispatchToMb } = require('../lib/dispatchToMb');
-      syncDispatchToMb(db, req.params.id, req.user);
-    } catch (e) {
-      console.error('[TSK-0823 dispatchToMb receive trigger error]', e);
-    }
-
-    res.json({ message: 'Marked as received', receipt_file_path: receiptPath, stock_ins: stockIns, auto_debit: autoDebit, auto_sales_bill: autoSalesBill });
-  } catch (err) {
-    if (receiptPath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(receiptPath))); } catch (e) {} }
-    res.status(500).json({ error: err.message });
+    res.json({ ...result, message: result.status === 'partial' ? 'Partial receiving saved; balance remains pending' : 'Receiving saved', auto_debit: null });
+  } catch (error) {
+    if (!saved) cleanup();
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -6515,12 +6275,14 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
   }
   if (notes !== undefined) { sets.push('notes=?'); params.push(notes || null); }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  if (status !== undefined && getDb().prepare('SELECT id FROM delivery_receipts WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'Receiving status is calculated from saved receipt quantities.' });
   const r = getDb().prepare(`UPDATE delivery_notes SET ${sets.join(', ')} WHERE id=?`).run(...params, req.params.id);
   if (!r.changes) return res.status(404).json({ error: 'Dispatch not found' });
   res.json({ message: 'Updated' });
 });
 
 router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
+  if (getDb().prepare('SELECT id FROM delivery_receipts WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This challan has saved receiving history and cannot be deleted.' });
   if (getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });

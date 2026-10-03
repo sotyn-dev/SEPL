@@ -126,7 +126,8 @@ function syncDispatchToMb(db, deliveryNoteId, actorUser = null) {
       rawItems = [];
     }
 
-    const isReceived = dn.status === 'received';
+    if (dn.receipt_dispatch_items_json) rawItems = require('./deliveryReceipts').state(db, dn).items;
+    const isReceived = dn.status === 'received' || dn.status === 'partial';
     const formattedItems = [];
     let totalAmount = 0;
     const measurementLines = [];

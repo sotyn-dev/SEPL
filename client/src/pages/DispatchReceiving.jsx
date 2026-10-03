@@ -125,7 +125,9 @@ export default function DispatchReceiving() {
           <td className="p-3">{r.site_name}</td>
           <td className="p-3 whitespace-nowrap">{r.indent_number}</td>
           <td className="p-3">{r.bill_number}</td>
-          <td className="p-3"><a className="text-blue-700 underline" href={r.receiving_url} target="_blank" rel="noreferrer">View receiving</a></td>
+          <td className="p-3">{(r.receiving_files || [r.receiving_url]).map((file,index) => <div key={file}><a className="text-blue-700 underline" href={file} target="_blank" rel="noreferrer">{index ? `Proof ${index + 1}` : 'View receiving'}</a></div>)}
+            {!!r.receiving_items?.length && <details className="mt-2 text-xs"><summary className="cursor-pointer">Received items · {r.receiving_items.length}</summary>{r.receiving_items.map(it => <div key={it.line_key} className="mt-1">{it.description}: <b>{it.received_qty} {it.unit}</b></div>)}</details>}
+          </td>
           <td className="p-3">{r.created_by_name || '—'}{r.updated_by_name && <div className="text-xs text-gray-400 mt-1">Edited by {r.updated_by_name}{r.updated_at ? ` · ${when(r.updated_at)}` : ''}</div>}</td>
           <td className="p-3"><StatusCell r={r} /></td>
           <td className="p-3">

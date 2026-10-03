@@ -33,7 +33,12 @@ function groupDocuments(rows) {
       if (doc.document_type === 'sales_bill') {
         addFile(billFiles, { id: doc.id, number: doc.document_number, file_path: doc.file_path });
       }
-      addFile(receipts, { id: doc.id, number: doc.document_number, file_path: doc.receipt_file_path,
+      if (doc.receipt_state?.receipts.length) {
+        for (const receiving of doc.receipt_state.receipts) for (const file of receiving.files) {
+          addFile(receipts, { id: receiving.id, number: doc.document_number, file_path: file,
+            received_by_name: receiving.received_by_name, received_at: receiving.received_at });
+        }
+      } else addFile(receipts, { id: doc.id, number: doc.document_number, file_path: doc.receipt_file_path,
         received_by_name: doc.received_by_name, received_at: doc.received_at });
     }
     // A challan's own typed lines are authoritative (e.g. the RGP slice of a
@@ -43,7 +48,7 @@ function groupDocuments(rows) {
       return { ...poItem, ...item, item_type: item.item_type || poItem?.item_type || '',
         qty: item.qty ?? item.quantity ?? item.received_qty ?? item.ordered_qty };
     });
-    const dispatchItems = ownItems.length ? ownItems : (row.po_items || []);
+    const dispatchItems = row.receipt_state?.items.length ? row.receipt_state.items : ownItems.length ? ownItems : (row.po_items || []);
     const ownTypes = ownItems.map(it => type(it.item_type));
     const lineTypes = ownTypes.length && ownTypes.every(Boolean) ? ownTypes : (row.item_types || []);
     let required;
@@ -53,13 +58,14 @@ function groupDocuments(rows) {
     else if (documents.some(d => d.document_type === 'sales_bill' || d.sales_bill_pending || text(d.sales_bill_number))) required = true;
     else required = null; // Missing item types must not silently waive billing.
     const billStatus = billFiles.length ? 'uploaded' : required === true ? 'pending' : required === false ? 'not_required' : 'check_items';
-    const receipt = receipts[0];
+    const receipt = receipts[receipts.length - 1];
     return { ...row,
       dispatch_items: dispatchItems,
       sales_bill_required: required, sales_bill_status: billStatus,
       sales_bill_pending: billStatus === 'pending' ? 1 : 0,
       sales_bill_documents: billFiles, receiving_documents: receipts,
-      receiving_status: receipts.length ? 'received' : 'pending',
+      receiving_history: documents.flatMap(d => d.receipt_state?.receipts || []),
+      receiving_status: row.receipt_state?.receipts.length ? row.receipt_state.status : receipts.length ? 'received' : 'pending',
       received_by_name: receipt?.received_by_name || row.received_by_name,
       received_at: receipt?.received_at || row.received_at,
       receipt_file_path: receipt?.file_path || null,
@@ -102,7 +108,14 @@ function getDispatchDocuments(db) {
     if (!bills.has(bill.vendor_po_id)) bills.set(bill.vendor_po_id, []);
     bills.get(bill.vendor_po_id).push(bill);
   }
+  const history = new Map();
+  for (const receipt of db.prepare(`SELECT dr.*, r.status AS approval_status FROM delivery_receipts dr
+    LEFT JOIN dispatch_receiving r ON r.id=dr.dispatch_receiving_id ORDER BY dr.id`).all()) {
+    if (!history.has(receipt.delivery_note_id)) history.set(receipt.delivery_note_id, []);
+    history.get(receipt.delivery_note_id).push(receipt);
+  }
   return groupDocuments(rows.map(row => ({ ...row,
+    receipt_state: require('./deliveryReceipts').state(db, row, history.get(row.id) || []),
     item_types: (byPo.get(row.vendor_po_id) || []).map(item => type(item.item_type)),
     po_items: byPo.get(row.vendor_po_id) || [],
     purchase_bills: bills.get(row.vendor_po_id) || [],

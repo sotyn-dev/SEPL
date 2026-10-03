@@ -38,7 +38,7 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
       </label>
       <label className="font-medium">Receiving status
         <select className="select mt-1 text-xs" value={filters.receiving} onChange={e => onFilter('receiving', e.target.value)}>
-          <option value="all">All</option><option value="pending">Pending</option><option value="received">Received</option>
+          <option value="all">All</option><option value="pending">Pending</option><option value="partial">Partially received</option><option value="received">Received</option>
         </select>
       </label>
       <label className="font-medium">Received from<input type="date" className="input mt-1 text-xs" value={filters.from} onChange={e => onFilter('from', e.target.value)} /></label>
@@ -89,18 +89,24 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
                   <td className="px-3 py-4 min-w-[90px]">{row.received_by_name || '—'}</td>
                   <td className="px-3 py-4 whitespace-nowrap text-slate-500">{dateText(row.received_at)}</td>
                   <td className="px-3 py-4">{row.receiving_documents?.length ? row.receiving_documents.map((doc, index) => <div key={doc.file_path} className="mb-1">{fileLink(doc.file_path, row.receiving_documents.length > 1 ? `Proof ${index + 1}` : 'View')}{row.receiving_documents.length > 1 && <div className="text-[9px] text-slate-400">{doc.received_by_name} · {dateText(doc.received_at)}</div>}</div>) : <span className="text-slate-400">—</span>}</td>
-                  <td className="px-3 py-4"><Badge complete={received}>{received ? 'Received' : 'Pending'}</Badge></td>
+                  <td className="px-3 py-4"><Badge complete={received}>{received ? 'Received' : row.receiving_status === 'partial' ? 'Partially received' : 'Pending'}</Badge>
+                    {!!row.receiving_history?.length && <div className="mt-1 text-[10px] text-slate-500">{row.receiving_history.length} receiving{row.receiving_history.length === 1 ? '' : 's'}</div>}
+                  </td>
                   <td className="px-3 py-4 min-w-[130px]"><div className="flex flex-col items-start gap-1.5">
                     {row.document_type === 'challan' && <button type="button" className={`${actionClass} border-slate-200 bg-white text-slate-600 hover:bg-slate-100`} onClick={() => onPrint(row)}><FiPrinter />Print challan</button>}
                     {canUpload && row.sales_bill_status !== 'not_required' && <button type="button" className={`${actionClass} border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100`} onClick={() => onSalesBill(row)}><FiUpload />{row.sales_bill_status === 'uploaded' ? 'Replace Tally bill' : 'Upload Tally bill'}</button>}
-                    {canUpload && !received && <button type="button" className={`${actionClass} border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700`} onClick={() => onReceive(row)}><FiUpload />Upload receiving</button>}
+                    {canUpload && !received && <button type="button" className={`${actionClass} border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700`} onClick={() => onReceive(row)}><FiUpload />{row.receiving_history?.length ? 'Add another receiving' : 'Upload receiving'}</button>}
                   </div></td>
                 </tr>
                 {isOpen && <tr className="border-b border-blue-100 bg-slate-50"><td colSpan={13} className="px-5 py-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3"><h4 className="font-semibold text-slate-800">{store ? 'Approved material issued from store' : 'Dispatched material'}</h4><span className="text-slate-500">{row.indent_number}{store && row.stock_issue_number ? ` · ${row.stock_issue_number}` : ''}</span></div>
-                  <table className="w-full max-w-3xl text-[11px] bg-white rounded-lg"><thead><tr className="text-[10px] text-slate-500 border-b"><th className="px-3 py-2">Material</th><th className="px-3 py-2">Item type</th><th className="px-3 py-2 text-right">{store ? 'Approved store qty' : 'Dispatch qty'}</th><th className="px-3 py-2">Unit</th></tr></thead><tbody>
-                    {material.map((item, index) => <tr key={index} className="border-b border-slate-100 last:border-0"><td className="px-3 py-2">{item.description || item.item_name || '—'}{item.item_code && <span className="ml-2 text-[10px] text-slate-400">{item.item_code}</span>}</td><td className="px-3 py-2">{item.item_type || '—'}</td><td className="px-3 py-2 text-right font-semibold">{Number(item.qty ?? item.quantity ?? 0).toLocaleString('en-IN')}</td><td className="px-3 py-2">{item.unit || '—'}</td></tr>)}
+                  <table className="w-full max-w-3xl text-[11px] bg-white rounded-lg"><thead><tr className="text-[10px] text-slate-500 border-b"><th className="px-3 py-2">Material</th><th className="px-3 py-2">Item type</th><th className="px-3 py-2 text-right">{store ? 'Approved store qty' : 'Dispatch qty'}</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2 text-right">Balance</th><th className="px-3 py-2">Unit</th></tr></thead><tbody>
+                    {material.map((item, index) => <tr key={index} className="border-b border-slate-100 last:border-0"><td className="px-3 py-2">{item.description || item.item_name || '—'}{item.item_code && <span className="ml-2 text-[10px] text-slate-400">{item.item_code}</span>}</td><td className="px-3 py-2">{item.item_type || '—'}</td><td className="px-3 py-2 text-right font-semibold">{Number(item.qty ?? item.quantity ?? 0).toLocaleString('en-IN')}</td><td className="px-3 py-2 text-right">{item.received_qty ?? 0}</td><td className="px-3 py-2 text-right font-semibold text-amber-700">{item.remaining_qty ?? item.qty}</td><td className="px-3 py-2">{item.unit || '—'}</td></tr>)}
                   </tbody></table>
+                  {!!row.receiving_history?.length && <div className="mt-4 space-y-2"><h4 className="font-semibold">Receiving history</h4>{row.receiving_history.map((receipt,index) => <div key={receipt.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="flex flex-wrap gap-3 items-center"><b>Receiving {index + 1}</b><span>{receipt.received_by_name} · {dateText(receipt.received_at)}</span><Badge complete={receipt.approval_status === 'approved'} muted={!!receipt.legacy}>{receipt.legacy ? 'Earlier record' : receipt.approval_status === 'approved' ? 'Approved' : receipt.approval_status === 'rejected' ? 'Rejected' : 'Awaiting approval'}</Badge>{receipt.files.map((file,i) => <span key={file}>{fileLink(file,`Proof ${i + 1}`)}</span>)}</div>
+                    <div className="mt-2 text-slate-600">{receipt.items.filter(it => it.received_qty > 0).map(it => `${it.description}: ${it.received_qty} ${it.unit || ''}`).join(' · ')}</div>
+                  </div>)}</div>}
                 </td></tr>}
               </Fragment>;
             })}

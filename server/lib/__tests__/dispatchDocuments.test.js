@@ -30,7 +30,7 @@ test('historical invoices group only when unambiguous and preserve actual files 
 test('purchase bill → challan; receiving and Tally uploads stay independent through real routes', async t => {
   const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-documents-test-'));
   process.env.ERP_UPLOAD_DIR = uploads;
-  const { app, db } = require('./fixtures/indentReviewFixture').fixture();
+  const { app, db, setToday } = require('./fixtures/indentReviewFixture').fixture();
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.on('listening', resolve));
   t.after(() => { server.close(); db.close(); fs.rmSync(uploads, { recursive: true, force: true }); delete process.env.ERP_UPLOAD_DIR; });
@@ -116,6 +116,7 @@ test('purchase bill → challan; receiving and Tally uploads stay independent th
     assert.equal(focRow.sales_bill_status,'not_required'); assert.equal(focRow.dispatch_items[0].qty,2);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_bills').get().n,beforeBills);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM vendor_pos').get().n,beforePos);
+    setToday('2026-10-03');
     const received=await request(`delivery-notes/${row.id}/receive`,'PATCH',form({received_by_name:'Store Site Receiver',received_at:'2026-10-03',items_received:JSON.stringify([{description:'Store pipe',ordered_qty:5,received_qty:5}])},'store-proof.pdf'));
     assert.equal(received.status,200,JSON.stringify(received.body));
     const result=(await request('delivery-notes?q=STORE-INDENT')).body[0];
