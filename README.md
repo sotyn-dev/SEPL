@@ -1,16 +1,31 @@
-# SEPL
+# sotyn.ai (SEPL)
 
-A full-stack ERP & business automation platform by **Secured Engineers Pvt. Ltd.**
+Source for **sotyn.ai** — construction ERP for Indian EPC, MEPF, solar and civil
+contracting firms. Built and run by **Secured Engineers Pvt. Ltd.**, a 14-year MEPF
+and solar EPC contractor that is also its first and largest user.
 
-The application combines a client-facing frontend and a Node.js backend to manage sales, billing, ERP automation, and team engagement (gamification) — deployable to a VPS (PM2) or Render.
+Product site: <https://www.sotyn.ai>
+
+It covers the chain where contractor margin leaks: site staff raise indents against a
+BOQ line from any phone browser; the purchase desk compares vendor rates; value-based
+approvals are recorded with the comparison attached; and the PO, receipt and debit note
+trace back to the original request. On the billing side it handles EPC bill types —
+Sales, RA, MB, Installation and T&C — with GST, TDS and retention computed, and checks
+subcontractor bills against measured quantity and the agreed rate master before they
+are certified. Plus DPR and site reporting, inventory, AR/AP and cash flow, HRMS,
+attendance and payroll.
+
+A Node.js backend (`server/`) and a web client (`client/`), deployable to a VPS via PM2
+or to Render.
 
 ---
 
 ## Features
 
-- **Sales & Billing Module** — invoicing, billing workflows, and sales tracking (see `SALES-BILLING-MODULE.md`)
-- **ERP Automation** — automated ERP processes with an audit trail (see `ERP-AUTOMATION-AUDIT.md`)
-- **Gamification** — engagement and rewards system (see `GAMIFICATION.md`)
+- **Procurement** — site indent against a BOQ line → RFQ rate comparison → value-based approval → PO → receiving → debit note (see `INDENT-TO-DISPATCH.md`)
+- **Billing** — EPC bill types (Sales, RA, MB, Installation, T&C) with GST, TDS and retention; subcontractor bills checked against measured quantity and the rate master (see `SALES-BILLING-MODULE.md`)
+- **ERP automation** — automated processes with a full audit trail (see `ERP-AUTOMATION-AUDIT.md`)
+- **Team engagement** — scorecards and rewards for site and office staff (see `GAMIFICATION.md`)
 - **Health monitoring** — service health checks via `health-check.sh`
 - **Production-ready deployment** — PM2 process management, VPS deploy script, log rotation, and Render support
 
