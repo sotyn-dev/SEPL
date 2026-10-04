@@ -53,6 +53,13 @@ catch (e) { console.warn('[hang-detector] not started:', e.message); }
 // 10 MB through a synchronous server (audit 2026-09-07).
 app.use('/api/public', require('./routes/publicSotynLead'));
 
+// Energy Desk — the solar savings report on securedengineers.com. Public, so it
+// sits here with the other public intake, before the 10 MB parser below, and
+// parses its own bodies under 32 kb. Inert unless ENERGY_DESK_ENABLED=1:
+// /health then answers enabled:false and the website keeps to its own
+// in-browser report. See server/energyDesk/router.js.
+app.use('/api/public/energy-desk', require('./energyDesk/router'));
+
 // Global body parser for every OTHER route. Deliberately last of the three:
 // the hang detector must see all traffic, and the public webhook must parse
 // its own body under a 32 kb cap before this 10 MB one can claim it.
@@ -297,6 +304,19 @@ try {
   scheduleBankMailCron();
 } catch (e) {
   console.warn('[bank-mail] Scheduler not started:', e.message);
+}
+
+// Energy Desk config — hourly fetch of the website's published
+// /energy-desk/config.json (every number the solar savings report uses, each
+// with its source). Only when ENERGY_DESK_ENABLED=1. Skip via
+// ERP_DISABLE_ENERGY_DESK_CONFIG=1.
+if (/^(1|true|yes)$/i.test(String(process.env.ENERGY_DESK_ENABLED || '')) && !process.env.ERP_DISABLE_ENERGY_DESK_CONFIG) {
+  try {
+    require('./energyDesk/store').ensureEnergyDeskSchema(require('./db/schema').getDb());
+    require('./energyDesk/config').start();
+  } catch (e) {
+    console.warn('[energy-desk] not started:', e.message);
+  }
 }
 
 // AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries

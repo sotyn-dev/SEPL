@@ -5,7 +5,11 @@ const { nextSequence } = require('../db/nextSequence');
 const { notifyMany } = require('../lib/push');
 const { rateLimit } = require('../lib/rateLimit');
 const { clientIp } = require('../lib/clientIp');
-const { isAllowedWebsiteOrigin, websiteRefOf, parseEstimatedValue } = require('../lib/websiteLead');
+const {
+  isAllowedWebsiteOrigin, websiteRefOf, parseEstimatedValue,
+  isEnergyDeskReport, energyDeskRemarks, energyDeskEstimatedValue,
+} = require('../lib/websiteLead');
+const { recordWebsiteLeadMeta } = require('../lib/websiteLeadMeta');
 
 const router = express.Router();
 
@@ -156,17 +160,29 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
     });
   }
 
+  const out = recordWebsiteLead(b);
+  return res.status(out.status).json(out.body);
+});
+
+// Everything after the caller has been identified: validation, de-duplication,
+// the insert and the notifications. The route above calls it once it has
+// admitted the caller, and so does the Energy Desk's no-JS form
+// (energyDesk/router.js), which arrives as a classic form post and identifies
+// its caller itself. Returns { status, body } instead of writing a response.
+function recordWebsiteLead(b) {
+  const respond = (status, body) => ({ status, body });
+
   // 2. Honeypot Anti-Spam Check (Silently drop spam without failing so bots don't adapt)
   const honeypot = getField(b, 'hp_field', 'website_url', 'honeypot', 'extra_note_hp');
   if (honeypot) {
     console.warn('[webhook] Spam bot detected via honeypot field. Dropping request silently.');
-    return res.status(200).json({ success: true, message: 'Enquiry received successfully.' });
+    return respond(200, { success: true, message: 'Enquiry received successfully.' });
   }
 
   // 3. Extract Core Fields
   const clientName = getField(b, 'name', 'full_name', 'client_name', 'your_name', 'contact_name');
   if (!clientName) {
-    return res.status(400).json({ error: 'Name is required.' });
+    return respond(400, { error: 'Name is required.' });
   }
 
   const phone = getField(b, 'phone', 'whatsapp', 'phone_whatsapp', 'mobile', 'tel', 'phone_number');
@@ -180,7 +196,8 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
   const plotArea = getField(b, 'plot_area', 'built_up_area', 'area', 'built_up_plot_area');
   const powerLoad = getField(b, 'power_load', 'estimated_power_load', 'load');
   const rawProjectValue = getField(b, 'project_value', 'estimated_project_value', 'estimated_value', 'budget');
-  const estimatedValue = parseEstimatedValue(rawProjectValue);
+  // An Energy Desk report carries its capex band; its floor is the estimate.
+  const estimatedValue = parseEstimatedValue(rawProjectValue) || energyDeskEstimatedValue(b);
   const projectStage = getField(b, 'project_stage', 'stage');
   const tenderStage = getField(b, 'tender_stage', 'tender_selection_stage');
   const awardDate = getField(b, 'expected_award_date', 'award_date', 'expected_award_start_date', 'timeline', 'start_date', 'tentative_timeline');
@@ -188,7 +205,7 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
   const projectDetails = getField(b, 'project_details', 'details', 'message', 'remarks', 'scope_details', 'scope_size_timeline');
 
   // 4. Identify Form Type (Free Quote vs Preliminary BOQ)
-  const isRfq = Boolean(
+  const isRfq = !isEnergyDeskReport(b) && Boolean(
     b.form_type === 'rfq' ||
     b.rfq === true ||
     plotArea ||
@@ -198,7 +215,9 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
     (rawProjectValue && String(rawProjectValue).toLowerCase().includes('5 cr'))
   );
 
-  const formTitle = isRfq ? 'Request a Preliminary BOQ (/rfq/)' : 'Request a Free Quote';
+  const formTitle = isEnergyDeskReport(b)
+    ? 'Solar savings report (/solar-savings-report/)'
+    : isRfq ? 'Request a Preliminary BOQ (/rfq/)' : 'Request a Free Quote';
 
   // 4b. The website's own reference for this submission, identical across its
   // retries. The site posts again when a reply is slow (it prefers a duplicate
@@ -224,6 +243,8 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
     // match a caller's "my reference is SEPL-2026…" to this record, and lets
     // anyone reconcile the ERP against the website's own Sheet of enquiries.
     websiteRef ? `• Website ref: ${websiteRef}` : null,
+    // The solar savings report's figures, from its top-level fields.
+    ...energyDeskRemarks(b),
     projectDetails ? `• Project Details:\n${projectDetails}` : null,
   ].filter(Boolean);
 
@@ -248,7 +269,7 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
       `).get(`%Website ref: ${websiteRef}%`);
       if (seen) {
         console.log(`[webhook] website ref ${websiteRef} already recorded as ${seen.lead_no} — not inserting again`);
-        return res.status(200).json({
+        return respond(200, {
           success: true,
           lead_no: seen.lead_no,
           duplicate: true,
@@ -290,6 +311,16 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
     );
 
     const leadId = r.lastInsertRowid;
+
+    // The whole payload, so a field the remarks only summarise is still on
+    // record (lib/websiteLeadMeta.js). Anything that could carry a credential
+    // or a honeypot value is left out. Never fatal.
+    try {
+      const { secret, webhook_secret, b_validate, hp_field, website_url, honeypot, extra_note_hp, ...kept } = b; // eslint-disable-line no-unused-vars
+      recordWebsiteLeadMeta(db, { funnelId: leadId, leadRef: websiteRef, leadSource: b.lead_source || null, payload: kept });
+    } catch (metaErr) {
+      console.warn('[webhook] lead meta non-fatal error:', metaErr.message);
+    }
 
     // 7. Audit Log (SOP-01.1 Lead Entry Format)
     try {
@@ -393,7 +424,7 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
 
     console.log(`[webhook] Successfully created lead ${leadNo} from website (${formTitle})`);
 
-    return res.status(201).json({
+    return respond(201, {
       success: true,
       lead_no: leadNo,
       lead_id: leadId,
@@ -402,11 +433,12 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
     });
   } catch (err) {
     console.error('[webhook] Error saving website lead:', err);
-    return res.status(500).json({
+    return respond(500, {
       error: 'Failed to record lead in ERP. Please contact ERP administration.',
       details: err.message,
     });
   }
-});
+}
 
 module.exports = router;
+module.exports.recordWebsiteLead = recordWebsiteLead;
