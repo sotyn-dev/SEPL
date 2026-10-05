@@ -2785,10 +2785,22 @@ export default function Procurement() {
                   .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
                   .filter(r => {
                     if (!rq) return true;
-                    return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
+                    return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.specification || ''} ${r.size || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
                   });
-                exportCsv('vendor-rates', ['Item', 'Make', 'Qty', 'Unit', 'Vendor 1', 'Rate 1', 'Vendor 2', 'Rate 2', 'Vendor 3', 'Rate 3', 'Final'],
-                  rows.map(r => [r.description || r.master_name || '', r.make || '', r.qty ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+                exportCsv('vendor-rates', ['Sub-Item', 'Make', 'Qty', 'Unit', 'Vendor 1', 'Rate 1', 'Vendor 2', 'Rate 2', 'Vendor 3', 'Rate 3', 'Final'],
+                  rows.map(r => [
+                    [r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ') || '',
+                    r.make || '',
+                    r.qty ?? '',
+                    r.unit || '',
+                    r.vendor1_name,
+                    r.vendor1_rate,
+                    r.vendor2_name,
+                    r.vendor2_rate,
+                    r.vendor3_name,
+                    r.vendor3_rate,
+                    r.final_rate
+                  ]));
               }
             }} className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm py-1.5 px-3 shrink-0"><FiDownload size={14} /> Export Excel</button>
             {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
