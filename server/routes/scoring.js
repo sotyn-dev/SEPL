@@ -287,6 +287,20 @@ router.put('/module-owners/:key', adminOnly, (req, res) => {
 // template targets. Extracted from the /scorecard route so the Champions
 // League gamification module can rank the very same scores without
 // duplicating any of the KPI math below.
+// Helper: format ISO date (YYYY-MM-DD) to ISO week label (e.g. 'Week 40')
+function formatWeekLabel(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return dateStr;
+  const d = new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]));
+  if (isNaN(d.getTime())) return dateStr;
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `Week ${weekNo}`;
+}
+
 // opts (all optional):
 //   templateId — score THIS template's KPIs for the user instead of the one
 //                assigned to them (the template editor previews a template
@@ -1353,6 +1367,30 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const userOverrides = {};
     for (const o of userOverridesArr) userOverrides[o.kpi_id] = o;
 
+    // Batch load current week's score_entries for this user (O(1) lookup)
+    const currentEntriesArr = db.prepare(
+      'SELECT * FROM score_entries WHERE user_id=? AND week_start=?'
+    ).all(userId, weekStart);
+    const currentEntries = new Map();
+    for (const ce of currentEntriesArr) currentEntries.set(ce.kpi_id, ce);
+
+    // Batch load immediately preceding valid scorecard entry for EACH KPI
+    // for the same user (week_start < current weekStart).
+    // Uses MAX(week_start) grouped by kpi_id in ONE query to avoid N+1 queries.
+    const precedingEntriesArr = db.prepare(`
+      SELECT se.*
+      FROM score_entries se
+      JOIN (
+        SELECT kpi_id, MAX(week_start) AS max_week
+        FROM score_entries
+        WHERE user_id = ? AND week_start < ?
+        GROUP BY kpi_id
+      ) latest ON se.kpi_id = latest.kpi_id AND se.week_start = latest.max_week
+      WHERE se.user_id = ?
+    `).all(userId, weekStart, userId);
+    const precedingEntries = new Map();
+    for (const pe of precedingEntriesArr) precedingEntries.set(pe.kpi_id, pe);
+
     // Per-user filter — mam (2026-06-02): "every person different KPIs".
     // If the user has enabled=0 on a KPI, skip it entirely (not just
     // suppress display — also pull from the score calculation so total
@@ -1365,9 +1403,21 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
 
     let totalScore = 0, totalWeight = 0;
     const result = activeKpis.map(k => {
-      const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
-      const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
-      let lastWeekPct = lastEntry?.actual_pct ?? null;
+      const entry = currentEntries.get(k.id) || null;
+      const prevRecord = precedingEntries.get(k.id) || null;
+      let prevPeriod = prevRecord ? {
+        periodId: prevRecord.week_start,
+        period_id: prevRecord.week_start,
+        label: formatWeekLabel(prevRecord.week_start),
+        planned: prevRecord.planned != null ? Number(prevRecord.planned) : null,
+        actual: prevRecord.actual != null ? Number(prevRecord.actual) : null,
+        actual_pct: prevRecord.actual_pct != null ? Number(prevRecord.actual_pct) : null,
+        recordId: prevRecord.id,
+        record_id: prevRecord.id,
+        commitment: prevRecord.commitment ?? null,
+        commitment_prev: prevRecord.commitment_prev ?? null,
+      } : null;
+      let lastWeekPct = prevPeriod ? prevPeriod.actual_pct : null;
 
       // Resolution order for Planned (mam 2026-06-02):
       //   1. Weekly entry's `planned`  — explicit override for that week
@@ -1412,6 +1462,22 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
                   ? (previous.done <= previous.given ? 100 : Math.round(previous.given / previous.done * 100))
                   : Math.round(previous.done / previous.given * 100))
               : (previous.done === 0 ? 100 : 0);
+            if (prevPeriod) {
+              prevPeriod.actual_pct = lastWeekPct;
+            } else if (previous.given !== null || previous.done !== null) {
+              prevPeriod = {
+                periodId: lastWeekStart,
+                period_id: lastWeekStart,
+                label: formatWeekLabel(lastWeekStart),
+                planned: previous.given,
+                actual: previous.done,
+                actual_pct: lastWeekPct,
+                recordId: null,
+                record_id: null,
+                commitment: null,
+                commitment_prev: null,
+              };
+            }
           }
           if (given !== null && given !== undefined) {
             planned = given;
@@ -1503,6 +1569,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       totalScore += weight * actualPct;
 
       return {
+        kpiId: k.id,
         kpi_id: k.id,
         template_id: k.template_id,
         template_name: k.template_name,
@@ -1520,6 +1587,11 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         planned,
         actual,
         actual_pct: actualPct,
+        previous_planned: prevPeriod ? prevPeriod.planned : null,
+        previous_actual: prevPeriod ? prevPeriod.actual : null,
+        previous_actual_pct: prevPeriod ? prevPeriod.actual_pct : null,
+        previous_period: prevPeriod,
+        previousPeriod: prevPeriod,
         last_week_pct: lastWeekPct,
         total_uptodate: entry?.total_uptodate ?? null,
         // Auto rows compute Pending live (backlog-aware); manual rows keep
@@ -1721,9 +1793,11 @@ router.put('/scorecard/entry', (req, res) => {
     }
     const db = getDb();
     const k = db.prepare('SELECT direction FROM score_kpis WHERE id=?').get(kpi_id);
-    // Achievement vs plan — same rule as the weekly compute (mam 2026-07-03).
+    // Achievement vs plan — same rule as the weekly compute (mam 2026-07-03, 2026-08-13).
     let actualPct = 0;
-    if (planned > 0) {
+    if (+planned === 0 && +actual === 0) {
+      actualPct = 100;
+    } else if (planned > 0) {
       if (k?.direction === 'lower_better') {
         actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
       } else {
