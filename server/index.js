@@ -392,6 +392,13 @@ try {
   console.warn('[payroll-exempt] failed to start:', e.message);
 }
 
+// TSK-0489: Recurring monthly Purchase Bill Audit checklist (25th of month) for Pooja Kaplesh
+try {
+  require('./scripts/tsk0489PurchaseAuditBackfill').runOnce();
+} catch (e) {
+  console.warn('[tsk-0489-backfill] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
