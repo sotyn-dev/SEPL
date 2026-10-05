@@ -1739,12 +1739,13 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Each user is assigned to one template (their role's MIS)
+    -- Each user can have several role templates.
     CREATE TABLE IF NOT EXISTS score_user_template (
-      user_id INTEGER PRIMARY KEY REFERENCES users(id),
-      template_id INTEGER REFERENCES score_templates(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      template_id INTEGER NOT NULL REFERENCES score_templates(id),
       assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      assigned_by INTEGER REFERENCES users(id)
+      assigned_by INTEGER REFERENCES users(id),
+      PRIMARY KEY (user_id, template_id)
     );
 
     -- Module owners — mam decides the accountable owner + backup per ERP
@@ -3068,6 +3069,8 @@ function initializeDatabase() {
   } catch (e) {
     console.warn('[labour_management] migrations skipped (non-fatal):', e.message);
   }
+
+  require('../lib/scoreTemplateAssignments').initialize(db);
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
@@ -5278,7 +5281,9 @@ function initializeDatabase() {
       const insKpi = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare(`INSERT INTO score_user_template (user_id,template_id,assigned_by)
+        SELECT n.user_id,n.template_id,1 FROM (SELECT ? AS user_id,? AS template_id) n
+        WHERE NOT EXISTS (SELECT 1 FROM score_user_template WHERE user_id=n.user_id)`);
       let made = 0, assigned = 0;
       for (const p of PEOPLE) {
         let t = findTpl.get(p.tpl);
@@ -5368,7 +5373,9 @@ function initializeDatabase() {
       const hasKpi = db.prepare('SELECT 1 FROM score_kpis WHERE template_id = ? AND metric_name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare(`INSERT INTO score_user_template (user_id,template_id,assigned_by)
+        SELECT n.user_id,n.template_id,1 FROM (SELECT ? AS user_id,? AS template_id) n
+        WHERE NOT EXISTS (SELECT 1 FROM score_user_template WHERE user_id=n.user_id)`);
       let made = 0, appended = 0, assigned = 0;
       for (const p of NEW_PEOPLE) {
         let t = findTpl.get(p.tpl); let tid;
@@ -5461,17 +5468,17 @@ function initializeDatabase() {
       const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare(
-        `INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1)
-         ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`
-      );
+      const assign = db.transaction((userId, templateId) => {
+        db.prepare('DELETE FROM score_user_template WHERE user_id=?').run(userId);
+        db.prepare('INSERT INTO score_user_template(user_id,template_id,assigned_by) VALUES(?,?,1)').run(userId,templateId);
+      });
       let n = 0;
       for (const [nm, tpl] of MAP) {
         const t = findTpl.get(tpl);
         if (!t) continue;
         let u = findUser.get(nm);
         if (!u) { const c = findLike.all(nm.split(' ')[0] + '%'); if (c.length === 1) u = c[0]; }
-        if (u) { assign.run(u.id, t.id); n++; }
+        if (u) { assign(u.id, t.id); n++; }
       }
       db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_cards_reassign_v1', 'done')").run();
       console.log(`[schema] kpi_cards_reassign_v1: reassigned ${n}/7 people to their new KPI templates`);

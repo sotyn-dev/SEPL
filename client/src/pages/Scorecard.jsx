@@ -3,12 +3,13 @@
 //   - My Scorecard  : current user's MIS for the picked week, editable
 //   - Team Overview : all employees' weekly score (existing dashboard)
 //   - Templates     : admin manages KPI templates per role
-//   - Assign        : admin maps each user to a template
+//   - Assign        : admin maps each user to one or more templates
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
+import TemplateAssignmentPicker from '../components/TemplateAssignmentPicker';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
@@ -372,7 +373,7 @@ export default function Scorecard() {
   const cardOwnerName = displayCard?.user?.name || scorecard?.user?.name
     || (viewUserId === user?.id ? (user?.name || '') : '');
   const grouped = (displayCard?.kpis || []).reduce((acc, k) => {
-    const g = k.group_name || 'Other';
+    const g = (displayCard?.templates?.length > 1 ? `${k.template_name} · ` : '') + (k.group_name || 'Other');
     if (!acc[g]) acc[g] = [];
     acc[g].push(k);
     return acc;
@@ -502,8 +503,9 @@ export default function Scorecard() {
           </div>
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-50 to-blue-50">
             <div>
-              <p className="text-xs text-gray-500">Template</p>
+              <p className="text-xs text-gray-500">{displayCard.templates?.length > 1 ? `${displayCard.templates.length} templates` : 'Template'}</p>
               <p className="text-lg font-bold">{displayCard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
+              {displayCard.templates?.length > 1 && <p className="text-xs text-gray-500 mt-1">Combined score uses the KPI weights across all selected templates. Matching KPI names remain separate by template.</p>}
               {displayCard.template?.description && <p className="text-xs text-gray-500">{displayCard.template.description}</p>}
               {periodCard && (
                 <span className="inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
@@ -516,9 +518,10 @@ export default function Scorecard() {
                 <button
                   onClick={() => exportCsv(
                     `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
+                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
+                      k.template_name || '',
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
@@ -698,7 +701,11 @@ export default function Scorecard() {
 
       {/* ASSIGN (admin) */}
       {tab === 'assign' && (
-        <AssignTemplates assignments={assignments} templates={templates} reload={() => api.get('/scoring/assignments').then(r => setAssignments(r.data))} />
+        <AssignTemplates assignments={assignments} templates={templates} onSaved={(userId, selected) => {
+          setAssignments(previous => previous.map(a => a.user_id !== userId ? a : { ...a,
+            templates: selected, template_ids: selected.map(t => t.id),
+            template_id: selected[0]?.id ?? null, template_name: selected.map(t => t.name).join(' + ') || null }));
+        }} />
       )}
 
       {/* Template detail modal. The heading doubles as an inline rename (mam
@@ -1292,7 +1299,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
   // mam doesn't have to pick before seeing data.
   useEffect(() => {
     api.get('/scoring/assignments').then(r => {
-      const onThis = (r.data || []).filter(a => a.template_id === templateId);
+      const onThis = (r.data || []).filter(a => (a.template_ids || [a.template_id]).includes(templateId));
       setPreviewUsers(onThis);
       if (onThis.length > 0 && !previewUserId) setPreviewUserId(onThis[0].user_id);
     }).catch(() => setPreviewUsers([]));
@@ -1854,32 +1861,40 @@ function TemplateKpiEditor({ templateId, onChange }) {
 }
 
 // ---------- Assign Templates ----------
-function AssignTemplates({ assignments, templates, reload }) {
-  const setTpl = async (uid, tid) => {
-    try { await api.put(`/scoring/assignments/${uid}`, { template_id: tid || null }); reload(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
+function AssignTemplates({ assignments, templates, onSaved }) {
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState('');
+  const visible = assignments.filter(a => `${a.name} ${a.department || ''} ${a.template_name || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
   return (
-    <div className="card p-0 overflow-x-auto">
-      <table>
-        <thead><tr><th>Employee</th><th>Dept</th><th>Role</th><th>Template</th></tr></thead>
+    <div className="card p-0">
+      <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3">
+        <div><p className="font-semibold">Assign templates</p><p className="text-xs text-gray-500 mt-1">Choose multiple templates for employees handling more than one role.</p></div>
+        <input className="input text-sm w-full sm:w-64" aria-label="Search employees" placeholder="Search employee or template…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      <div className="overflow-x-auto"><table>
+        <thead><tr><th>Employee</th><th>Dept</th><th>Role</th><th>Assigned templates</th></tr></thead>
         <tbody>
-          {assignments.map(a => (
+          {visible.map(a => (
             <tr key={a.user_id}>
               <td className="font-medium">{a.name}</td>
               <td className="text-xs text-gray-500">{a.department || '-'}</td>
               <td className="text-xs text-gray-500">{a.role}</td>
               <td>
-                <select className="select text-sm" value={a.template_id || ''} onChange={e => setTpl(a.user_id, e.target.value ? +e.target.value : null)}>
-                  <option value="">— None —</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+                <button type="button" onClick={() => setEditing(a)} aria-label={`Select templates for ${a.name}`}
+                  className="w-full min-w-[240px] rounded-lg border border-gray-200 hover:border-blue-400 p-2.5 text-left flex items-center gap-3">
+                  <span className="flex flex-wrap gap-1.5 flex-1">
+                    {(a.templates || []).map(t => <span key={t.id} className="rounded-md bg-blue-50 text-blue-800 px-2 py-1 text-xs">{t.name}{t.active === 0 ? ' (inactive)' : ''}</span>)}
+                    {!a.templates?.length && <span className="text-sm text-gray-400">Select templates…</span>}
+                  </span>
+                  <FiEdit2 className="text-gray-400 shrink-0" size={14} />
+                </button>
               </td>
             </tr>
           ))}
+          {!visible.length && <tr><td colSpan={4} className="text-center text-gray-400 py-6">No employees found.</td></tr>}
         </tbody>
-      </table>
+      </table></div>
+      {editing && <TemplateAssignmentPicker key={editing.user_id} employee={editing} templates={templates} onSaved={onSaved} onClose={() => setEditing(null)} />}
     </div>
   );
 }

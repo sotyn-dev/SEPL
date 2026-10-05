@@ -17,6 +17,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
+const { listAssignments, setAssignments } = require('../lib/scoreTemplateAssignments');
 
 router.use(authMiddleware);
 
@@ -229,32 +230,18 @@ router.put('/users/:user_id/kpi-targets/:kpi_id', adminOnly, (req, res) => {
 });
 
 // ---------- ASSIGNMENTS ----------
-// List all users with their assigned template
+// One employee row, with all assigned templates.
 router.get('/assignments', (req, res) => {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT u.id as user_id, u.name, u.role, u.department,
-           ut.template_id, t.name as template_name
-    FROM users u
-    LEFT JOIN score_user_template ut ON ut.user_id = u.id
-    LEFT JOIN score_templates t ON t.id = ut.template_id
-    WHERE COALESCE(u.active, 1) = 1
-    ORDER BY u.name`).all();
-  res.json(rows);
+  res.json(listAssignments(getDb()));
 });
 
 router.put('/assignments/:user_id', adminOnly, (req, res) => {
-  const { template_id } = req.body;
-  const db = getDb();
-  if (template_id) {
-    db.prepare(`INSERT INTO score_user_template (user_id, template_id, assigned_by)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`)
-      .run(req.params.user_id, template_id, req.user.id);
-  } else {
-    db.prepare('DELETE FROM score_user_template WHERE user_id=?').run(req.params.user_id);
+  try {
+    const template_ids = setAssignments(getDb(), Number(req.params.user_id), req.body, req.user.id);
+    res.json({ message: 'Saved', template_ids });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
   }
-  res.json({ message: 'Saved' });
 });
 
 // ---------- MODULE OWNERS ----------
@@ -306,18 +293,20 @@ router.put('/module-owners/:key', adminOnly, (req, res) => {
 //                before anyone is assigned, and needs `target_auto` per KPI)
 //   allKpis    — ignore the per-user enabled=0 switch (editor shows every row)
 function computeScorecard(db, userId, weekStart, opts = {}) {
-    // Find user's template
-    const ut = opts.templateId
-      ? { template_id: opts.templateId }
-      : db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
-    if (!ut) {
-      return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No template assigned to this user yet' };
+    const templates = opts.templateId
+      ? db.prepare('SELECT * FROM score_templates WHERE id=?').all(opts.templateId)
+      : db.prepare(`SELECT t.* FROM score_templates t JOIN score_user_template ut ON ut.template_id=t.id
+          WHERE ut.user_id=? AND COALESCE(t.active,1)=1 ORDER BY t.name,t.id`).all(userId);
+    if (!templates.length) {
+      return { user_id: userId, week_start: weekStart, template: null, templates: [], kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No active template assigned to this user yet' };
     }
-    const tpl = db.prepare('SELECT * FROM score_templates WHERE id=?').get(ut.template_id);
-    if (!tpl) {
-      return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'Template not found' };
-    }
-    const kpis = db.prepare('SELECT * FROM score_kpis WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order, id').all(ut.template_id);
+    // Keep the singular summary for existing scorecard consumers; individual
+    // definitions and KPI IDs remain distinct, including same-named metrics.
+    const tpl = templates.length === 1 ? templates[0]
+      : { id: null, name: templates.map(t => t.name).join(' + '), active: 1 };
+    const kpis = templates.flatMap(t => db.prepare(`SELECT * FROM score_kpis
+      WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order,id`).all(t.id)
+      .map(k => ({ ...k, template_name: t.name })));
 
     const lastWeekStart = shiftWeek(weekStart, -7);
     const startTs = `${weekStart} 00:00:00`;
@@ -1499,6 +1488,8 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
 
       return {
         kpi_id: k.id,
+        template_id: k.template_id,
+        template_name: k.template_name,
         group_name: k.group_name,
         metric_name: k.metric_name,
         weightage: weight,                  // effective weight for THIS user
@@ -1540,13 +1531,20 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     // Total auto work units this week — the Champions League min-activity gate
     // uses this to decide whether a week counts toward a player's score (so a
     // person can't win on two perfect tasks while doing almost nothing).
-    const activity = result.reduce((s, r) => s + (r.is_auto && Number.isFinite(+r.actual) ? +r.actual : 0), 0);
+    // Repeated automatic sources on different role templates measure the same
+    // work. Count that activity once for the Champions League activity gate.
+    const autoActivity = new Map();
+    for (const row of result) if (row.is_auto && Number.isFinite(+row.actual)) {
+      autoActivity.set(row.data_source, Math.max(autoActivity.get(row.data_source) || 0, +row.actual));
+    }
+    const activity = [...autoActivity.values()].reduce((sum, n) => sum + n, 0);
 
     return {
       user_id: userId,
       week_start: weekStart,
       week_end: shiftWeek(weekStart, 5),
       template: tpl,
+      templates,
       kpis: result,
       score,
       total_weight: totalWeight,
@@ -1604,12 +1602,13 @@ router.get('/scorecard-range', (req, res) => {
 
     const db = getDb();
     const byKpi = new Map();   // kpi_id → aggregated row
-    let template = null, weeksCounted = 0;
+    let template = null, templates = [], weeksCounted = 0;
     for (let i = 0; i < nWeeks; i++) {
       const w = shiftWeek(from, 7 * i);
       const sc = computeScorecard(db, userId, w);
       if (!sc || !sc.template) continue;
       template = sc.template;
+      templates = sc.templates;
       weeksCounted++;
       for (const k of sc.kpis) {
         const agg = byKpi.get(k.kpi_id);
@@ -1655,7 +1654,7 @@ router.get('/scorecard-range', (req, res) => {
       // print letterhead read it.
       user: { id: userId, name: db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '' },
       week_end: shiftWeek(to, 5), weeks_counted: weeksCounted,
-      template, kpis, score, total_weight: totalWeight,
+      template, templates, kpis, score, total_weight: totalWeight,
     });
   } catch (err) {
     console.error('scorecard-range get error', err);
