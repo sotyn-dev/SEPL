@@ -195,6 +195,12 @@ const SOURCE_INFO = {
   'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
 };
 const sourceInfoFor = (src) => {
+  if (src?.startsWith('auto:raci_step:indent_to_dispatch:')) {
+    return {
+      plan: 'Whole module: completed this week + pending work that reached this step this week',
+      actual: 'Whole module: this step completed during the selected week. Previous pending / done shows older work and how much was completed this week.',
+    };
+  }
   // Per-step RACI sources are dynamic (auto:raci_step:<module>:<step>) — one hint covers them all.
   if (src && src.startsWith('auto:raci_step:')) {
     // Kept in step with raciUserWeek(): Planned is now week-scoped on BOTH
@@ -1111,6 +1117,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
           {kpi.direction !== 'lower_better' && <span className="text-emerald-600">↑ higher better</span>}
           {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
+          {kpi.data_source?.startsWith('auto:raci_step:indent_to_dispatch:') && <span className="ml-2 text-[9px] text-slate-500" title="Counts all Indent to Dispatch records for the selected step, regardless of employee RACI assignment">Whole module</span>}
           {onStepWise && (
             <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">
               {stepWiseOpen ? '▾ hide steps' : '▸ step-wise'}
@@ -1128,7 +1135,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         {isAuto ? (
           <span className="text-gray-700 cursor-help"
                 title={kpi.target_auto
-                  ? 'Counted live by the ERP — what was given this week'
+                  ? sourceInfoFor(kpi.data_source).plan
                   : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`}>
             {planned}
             {!kpi.target_auto && (
@@ -1142,7 +1149,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         )}
       </td>
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{actual}</span> :
+        {isAuto ? <span className="text-gray-700" title={sourceInfoFor(kpi.data_source).actual}>{actual}</span> :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
@@ -1258,12 +1265,11 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 // ---------- Template KPI Editor ----------
 // Per-step RACI <optgroup>s for the template editor's source pickers — one group
 // per module, each step an option whose value is "auto:raci_step:<module>:<step>".
-// Lets mam tie a KPI to ONE specific step, scored for whoever she names Responsible
-// in RACI (mam 2026-06-27: "in template pick step-wise which person I select in RACI").
+// Indent to Dispatch sources count the whole module; other steps use personal RACI.
 function RaciStepOptions({ modules }) {
   if (!modules || !modules.length) return null;
   return modules.map(m => (
-    <optgroup key={m.key} label={`RACI step · ${m.label}`}>
+    <optgroup key={m.key} label={`${m.key === 'indent_to_dispatch' ? 'Whole module step' : 'RACI step'} · ${m.label}`}>
       {(m.steps || []).map(s => (
         <option key={s.key} value={`auto:raci_step:${m.key}:${s.key}`}>{s.label}</option>
       ))}

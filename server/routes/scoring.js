@@ -326,6 +326,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
 
     let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
     let _raciBreakdown; // memoized per-(module,step) RACI breakdown — per-step KPIs reuse it
+    const moduleStepWeeks = new Map();
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
@@ -561,22 +562,28 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         return { given: null, done: Math.round((_raciAgg.onTime / _raciAgg.slaJudged) * 100) };
       }
 
-      // Per-step RACI KPI — auto:raci_step:<module>:<stepKey>. Planned/Actual for
-      // ONE specific step (e.g. indent_to_dispatch → l1) for the person this
-      // scorecard belongs to, where they are the RACI Responsible for that step.
-      // Reuses the same per-(module,step) breakdown as the scorecard drill-down,
-      // memoized per user (mam 2026-06-27: "in template pick step-wise which
-      // person I select in RACI").
+      // Selected Indent to Dispatch steps measure the whole module. Other
+      // modules and the general RACI source retain personal R/A attribution.
       if (source.startsWith('auto:raci_step:')) {
-        if (_raciBreakdown === undefined) {
-          try { _raciBreakdown = require('../utils/raciModules').raciUserWeekBreakdown(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciBreakdown = []; }
-        }
         const rest = source.slice('auto:raci_step:'.length);
         const ci = rest.indexOf(':');
         const mod = ci >= 0 ? rest.slice(0, ci) : rest;
         const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
-        const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
+        let breakdown;
+        if (mod === 'indent_to_dispatch') {
+          const cacheKey = `${mod}:${sinceDate}:${untilDate}`;
+          if (!moduleStepWeeks.has(cacheKey)) {
+            moduleStepWeeks.set(cacheKey, require('../utils/raciModules').raciModuleWeekBreakdown(db, mod, sinceDate, untilDate));
+          }
+          breakdown = moduleStepWeeks.get(cacheKey);
+        } else {
+          if (_raciBreakdown === undefined) {
+            try { _raciBreakdown = require('../utils/raciModules').raciUserWeekBreakdown(db, userId, sinceDate, untilDate); }
+            catch (e) { _raciBreakdown = []; }
+          }
+          breakdown = _raciBreakdown;
+        }
+        const row = breakdown.find(r => r.module === mod && r.step_key === stepKey);
         return row
           ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0, closedBefore: row.closed_before || 0 }
           : { given: 0, done: 0, openBefore: 0, closedBefore: 0 };
@@ -1360,6 +1367,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const result = activeKpis.map(k => {
       const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
       const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
+      let lastWeekPct = lastEntry?.actual_pct ?? null;
 
       // Resolution order for Planned (mam 2026-06-02):
       //   1. Weekly entry's `planned`  — explicit override for that week
@@ -1397,6 +1405,14 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         try {
           const autoRes = computeAutoCount(k.data_source, startTs, endTs);
           const { given, done } = autoRes;
+          if (k.data_source.startsWith('auto:raci_step:indent_to_dispatch:')) {
+            const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
+            lastWeekPct = previous.given > 0
+              ? (k.direction === 'lower_better'
+                  ? (previous.done <= previous.given ? 100 : Math.round(previous.given / previous.done * 100))
+                  : Math.round(previous.done / previous.given * 100))
+              : (previous.done === 0 ? 100 : 0);
+          }
           if (given !== null && given !== undefined) {
             planned = given;
             // A %-type source that had nothing to judge this week returns a
@@ -1504,7 +1520,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         planned,
         actual,
         actual_pct: actualPct,
-        last_week_pct: lastEntry?.actual_pct ?? null,
+        last_week_pct: lastWeekPct,
         total_uptodate: entry?.total_uptodate ?? null,
         // Auto rows compute Pending live (backlog-aware); manual rows keep
         // whatever was typed into the up/wk boxes.
