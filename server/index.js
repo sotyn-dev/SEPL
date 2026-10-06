@@ -590,6 +590,7 @@ try {
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
+app.use('/api/market-rates', require('./routes/marketRates'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/tally-bills', require('./routes/tallyBills'));
 app.use('/api/module-videos', require('./routes/moduleVideos'));
