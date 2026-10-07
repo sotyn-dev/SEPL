@@ -432,7 +432,7 @@ export default function Delegation() {
   // Deadline-slippage light (mam 2026-07-06: "green when task enter date, yellow
   // when user gives a second date but on that date not done, red on the third date").
   // The colour tracks how many times the due date has been PUSHED, not how close it
-  // is. Each approved extension / manual re-date bumps extension_count on the server.
+  // is. Only approved extensions bump extension_count; direct date edits preserve it.
   // Keep the date history even after completion or approval.
   //   GREEN = original date; YELLOW = second date; RED = third date or later.
   const taskHealth = (t) => {
