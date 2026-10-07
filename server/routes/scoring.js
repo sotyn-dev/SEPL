@@ -341,6 +341,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
     let _raciBreakdown; // memoized per-(module,step) RACI breakdown — per-step KPIs reuse it
     const moduleStepWeeks = new Map();
+    const checklistWeeks = new Map();
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
@@ -377,18 +378,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         return { given, done };
       }
       if (source === 'auto:checklists') {
-        // Frequency-aware planned (mam 2026-08-31: the old ×6 assumed every
-        // checklist is DAILY — a monthly task inflated the week's plan by 6).
-        // Planned = Σ per checklist of the days it actually fires Mon–Sat.
-        // Days the person was absent / on leave drop out of the plan too, so
-        // nobody is scored against a day they were not at work (mam 2026-09-12).
-        const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
-        const ckls = db.prepare(`SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
-                                   FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).all(userId);
-        const cklAway = absenceSet(db, weekDates(sinceDate));
-        const given = ckls.reduce((s, c) => s + weeklyExpected(c, sinceDate, cklAway), 0);
-        const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
-        return { given, done };
+        if (!checklistWeeks.has(sinceDate)) {
+          checklistWeeks.set(sinceDate, require('../lib/checklistWeekScore').checklistWeekScore(db, userId, sinceDate));
+        }
+        return checklistWeeks.get(sinceDate);
       }
       // Snag List — SAME shape and SAME position as delegations (mam
       // 2026-08-12: "u do snaglist same as delegation").  MUST stay above the
@@ -1455,6 +1448,23 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         try {
           const autoRes = computeAutoCount(k.data_source, startTs, endTs);
           const { given, done } = autoRes;
+          if (k.data_source === 'auto:checklists') {
+            // Saved score entries can contain the old uploader-based totals.
+            // Previous week must use the same live task/date approvals as this week.
+            const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
+            lastWeekPct = previous.given > 0
+              ? (k.direction === 'lower_better'
+                  ? (previous.done <= previous.given ? 100 : Math.round(previous.given / previous.done * 100))
+                  : Math.round(previous.done / previous.given * 100))
+              : 100;
+            const saved = prevRecord?.week_start === lastWeekStart ? prevRecord : null;
+            prevPeriod = {
+              periodId: lastWeekStart, period_id: lastWeekStart, label: formatWeekLabel(lastWeekStart),
+              planned: previous.given, actual: previous.done, actual_pct: lastWeekPct,
+              recordId: saved?.id ?? null, record_id: saved?.id ?? null,
+              commitment: saved?.commitment ?? null, commitment_prev: saved?.commitment_prev ?? null,
+            };
+          }
           if (k.data_source.startsWith('auto:raci_step:indent_to_dispatch:')) {
             const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
             lastWeekPct = previous.given > 0
@@ -2020,21 +2030,7 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
          WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ? AND status = 'approved'`
       ).get(u.id, start, end).c;
 
-      // Checklists — frequency-aware (mam 2026-08-31): planned = the days
-      // each checklist actually fires within the Mon–Sat week, not ×6 flat.
-      const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
-      const cklRows = db.prepare(
-        `SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
-           FROM checklists WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
-      ).all(u.id);
-      // Absent / leave days are not expected of anyone (mam 2026-09-12).
-      const cklAway = absenceSet(db, weekDates(start));
-      const cklGiven = cklRows.reduce((s, c) => s + weeklyExpected(c, start, cklAway), 0);
-      const cklDone = db.prepare(
-        `SELECT COUNT(*) as c FROM checklist_completions cc
-         JOIN checklists c ON c.id = cc.checklist_id
-         WHERE cc.user_id = ? AND cc.completion_date BETWEEN ? AND ?`
-      ).get(u.id, start, end).c;
+      const { given: cklGiven, done: cklDone } = require('../lib/checklistWeekScore').checklistWeekScore(db, u.id, start);
 
       // Help Tickets — only count tickets ASSIGNED to this user (not raised by)
       const tktGiven = db.prepare(
@@ -2130,14 +2126,7 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
          ORDER BY p.due_date DESC, p.created_at DESC`
       ).all(userId, start, end);
     } else if (moduleName === 'checklists') {
-      rows = db.prepare(
-        `SELECT cc.id, c.title, c.description, cc.completion_date as date,
-                cc.proof_url, cc.notes, cc.submitted_at
-         FROM checklist_completions cc
-         JOIN checklists c ON c.id = cc.checklist_id
-         WHERE cc.user_id = ? AND cc.completion_date BETWEEN ? AND ?
-         ORDER BY cc.completion_date DESC`
-      ).all(userId, start, end);
+      rows = require('../lib/checklistWeekScore').checklistWeekScore(db, userId, start).rows;
     } else if (moduleName === 'tickets') {
       rows = db.prepare(
         `SELECT t.id, t.ticket_no, t.subject, t.priority, t.status, t.category,

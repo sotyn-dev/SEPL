@@ -88,7 +88,7 @@ const SOURCE_INFO = {
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
   'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
   'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
-  'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
+  'auto:checklists':            { plan: 'Assigned checklist occurrences due Mon–Sat, following frequency and attendance rules', actual: 'Approved occurrences from that same week, including submissions made by an admin for the assignee' },
   'auto:tickets':               { plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed' },
   'auto:snags':                  { plan: 'Snags raised within the week, assigned to user', actual: 'Of those, status = Approved (whenever approved)' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
