@@ -106,7 +106,7 @@ function autoMatch(db, accountId, userId) {
   const usedCollections = new Set(db.prepare("SELECT matched_id id FROM bank_transactions WHERE matched_type='collection'").all().map(r => r.id));
   const usedPayments = new Set(db.prepare("SELECT matched_id id FROM bank_transactions WHERE matched_type='payment'").all().map(r => r.id));
   const usedCheques = new Set(db.prepare("SELECT matched_id id FROM bank_transactions WHERE matched_type='cheque'").all().map(r => r.id));
-  const mark = db.prepare(`UPDATE bank_transactions SET matched_type=?, matched_id=?, matched_note=?, matched_by=?, matched_at=CURRENT_TIMESTAMP WHERE id=?`);
+  const mark = db.prepare(`UPDATE bank_transactions SET matched_type=?, matched_id=?, matched_note=?, matched_by=?, matched_at=CURRENT_TIMESTAMP WHERE id=? AND matched_type IS NULL`);
   let n = 0;
   for (const t of unmatched) {
     if (+t.credit > 0) {
@@ -115,7 +115,7 @@ function autoMatch(db, accountId, userId) {
       const pick = cands.find(c => !usedCollections.has(c.id) &&
         (c.transaction_ref && t.description && t.description.toLowerCase().includes(String(c.transaction_ref).toLowerCase())))
         || cands.find(c => !usedCollections.has(c.id));
-      if (pick) { mark.run('collection', pick.id, `auto: collection #${pick.id}`, userId, t.id); usedCollections.add(pick.id); n++; }
+      if (pick && mark.run('collection', pick.id, `auto: collection #${pick.id}`, userId, t.id).changes) { usedCollections.add(pick.id); n++; }
     } else if (+t.debit > 0) {
       let pick = null;
       try {
@@ -123,12 +123,12 @@ function autoMatch(db, accountId, userId) {
           WHERE ABS(amount - ?) < 0.5 AND ABS(julianday(date(created_at)) - julianday(?)) <= 15`).all(+t.debit, t.txn_date);
         pick = cands.find(c => !usedPayments.has(c.id));
       } catch (_) {}
-      if (pick) { mark.run('payment', pick.id, `auto: ${pick.request_no || 'payment #' + pick.id}`, userId, t.id); usedPayments.add(pick.id); n++; continue; }
+      if (pick && mark.run('payment', pick.id, `auto: ${pick.request_no || 'payment #' + pick.id}`, userId, t.id).changes) { usedPayments.add(pick.id); n++; continue; }
       try {
         const chq = db.prepare(`SELECT id, cheque_number FROM cheques WHERE ABS(amount - ?) < 0.5`).all(+t.debit)
           .find(c => !usedCheques.has(c.id) && c.cheque_number && t.description &&
                      t.description.toLowerCase().includes(String(c.cheque_number).toLowerCase()));
-        if (chq) { mark.run('cheque', chq.id, `auto: cheque ${chq.cheque_number}`, userId, t.id); usedCheques.add(chq.id); n++; }
+        if (chq && mark.run('cheque', chq.id, `auto: cheque ${chq.cheque_number}`, userId, t.id).changes) { usedCheques.add(chq.id); n++; }
       } catch (_) {}
     }
   }

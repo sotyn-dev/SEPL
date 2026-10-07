@@ -6736,6 +6736,8 @@ in your first week. If a process feels broken, raise a Help Ticket
   ];
 
   const ALL_MODULES = [
+    'vendor_treds_dashboard', 'vendor_registrations', 'vendor_enquiries', 'vendor_approvals',
+    'treds_accounts', 'treds_invoices', 'bill_discounting', 'vendor_treds_reports', 'vendor_treds_masters', 'vendor_treds_settings',
     'dashboard', 'leads', 'quotations', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement', 'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
     'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'snags', 'company_assets', 'help_tickets',
     'sub_contractors', 'ai_agent', 'crm_funnel', 'cheques', 'fire_noc', 'rental_tools', 'influencers', 'crm_kitting',
@@ -7595,6 +7597,9 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/subcontractorWorkOrders').initialize(db);
   require('../lib/offerLetterScore').initialize(db);
   require('../lib/purchaseBilling').ensurePurchaseBilling(db);
+  require('./vendorTredsSchema').ensureVendorTredsSchema(db);
+  db.prepare("INSERT INTO app_settings(key,value) VALUES('vendor_treds_settings',?) ON CONFLICT(key) DO NOTHING")
+    .run(JSON.stringify(require('../lib/vendorTreds/kpis').getDefaultConfig()));
   return db;
 }
 

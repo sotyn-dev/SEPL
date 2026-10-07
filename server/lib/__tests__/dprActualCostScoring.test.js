@@ -119,6 +119,18 @@ test('DPR Actual Cost sources retain manual amount targets and resolve weekly co
     assert.equal(find(uploader).actual, 1561);
   });
 
+  await t.test('weekly API recomputes distinct selected cohorts after a range request and repeated week switches', async () => {
+    for (const [week, expected] of [['2026-09-28', 111], ['2026-10-05', 2401], ['2026-09-28', 111]]) {
+      const response = await request(`/scorecard?user_id=9002&week_start=${week}`);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.week_start, week);
+      const metric = response.body.kpis.find(k => k.kpi_id === all);
+      assert.equal(metric.actual, expected);
+      assert.equal(metric.actual_auto, true);
+      assert.equal(metric.planned_editable, true);
+    }
+  });
+
   await t.test('existing submission-count, approval-count and profit sources retain their semantics', async () => {
     count = await create({ data_source: 'auto:dpr_count' });
     profitByUser = await create({ data_source: 'auto:dpr_profit_by_user' });

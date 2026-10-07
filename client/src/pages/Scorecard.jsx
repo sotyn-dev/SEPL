@@ -5,7 +5,7 @@
 //   - Templates     : admin manages KPI templates per role
 //   - Assign        : admin maps each user to one or more templates
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useLayoutEffect, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -15,6 +15,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { createLatestScorecardRequest, createScorecardSelection, selectScorecardWeek, selectedScorecard, saveSelectedScorecard } from '../utils/scorecardSelection';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -225,7 +226,12 @@ export default function Scorecard() {
   const [tab, setTab] = useUrlTab(['my', 'assign', 'overview', 'templates', 'view'], 'my');
   const [weekStart, setWeekStart] = useState(lastMonday(0));
   const [viewUserId, setViewUserId] = useState(user?.id);
+  const [currentSelection] = useState(() => createScorecardSelection({ userId: viewUserId, weekStart }));
   const [scorecard, setScorecard] = useState(null);
+  const [weeklyRequests] = useState(() => createLatestScorecardRequest(
+      url => api.get(url).then(response => response.data), setScorecard,
+      error => toast.error(error.response?.data?.error || 'Failed to load scorecard'),
+  ));
   const [savingKpi, setSavingKpi] = useState(null);
   const [templates, setTemplates] = useState([]);
   // Inline rename of the open template's heading (mam 2026-08-22 "rename title").
@@ -270,10 +276,8 @@ export default function Scorecard() {
   }, [viewUserId, weekStart]);
 
   const loadScorecard = useCallback(() => {
-    api.get(`/scoring/scorecard?user_id=${viewUserId}&week_start=${weekStart}`)
-      .then(r => setScorecard(r.data))
-      .catch(err => toast.error(err.response?.data?.error || 'Failed'));
-  }, [viewUserId, weekStart]);
+    return weeklyRequests.load(`/scoring/scorecard?user_id=${viewUserId}&week_start=${weekStart}`);
+  }, [viewUserId, weekStart, weeklyRequests]);
 
   const loadOverview = useCallback(() => {
     api.get(`/scoring/weekly?week_start=${weekStart}`)
@@ -296,14 +300,16 @@ export default function Scorecard() {
   const saveEntry = async (kpi, patch) => {
     setSavingKpi(kpi.kpi_id);
     try {
-      await api.put('/scoring/scorecard/entry', {
-        user_id: viewUserId,
-        kpi_id: kpi.kpi_id,
-        week_start: weekStart,
-        ...patch,
+      await saveSelectedScorecard({ userId: viewUserId, weekStart }, () => api.put('/scoring/scorecard/entry', {
+        user_id: viewUserId, kpi_id: kpi.kpi_id, week_start: weekStart, ...patch,
+      }), () => currentSelection.get(), current => {
+        const loads = [weeklyRequests.load(`/scoring/scorecard?user_id=${current.userId}&week_start=${current.weekStart}`)];
+        if (current.rangeApplied) {
+          setPeriodCard(null);
+          loads.push(periodRequests.load(`/scoring/scorecard-range?user_id=${current.userId}&from=${current.rangeApplied.from}&to=${current.rangeApplied.to}`));
+        }
+        return Promise.all(loads);
       });
-      // Reload to get fresh totals
-      await loadScorecard();
       return true;
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -344,18 +350,36 @@ export default function Scorecard() {
   // longer triggers a half-picked calculation; the score computes only when
   // Apply is pressed (rangeApplied snapshots the dates at that moment).
   const [rangeApplied, setRangeApplied] = useState(null);
+  useLayoutEffect(() => {
+    currentSelection.set({ userId: viewUserId, weekStart, rangeApplied });
+  }, [viewUserId, weekStart, rangeApplied, currentSelection]);
   const [rangeStat, setRangeStat] = useState(null);
   // The FULL scorecard aggregated over the applied period — when set, the MIS
   // table shows these summed values instead of the single week (read-only).
   const [periodCard, setPeriodCard] = useState(null);
+  const [periodRequests] = useState(() => createLatestScorecardRequest(
+      url => api.get(url).then(response => response.data), setPeriodCard,
+      () => setPeriodCard(null),
+  ));
+  const chooseWeek = week => {
+    if (!week) return;
+    const selectedWeek = selectScorecardWeek(week, {
+      weekly: weeklyRequests, period: periodRequests,
+      setScorecard, setPeriodCard, setRangeApplied, setRangeStat, setWeekStart,
+    });
+    // Re-selecting the same week also exits period mode and refreshes its data.
+    if (selectedWeek === weekStart) loadScorecard();
+  };
   useEffect(() => {
     if (!rangeApplied) { setPeriodCard(null); return; }
-    let on = true;
-    api.get(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`)
-      .then(r => { if (on) setPeriodCard(r.data); })
-      .catch(() => { if (on) setPeriodCard(null); });
-    return () => { on = false; };
-  }, [rangeApplied, viewUserId]);
+    setPeriodCard(null);
+    periodRequests.load(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`);
+    return () => periodRequests.invalidate();
+  }, [rangeApplied, viewUserId, periodRequests]);
+  useEffect(() => () => {
+    weeklyRequests.invalidate();
+    periodRequests.invalidate();
+  }, [weeklyRequests, periodRequests]);
   useEffect(() => {
     if (!rangeApplied) { setRangeStat(null); return; }
     let from = mondayOf(rangeApplied.from), to = mondayOf(rangeApplied.to);
@@ -379,7 +403,8 @@ export default function Scorecard() {
 
   // Period mode: the applied From→To aggregate replaces the weekly card in the
   // table + banner (read-only — entries/commitments are per-week concepts).
-  const displayCard = periodCard || scorecard;
+  const displayCard = selectedScorecard({ scorecard, periodCard, rangeApplied, viewUserId, weekStart });
+  const periodMode = !!rangeApplied;
   // Whose scorecard is on screen — comes from the API (admin can switch to any
   // employee), falling back to the logged-in user so the export filename and
   // the print letterhead are never blank.
@@ -445,18 +470,18 @@ export default function Scorecard() {
           <FiCalendar className="text-gray-400" />
           <div>
             <label className="label">Week starting (Monday)</label>
-            <input type="date" className="input" value={weekStart} onChange={e => setWeekStart(e.target.value)} />
+            <input type="date" className="input" value={weekStart} onChange={e => chooseWeek(e.target.value)} />
           </div>
           <div className="flex gap-1 flex-wrap items-center">
-            <button onClick={() => setWeekStart(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
-            <button onClick={() => setWeekStart(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
-            <button onClick={() => setWeekStart(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
+            <button onClick={() => chooseWeek(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
+            <button onClick={() => chooseWeek(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
+            <button onClick={() => chooseWeek(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
             {/* Mam 2026-08-17: "add with two weeks last 6 months also" — jump
                 to any week of the last 6 months without date-picker gymnastics. */}
             <select
               className="input text-xs w-auto py-1.5"
               value={Array.from({ length: 26 }, (_, i) => lastMonday(i)).includes(weekStart) ? weekStart : ''}
-              onChange={e => e.target.value && setWeekStart(e.target.value)}>
+              onChange={e => e.target.value && chooseWeek(e.target.value)}>
               <option value="" disabled>Last 6 months…</option>
               {Array.from({ length: 26 }, (_, i) => {
                 const m = lastMonday(i);
@@ -503,14 +528,15 @@ export default function Scorecard() {
       )}
 
       {/* MY SCORECARD */}
-      {(tab === 'my' || tab === 'view') && scorecard && (
+      {(tab === 'my' || tab === 'view') && !displayCard && <div className="card p-4 text-sm text-gray-500">Loading scorecard…</div>}
+      {(tab === 'my' || tab === 'view') && displayCard && (
         <div id="scorecard-print-area" className="space-y-6">
           {/* Letterhead — appears only on the printed sheet */}
           <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
             <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
-            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
+            <div className="text-sm font-semibold mt-1">{periodMode ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
             <div className="text-xs text-gray-600">
-              {periodCard ? `${fmtRange(periodCard.from)} → ${fmtRange(periodCard.to)} (${periodCard.weeks_counted} weeks)` : fmtRange(weekStart)}
+              {periodMode ? `${fmtRange(displayCard.from)} → ${fmtRange(displayCard.to)} (${displayCard.weeks_counted} weeks)` : fmtRange(weekStart)}
               {' '}· Template: {displayCard.template?.name || '—'}
             </div>
           </div>
@@ -520,9 +546,9 @@ export default function Scorecard() {
               <p className="text-lg font-bold">{displayCard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
               {displayCard.templates?.length > 1 && <p className="text-xs text-gray-500 mt-1">Combined score uses the KPI weights across all selected templates. Matching KPI names remain separate by template.</p>}
               {displayCard.template?.description && <p className="text-xs text-gray-500">{displayCard.template.description}</p>}
-              {periodCard && (
+              {periodMode && (
                 <span className="inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
-                  PERIOD {fmtRange(periodCard.from).replace(/ \d{4}$/, '')} → {fmtRange(periodCard.to)} · {periodCard.weeks_counted} wks
+                  PERIOD {fmtRange(displayCard.from).replace(/ \d{4}$/, '')} → {fmtRange(displayCard.to)} · {displayCard.weeks_counted} wks
                 </span>
               )}
             </div>
@@ -530,7 +556,7 @@ export default function Scorecard() {
               {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button
                   onClick={() => exportCsv(
-                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
+                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodMode ? `${displayCard.from}_to_${displayCard.to}` : weekStart}`,
                     ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
@@ -553,14 +579,14 @@ export default function Scorecard() {
                   title="Download this scorecard as CSV (opens in Excel)"
                 ><FiDownload size={14} /> Export Excel</button>
               )}
-              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+              {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button onClick={printScorecard}
                   className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
                   title="Print this scorecard (or save as PDF)"
                 ><FiPrinter size={14} /> Print</button>
               )}
               <div className="text-right">
-                <p className="text-xs text-gray-500">{periodCard ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
+                <p className="text-xs text-gray-500">{periodMode ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
                 {(() => {
                   // Headline = variance from plan (achievement% − 100), 2 decimals:
                   // 0% = on plan, negative = behind, positive = ahead (mam 2026-07-04).
@@ -642,9 +668,9 @@ export default function Scorecard() {
                           kpi={k}
                           saving={savingKpi === k.kpi_id}
                           onSave={(patch) => saveEntry(k, patch)}
-                          readOnly={!!periodCard || (viewUserId !== user.id && !isAdmin())}
-                          onStepWise={isRaci && !periodCard ? toggleRaci : null}
-                          stepWiseOpen={isRaci && !periodCard && raci.open}
+                          readOnly={periodMode || (viewUserId !== user.id && !isAdmin())}
+                          onStepWise={isRaci && !periodMode ? toggleRaci : null}
+                          stepWiseOpen={isRaci && !periodMode && raci.open}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">

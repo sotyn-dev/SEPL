@@ -17,6 +17,7 @@ import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
 import { useModuleFlags } from '../context/ModuleFlagsContext';
+import { TABS as VENDOR_TREDS_TABS } from './vendorTreds/model';
 import {
   // Navigation + UI controls (kept as-is)
   FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey, FiSmartphone,
@@ -69,7 +70,7 @@ import {
   // Project Dashboard & PO Analytics (TSK-0819)
   FiPieChart,
 } from 'react-icons/fi';
-import { LuIndianRupee, LuBrain } from 'react-icons/lu';
+import { LuIndianRupee, LuBrain, LuBuilding2 } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 
@@ -109,6 +110,7 @@ const SIDEBAR_GROUPS = [
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
+    { path: '/vendor-treds', label: 'Vendor & TReDS Management', icon: LuBuilding2, module: 'vendor_treds_dashboard' },
   ]},
   // Labour Management System (mam 2026-08) — sits between CRM and Solar
   // Division per spec. Quotation → approval → Work Order → labour cost.
@@ -616,7 +618,7 @@ export default function Layout() {
   useEffect(() => {
     const path = location.pathname;
     for (const g of SIDEBAR_GROUPS) {
-      if (g.items.some(it => it.path === path)) {
+      if (g.items.some(it => it.path.split('?')[0] === path)) {
         setOpenGroups(prev => {
           if (prev.has(g.id)) return prev;
           const next = new Set(prev);
@@ -650,6 +652,7 @@ export default function Layout() {
   // An item with no `open` flag and no/unknown module is hidden for
   // non-admins — so forgetting to wire a permission key no longer leaks it.
   const itemVisible = (item) => {
+    if (item.path === '/vendor-treds') return VENDOR_TREDS_TABS.some(tab => canView(tab.permission));
     if (item.path === '/compliance') {
       const isNancy = !!(user?.email?.toLowerCase().includes('nancy') || user?.name?.toLowerCase().includes('nancy'));
       const isAdm = (typeof isAdmin === 'function' ? isAdmin() : !!isAdmin) || user?.role === 'admin' || user?.role === 'backup_admin' || user?.role_name?.toLowerCase().includes('admin');
@@ -690,6 +693,12 @@ export default function Layout() {
   // every where"), so one button in the shared header covers every page
   // instead of hand-placing it in 80 toolbars.
   const crumb = (() => {
+    if (location.pathname === '/vendor-treds') {
+      const tabId = new URLSearchParams(location.search).get('tab');
+      const tab = VENDOR_TREDS_TABS.find(item => item.id === tabId)
+        || VENDOR_TREDS_TABS.find(item => canView(item.permission));
+      return { group: 'CRM', label: 'Vendor & TReDS Management', module: tab?.permission || 'vendor_treds_dashboard' };
+    }
     if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
     for (const g of SIDEBAR_GROUPS) {
       if (g.path === location.pathname) return { group: null, label: g.label, module: g.module };
@@ -828,7 +837,8 @@ export default function Layout() {
             );
             const isOpen = isGroupOpen(g.id);
             const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
-            const hasActiveChild = childItems.some(it => location.pathname === it.path);
+            const navItemActive = item => location.pathname === item.path;
+            const hasActiveChild = childItems.some(navItemActive);
             return (
               <div key={g.id} className="pt-0.5">
                 <button
@@ -845,7 +855,7 @@ export default function Layout() {
                   <div className="ml-2 mt-0.5 mb-1 pl-3 border-l border-white/15 space-y-0.5">
                     {childItems.map(item => (
                       <Link key={item.path} to={item.path}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${navItemActive(item) ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
                         <span className="min-w-0 whitespace-normal leading-5" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>

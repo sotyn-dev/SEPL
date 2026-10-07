@@ -423,6 +423,13 @@ try {
 }
 
 // Procurement schedule reminder cron — mam (2026-05-29):
+try {
+  require('./scripts/vendorTredsReminderCron').schedule();
+} catch (e) {
+  console.warn('[vendor-treds] Scheduler not started:', e.message);
+}
+
+// Procurement schedule reminder cron — mam (2026-05-29):
 // "only 1 day before reminder and suggestion".  Every weekday at
 // 09:00 (and 60 s after boot for catch-up) scans the schedule for
 // indent rows whose end_date == tomorrow's business day, and posts
@@ -607,6 +614,7 @@ app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
+app.use('/api/vendor-treds', require('./routes/vendorTreds'));
 app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
 app.use('/api/fire-noc', require('./routes/fireNoc'));
@@ -705,6 +713,8 @@ app.post('/api/public/employee-upload/:token',
 // manual sweep needed. Runs before express.static so the restored file is served.
 // New employee documents require HR read access even when their URL is known.
 app.use('/uploads/employee-documents', authMiddleware, require('./middleware/auth').requirePermission('employees', 'view'));
+// Private business documents are served only by record-aware authenticated API routes.
+app.use('/uploads/vendor-treds', (req, res) => res.status(404).end());
 app.use('/uploads', async (req, res, next) => {
   let key = null;
   try {

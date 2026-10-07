@@ -33,6 +33,7 @@ const ItemMaster = lazy(() => import('./pages/ItemMaster'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
 const Attendance = lazy(() => import('./pages/Attendance'));
 const Vendors = lazy(() => import('./pages/Vendors'));
+const VendorTreds = lazy(() => import('./pages/vendorTreds'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Procurement = lazy(() => import('./pages/Procurement'));
 const SalesBillReceive = lazy(() => import('./pages/SalesBillReceive'));
@@ -291,6 +292,7 @@ export default function App() {
           <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
           <Route path="dispatch-receiving" element={<ModuleRoute module="procurement"><DispatchReceiving /></ModuleRoute>} />
           <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
+          <Route path="vendor-treds" element={<VendorTreds />} />
           <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
           <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
           <Route path="sales-bill-receive" element={<ModuleRoute module="sales_bill_receive"><SalesBillReceive /></ModuleRoute>} />
