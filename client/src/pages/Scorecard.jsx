@@ -528,17 +528,13 @@ export default function Scorecard() {
                 <button
                   onClick={() => exportCsv(
                     `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Previous Period', 'Previous Plan', 'Previous Actual', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
+                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
                       k.template_name || '',
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
-                      k.previous_period?.label || (k.previous_planned != null ? 'Previous' : '—'),
-                      k.previous_planned ?? '—',
-                      k.previous_actual ?? '—',
-                      vsPlan(k.last_week_pct) ?? '',
                       k.planned ?? 0,
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
@@ -627,7 +623,6 @@ export default function Scorecard() {
                   <tr>
                     <th className="text-left p-2 w-[260px]">Team / Person</th>
                     <th className="text-center p-2 w-16">Weight %</th>
-                    <th className="text-center p-2 w-24" title="Previous period Plan / Actual and Achievement %">Previous<br />Plan / Actual</th>
                     <th className="text-center p-2 w-24">Planned</th>
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
@@ -650,7 +645,7 @@ export default function Scorecard() {
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
-                            <td colSpan={8} className="p-3">
+                            <td colSpan={7} className="p-3">
                               {raci.loading
                                 ? <p className="text-sm text-gray-500">Loading step-wise…</p>
                                 : <RaciBreakdown data={raci.data} />}
@@ -1141,38 +1136,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         </div>
       </td>
       <td className="text-center p-2">{kpi.weightage}%</td>
-      <td className="text-center p-2">
-        {kpi.previous_planned != null || kpi.previous_actual != null ? (
-          <div className="flex flex-col items-center justify-center leading-tight"
-               title={`Previous (${kpi.previous_period?.label || 'Last Period'}): Plan ${kpi.previous_planned ?? '—'}, Actual ${kpi.previous_actual ?? '—'}${kpi.last_week_pct != null ? ` · Achievement ${fmtVs(kpi.last_week_pct)}` : ''}`}>
-            <div className="font-semibold text-gray-700">
-              <span>{kpi.previous_planned ?? '—'}</span>
-              <span className="text-gray-300 mx-1">/</span>
-              <span>{kpi.previous_actual ?? '—'}</span>
-            </div>
-            <div className="text-[9px] font-normal text-gray-400">plan / act</div>
-            {kpi.last_week_pct != null && (
-              <div className={`text-[10px] font-bold mt-0.5 ${vsClr(kpi.last_week_pct)}`}>
-                {fmtVs(kpi.last_week_pct)}
-              </div>
-            )}
-          </div>
-        ) : kpi.last_week_pct != null ? (
-          <div className="text-center" title={`Previous: Achievement ${fmtVs(kpi.last_week_pct)}`}>
-            <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span>
-          </div>
-        ) : (
-          <span className="text-gray-300" title="No previous data">—</span>
-        )}
-      </td>
       {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
           pendency shows ONLY in the Pending column (up), not added here. */}
-      <td className="text-center p-2" title={kpi.previous_planned != null ? `Current: ${planned} · Prev Plan: ${kpi.previous_planned}` : undefined}>
+      <td className="text-center p-2">
         {!plannedEditable ? (
           <span className="text-gray-700 cursor-help"
                 title={(kpi.target_auto
                   ? sourceInfoFor(kpi.data_source).plan
-                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`) + (kpi.previous_planned != null ? ` (Prev Plan: ${kpi.previous_planned})` : '')}>
+                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`)}>
             {planned}
             {!kpi.target_auto && (
               <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
@@ -1184,7 +1155,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           <input aria-label={`Planned ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
         )}
       </td>
-      <td className="text-center p-2" title={kpi.previous_actual != null ? `Current: ${actual} · Prev Actual: ${kpi.previous_actual}` : undefined}>
+      <td className="text-center p-2">
         {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
           <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
         {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
