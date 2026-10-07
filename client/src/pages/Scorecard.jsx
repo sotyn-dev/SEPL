@@ -627,7 +627,7 @@ export default function Scorecard() {
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
                     <th className="text-center p-2 w-24">Previous<br />Pending / Done</th>
-                    <th className="text-left p-2">Commitment</th>
+                    <th className="text-left p-2 w-40">Commitment</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1095,8 +1095,8 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       pending_uptodate: pendingUp === '' ? null : Number(pendingUp),
       pending_work: pendingWork === '' ? null : Number(pendingWork),
       total_uptodate: totalUp === '' ? null : Number(totalUp),
-      commitment: commitment || null,
-      commitment_prev: commitmentPrev || null,
+      ...(String(commitment ?? '') !== String(kpi.commitment ?? '') ? { commitment } : {}),
+      ...(String(commitmentPrev ?? '') !== String(kpi.commitment_prev ?? '') ? { commitment_prev: commitmentPrev } : {}),
       ...(extra?.nativeEvent ? {} : extra),
     });
   };
@@ -1194,23 +1194,38 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           {fmtVs(prevAch)}
         </div>
       </td>
-      <td className="p-2">
+      <td className="p-2 w-40">
         {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
             pending tasks, and the CURRENT week's commitment. */}
         <div className="space-y-1">
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment on the previous pending tasks — when will the backlog be cleared?">Prev</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="previous pending — by when…"
-              value={commitmentPrev} onChange={e => setCommitmentPrev(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment for previous pending tasks (%)">Prev</span>
+            <KpiCommitmentInput label={`Previous commitment ${kpi.metric_name}`} value={commitmentPrev} onChange={setCommitmentPrev} onSave={flush} disabled={readOnly || saving} />
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for the current week's work">Now</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="current commitment…"
-              value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for current work (%) — carried into the following week">Now</span>
+            <KpiCommitmentInput label={`Current commitment ${kpi.metric_name}`} value={commitment} onChange={setCommitment} onSave={flush} disabled={readOnly || saving} />
           </div>
+          {kpi.commitment_inherited && String(commitment ?? '') === String(kpi.commitment ?? '') && <p className="text-[9px] text-gray-400 pl-10" title={`Commitment entered for week starting ${kpi.commitment_from_week}`}>From last week</p>}
         </div>
       </td>
     </tr>
+  );
+}
+
+function KpiCommitmentInput({ label, value, onChange, onSave, disabled }) {
+  const text = String(value ?? '');
+  const isNumber = text.trim() !== '' && Number.isFinite(Number(text));
+  const legacyNote = text.trim() !== '' && !isNumber;
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <input type="number" step="any" className="input text-center text-xs !w-20 py-1" aria-label={label} placeholder="—"
+          value={isNumber ? text : ''} onChange={e => onChange(e.target.value)} onBlur={() => onSave()} disabled={disabled} />
+        <span className="text-[10px] text-gray-400">%</span>
+      </div>
+      {legacyNote && <p className="max-w-40 truncate text-[9px] text-gray-500" title={text}>{text}</p>}
+    </div>
   );
 }
 

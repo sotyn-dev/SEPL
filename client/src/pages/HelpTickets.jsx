@@ -92,11 +92,11 @@ const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_is
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
 export default function HelpTickets() {
-  const { user, isAdmin, canSeeAll } = useAuth();
+  const { user, isAdmin, canSeeAll, canApprove } = useAuth();
   // Mam: 'help tickets also permission one PC we need to followup all
   // help tickets'. Anyone with help_tickets.see_all (or admin) can see
   // every ticket and triage them.
-  const canFollowAll = isAdmin() || canSeeAll('help_tickets');
+  const canFollowAll = isAdmin() || canSeeAll('help_tickets') || canApprove('help_tickets');
   const [scope, setScope] = useState('mine');     // mine | given | all
   const [statusFilter, setStatusFilter] = useState([]);
   const [search, setSearch] = useState('');
@@ -104,6 +104,8 @@ export default function HelpTickets() {
   const [tickets, setTickets] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [createModal, setCreateModal] = useState(false);
+  const [editModal, setEditModal] = useState(null);
+  const [savingTicket, setSavingTicket] = useState(false);
   const [viewModal, setViewModal] = useState(null);
   const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '' });
   const [response, setResponse] = useState('');
@@ -114,6 +116,26 @@ export default function HelpTickets() {
   // Inline reject-reason capture (replaces the native prompt()).
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+
+  const closeTicketForm = () => { setCreateModal(false); setEditModal(null); };
+  const openCreate = () => {
+    setEditModal(null);
+    setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '' });
+    setCreateModal(true);
+  };
+  const openEdit = (ticket) => {
+    setViewModal(null); setCreateModal(false); setEditModal(ticket);
+    setForm({
+      subject: ticket.subject || '', description: ticket.description || '',
+      category: ticket.category || 'bug', priority: ticket.priority || 'medium',
+      module: ticket.module || '', assigned_to: ticket.assigned_to || '',
+      deadline_date: (ticket.deadline_date || '').slice(0, 10),
+    });
+  };
+  const assigneeOptions = employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }));
+  if (editModal?.assigned_to && !employees.some(e => e.id === editModal.assigned_to)) {
+    assigneeOptions.push({ id: editModal.assigned_to, label: `${editModal.assigned_to_name || 'Current assignee'} (inactive)` });
+  }
 
   const openView = (t) => {
     // Start the "Add / Update Response" box EMPTY — the saved response is shown
@@ -158,6 +180,23 @@ export default function HelpTickets() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (savingTicket) return;
+    if (editModal) {
+      setSavingTicket(true);
+      const payload = {
+        subject: form.subject, description: form.description, category: form.category,
+        priority: form.priority, module: form.module, deadline_date: form.deadline_date || null,
+        ...(canFollowAll ? { assigned_to: form.assigned_to || null } : {}),
+      };
+      try {
+        await api.patch(`/support/${editModal.id}/details`, payload);
+        toast.success(`Ticket ${editModal.ticket_no} updated`);
+        closeTicketForm(); load();
+      } catch (err) { toast.error(err.response?.data?.error || 'Failed to update ticket'); }
+      finally { setSavingTicket(false); }
+      return;
+    }
+    setSavingTicket(true);
     // Upload optional attachment first (screenshot, log, PDF) and stash
     // its URL on attachment_link so admin / assignee can see the proof.
     let payload = { ...form };
@@ -180,6 +219,7 @@ export default function HelpTickets() {
       setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '', _file: null });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSavingTicket(false); }
   };
 
   const update = async (id, payload) => {
@@ -277,7 +317,7 @@ export default function HelpTickets() {
             ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','Deadline','When'],
             filtered.map(t => [t.ticket_no, t.subject, t.user_name, t.assigned_to_name, t.priority, t.status, t.deadline_date || '', t.created_at]))}
             className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
-          <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
+          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
         </div>
       </div>
 
@@ -357,7 +397,7 @@ export default function HelpTickets() {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 min-w-24">Proof</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Deadline</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
-              <th></th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -405,7 +445,10 @@ export default function HelpTickets() {
                     })()}
                   </td>
                   <td className="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">{fmtDate(t.created_at, { day: '2-digit', month: 'short' })}</td>
-                  <td className="px-3 py-2 text-right" onClick={e => e.stopPropagation()}>
+                  <td className="px-3 py-2 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                    {(canFollowAll || isRaiser) && (
+                      <button onClick={() => openEdit(t)} className="inline-flex items-center gap-1 text-[11px] text-blue-700 font-semibold hover:underline mr-2" aria-label={`Edit ${t.ticket_no}`} title="Edit ticket details"><FiEdit2 size={12} /> Edit</button>
+                    )}
                     {/* Quick close button only for the raiser / admin */}
                     {canClose && t.status !== 'resolved' && t.status !== 'closed' && (
                       <button onClick={() => update(t.id, { status: 'resolved' })} className="text-[10px] text-emerald-700 font-bold hover:underline mr-2" title="Mark resolved">Close</button>
@@ -422,50 +465,51 @@ export default function HelpTickets() {
       </div>
       <Pagination {...pager} />
 
-      {/* Create Ticket Modal */}
-      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise New Ticket">
+      {/* Ticket details use a separate edit endpoint from the proof workflow. */}
+      <Modal isOpen={createModal || !!editModal} onClose={closeTicketForm} title={editModal ? `Edit Ticket — ${editModal.ticket_no}` : 'Raise New Ticket'}>
         <form onSubmit={submit} className="space-y-3">
+          {editModal && <p className="text-xs text-gray-500">Update the ticket details. Status and submitted proof stay as recorded.</p>}
           <div>
-            <label className="label">Subject *</label>
-            <input className="input" required value={form.subject} onChange={e => setForm({ ...form, subject: e.target.value })} placeholder="Short title — e.g. Cannot upload PO file" />
+            <label className="label" htmlFor="ticket-subject">Subject *</label>
+            <input id="ticket-subject" className="input" required value={form.subject} onChange={e => setForm({ ...form, subject: e.target.value })} placeholder="Short title — e.g. Cannot upload PO file" />
           </div>
           <div>
-            <label className="label">Description *</label>
-            <textarea className="input" rows="4" required value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What happened, what you expected, what module you were on" />
+            <label className="label" htmlFor="ticket-description">Description *</label>
+            <textarea id="ticket-description" className="input" rows="4" required value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What happened, what you expected, what module you were on" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">Category</label>
-              <select className="select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+              <label className="label" htmlFor="ticket-category">Category</label>
+              <select id="ticket-category" className="select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
                 {CATEGORIES.map(c => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}
               </select>
             </div>
             <div>
-              <label className="label">Priority</label>
-              <select className="select" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+              <label className="label" htmlFor="ticket-priority">Priority</label>
+              <select id="ticket-priority" className="select" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div className="sm:col-span-2">
-              <label className="label">Deadline <span className="text-gray-400 font-normal text-[10px]">(optional · target date)</span></label>
-              <input type="date" className="input" value={form.deadline_date}
+              <label className="label" htmlFor="ticket-deadline">Deadline <span className="text-gray-400 font-normal text-[10px]">(optional · target date)</span></label>
+              <input id="ticket-deadline" type="date" className="input" value={form.deadline_date}
                 onChange={e => setForm({ ...form, deadline_date: e.target.value })} />
             </div>
             <div className="sm:col-span-2">
-              <label className="label">Module (optional)</label>
-              <input className="input" value={form.module} onChange={e => setForm({ ...form, module: e.target.value })} placeholder="e.g. Procurement, Delegations, Inventory" />
+              <label className="label" htmlFor="ticket-module">Module (optional)</label>
+              <input id="ticket-module" className="input" value={form.module} onChange={e => setForm({ ...form, module: e.target.value })} placeholder="e.g. Procurement, Delegations, Inventory" />
             </div>
             <div className="sm:col-span-2">
               <label className="label">Assign To (optional)</label>
-              <SearchableSelect
-                options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
+              {editModal && !canFollowAll ? <p className="input text-sm text-gray-500">{editModal.assigned_to_name || 'Unassigned'}</p> : <SearchableSelect
+                options={assigneeOptions}
                 value={form.assigned_to || null}
                 valueKey="id" displayKey="label"
                 placeholder="Pick someone or leave blank for admin to triage"
                 onChange={(emp) => setForm(f => ({ ...f, assigned_to: emp?.id || '' }))}
-              />
+              />}
             </div>
-            <div className="sm:col-span-2">
+            {!editModal && <div className="sm:col-span-2">
               <label className="label">Attachment <span className="text-gray-400 font-normal text-[10px]">(optional · screenshot, log, PDF)</span></label>
               <input
                 className="input"
@@ -476,11 +520,11 @@ export default function HelpTickets() {
               {form._file && (
                 <p className="text-[10px] text-blue-600 mt-1">Selected: {form._file.name} ({(form._file.size / 1024).toFixed(1)} KB)</p>
               )}
-            </div>
+            </div>}
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Raise Ticket</button>
+            <button type="button" onClick={closeTicketForm} className="btn btn-secondary" disabled={savingTicket}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={savingTicket}>{savingTicket ? 'Saving…' : editModal ? 'Save Changes' : 'Raise Ticket'}</button>
           </div>
         </form>
       </Modal>

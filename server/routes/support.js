@@ -202,6 +202,74 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, ticket_no: ticketNo });
 });
 
+// Edit ticket details separately from its resolution/proof workflow. In
+// particular, editing a resolved ticket must preserve the completion time
+// used by the Performance previous-pending/done calculation.
+router.patch('/:id/details', (req, res) => {
+  const db = getDb();
+  const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  const canFollowAll = ticketFollowAll(db, req.user.id);
+  if (!canFollowAll && ticket.user_id !== req.user.id) {
+    return res.status(403).json({ error: 'Only the person who raised this ticket or an admin / follow-up role can edit its details' });
+  }
+
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return res.status(400).json({ error: 'Ticket details are required' });
+  }
+  const allowed = ['subject', 'description', 'category', 'priority', 'module', 'deadline_date', 'assigned_to'];
+  const keys = Object.keys(body);
+  if (!keys.length || keys.some(key => !allowed.includes(key))) {
+    return res.status(400).json({ error: 'Only ticket detail fields can be edited here' });
+  }
+  const values = {};
+  for (const field of ['subject', 'description']) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    if (typeof body[field] !== 'string' || !body[field].trim()) {
+      return res.status(400).json({ error: `${field === 'subject' ? 'Subject' : 'Description'} is required` });
+    }
+    values[field] = body[field].trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'category')) {
+    const categories = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_issue', 'manpower', 'material', 'payment', 'other'];
+    if (!categories.includes(body.category)) return res.status(400).json({ error: 'Choose a valid category' });
+    values.category = body.category;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'priority')) {
+    if (!['low', 'medium', 'high', 'urgent'].includes(body.priority)) return res.status(400).json({ error: 'Choose a valid priority' });
+    values.priority = body.priority;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'module')) {
+    if (body.module !== null && typeof body.module !== 'string') return res.status(400).json({ error: 'Module must be text' });
+    values.module = body.module?.trim() || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'deadline_date')) {
+    const deadline = normalizeDeadline(body.deadline_date);
+    if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
+    values.deadline_date = deadline;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'assigned_to')) {
+    const raw = body.assigned_to;
+    const assignee = raw === null || raw === '' ? null : Number(raw);
+    if (assignee !== null && (!['number', 'string'].includes(typeof raw) || !Number.isSafeInteger(assignee) || assignee <= 0)) {
+      return res.status(400).json({ error: 'Choose a valid assignee' });
+    }
+    const changed = assignee !== ticket.assigned_to;
+    if (changed && !canFollowAll) return res.status(403).json({ error: 'Only an admin / follow-up role can reassign a ticket' });
+    if (assignee !== null) {
+      const user = db.prepare('SELECT active FROM users WHERE id=?').get(assignee);
+      if (!user || (changed && user.active === 0)) return res.status(400).json({ error: 'Choose an active assignee' });
+    }
+    values.assigned_to = assignee;
+  }
+
+  const fields = Object.keys(values);
+  db.prepare(`UPDATE support_tickets SET ${fields.map(field => `${field}=?`).join(', ')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(...fields.map(field => values[field]), ticket.id);
+  res.json({ message: 'Ticket details updated' });
+});
+
 // PUT update ticket. Permission rules (mam's spec):
 //   - Admin     -> can do anything (status, priority, response, assignee)
 //   - Raiser    (user_id == current user) -> can resolve/close their own
