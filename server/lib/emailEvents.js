@@ -386,7 +386,7 @@ const SAMPLE_CONTEXT = {
   raised_by: 'Raushan Kumar',
   approved_by: 'Nitin Sir',
   l1_by: 'Nitin Jain',
-  crm_by: 'Sushila',
+  crm_by: 'Lovely',
   rejected_by: 'Admin',
   reason: 'Budget exceeded',
   margin_pct: '15',

@@ -1387,7 +1387,20 @@ router.get('/site-department-status', (req, res) => {
 
 router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
-  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department } = req.body;
+  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department, site_id } = req.body;
+  // SOP-15.1: If site has reached 100% and costs are locked, prevent new cost bookings unless admin override
+  try {
+    const sId = site_id || req.body.site_id;
+    const sName = site_name || req.body.site_name;
+    const lockedSite = db.prepare(`
+      SELECT id, name, cost_locked FROM sites 
+      WHERE ((? IS NOT NULL AND id = ?) OR (? IS NOT NULL AND (name = ? OR LOWER(TRIM(name)) = LOWER(TRIM(?)))))
+        AND cost_locked = 1
+    `).get(sId || null, sId || null, sName || null, sName || '', sName || '');
+    if (lockedSite && req.user?.role !== 'admin') {
+      return res.status(403).json({ error: `Cost booking is locked on site "${lockedSite.name}" under SOP-15.1 (Handover in progress). No new indents allowed.` });
+    }
+  } catch (_) {}
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
@@ -1657,6 +1670,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   // created at raise time and the billable po_items row added on CRM approval
   // are both never created — the material is bought and the revenue side never
   // opens. Unconditional again, as it was from 2026-06-02.
+
   const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
