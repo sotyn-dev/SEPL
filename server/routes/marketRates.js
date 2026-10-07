@@ -11,12 +11,15 @@ router.use(authMiddleware);
  */
 router.get('/search', async (req, res) => {
   const query = req.query.q || req.query.query || '';
+  const size = req.query.size || '';
+  const make = req.query.make || '';
+  const spec = req.query.spec || req.query.specification || '';
   if (!query.trim()) {
     return res.status(400).json({ error: 'Search query is required' });
   }
 
   try {
-    const result = await getMarketRates(query);
+    const result = await getMarketRates(query, { size, make, spec });
     res.json(result);
   } catch (err) {
     console.error('[market-rates/search error]', err);

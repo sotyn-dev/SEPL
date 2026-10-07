@@ -36,6 +36,82 @@ function initCacheTable() {
 initCacheTable();
 
 /**
+ * Intelligent Query Extractor for EPC / MEP Tender Items (Solution A)
+ * Converts verbose, contractual BOQ clauses into clean commercial procurement queries
+ */
+function extractCleanProcurementQuery(rawText, size = '', make = '', spec = '') {
+  let text = String(rawText || '').trim();
+  if (!text) return '';
+
+  const hasBoqNoise = text.length > 25 && /(conforming to|together with|including|excavation|supply,?\s*install|providing|necessary|adapter pieces|flanges,\s*gaskets)/i.test(text);
+  if (!hasBoqNoise && text.length <= 40) {
+    if (size && !text.toLowerCase().includes(size.toLowerCase().replace(/\s*dia\b/i, ''))) {
+      text = `${text} ${size}`.trim();
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  // 1. Strip leading numbering / bullets: i), (i), 1., 1.1, a), (a), A., 1)
+  text = text.replace(/^(\([0-9a-zivx]+\)|[0-9a-zivx]+[\).])\s*/i, '');
+
+  // 2. Strip tender contract prefixes (case-insensitive)
+  text = text.replace(/^(providing\s*(and|&)?\s*fixing(\s*of)?|supply\s*(and|&)?\s*delivery(\s*of)?|supply\s*,?\s*(installation\s*,?\s*)?testing\s*(and|&)?\s*commissioning(\s*of)?)\s*/i, '');
+  text = text.replace(/^all\s+/i, '');
+
+  // 3. Detect standards (IS 1239, IS 3589, BS 5154, ASTM A53) before cutting
+  const standardMatch = text.match(/\b(IS\s*\d+|BS\s*\d+|ASTM\s*[A-Z0-9]+)\b/i);
+  const standard = standardMatch ? standardMatch[1].replace(/\s+/g, ' ') : '';
+
+  // 4. Cut off trailing contractual / site activity clauses
+  const cutOffKeywords = [
+    /\btogether with\b.*/i,
+    /\balong with\b.*/i,
+    /\bcomplete with\b.*/i,
+    /\bincluding\b.*/i,
+    /\bas per\b.*/i,
+    /\bas specified\b.*/i,
+    /\bconforming to\b.*/i,
+    /\bnecessary\b.*/i
+  ];
+  for (const regex of cutOffKeywords) {
+    text = text.replace(regex, '');
+  }
+
+  // 5. Clean brackets and extra punctuation
+  text = text.replace(/[();:,]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // 6. Domain-specific normalization:
+  // PIPES:
+  if (/\bpipes?\b/i.test(text)) {
+    const isGI = /\b(gi|galvanised|galvanized)\b/i.test(rawText);
+    const pipeType = isGI ? 'GI Pipe' : 'MS Pipe';
+    const cls = rawText.match(/class[-\s]*([abc])/i);
+    const classStr = cls ? 'Class ' + cls[1].toUpperCase() : '';
+    text = `${pipeType} ${classStr}`.trim();
+  }
+
+  // 7. Append structured size if not already included
+  if (size && !text.toLowerCase().includes(size.toLowerCase().replace(/\s*dia\b/i, ''))) {
+    text = `${text} ${size}`.trim();
+  }
+
+  // 8. Append IS standard if extracted and not included
+  if (standard && !text.toLowerCase().includes(standard.toLowerCase())) {
+    text = `${text} ${standard}`.trim();
+  }
+
+  // 9. Append Make/Brand if valid single make
+  if (make && !/^[—\-]|n\/?a|any|reputed|approved/i.test(make) && !text.toLowerCase().includes(make.toLowerCase())) {
+    const firstMake = make.split(/[\/,]/)[0].trim();
+    if (firstMake && firstMake.length > 1) {
+      text = `${text} ${firstMake}`.trim();
+    }
+  }
+
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Fetch internal historical rates paid by SEPL across previous Vendor POs & Item Master
  * Supports exact phrase matching and smart token-overlap scoring
  */
@@ -371,6 +447,13 @@ async function searchMoglix(query) {
     const cat = (p.taxonomyName || []).join(' ').toLowerCase();
     const text = `${title} ${cat}`;
 
+    // STRICT REJECTION: Automotive / Car accessories unless user explicitly queried car
+    if (!/\b(car|auto|vehicle|mercedes)\b/i.test(queryLower)) {
+      if (/\b(car|automotive|mercedes|audi|bmw|towing rope|wiper|bumper|seat cover|air filter|oil filter|key cover)\b/i.test(text)) {
+        return false;
+      }
+    }
+
     if (queryLower.includes('fire')) {
       if (/\b(garden|gardening|agri|agriculture|lawn|spray gun|sprayer|hose|pipe|watering|spike|drip|fittings)\b/i.test(text)) {
         return false;
@@ -392,7 +475,30 @@ async function searchMoglix(query) {
       return true;
     }
 
-    return p._score >= 20;
+    // PIPE / PIPES: Must be an actual pipe or pipe fitting
+    if (/\bpipes?\b/i.test(queryLower)) {
+      const isPipe = /\b(pipe|pipes|tube|tubes|conduit|nipple|flange|elbow|tee|coupling)\b/i.test(title);
+      if (!isPipe) return false;
+      if (sizeToken && !title.includes(sizeToken)) {
+        return false;
+      }
+      return true;
+    }
+
+    // VALVE / VALVES
+    if (/\bvalves?\b/i.test(queryLower)) {
+      if (!title.includes('valve')) return false;
+      if (sizeToken && !title.includes(sizeToken)) return false;
+      return true;
+    }
+
+    // CABLE / WIRE
+    if (/\b(cable|wire)\b/i.test(queryLower)) {
+      if (!/\b(cable|wire)\b/i.test(title)) return false;
+      return true;
+    }
+
+    return p._score >= 35;
   }).slice(0, 10);
 
   return finalProds.map(p => {
@@ -468,10 +574,37 @@ async function searchIndiaMart(query) {
         const seller = sellerMatch ? sellerMatch[1].trim() : 'IndiaMART Verified Supplier';
         const location = locationMatch ? locationMatch[1].trim() : 'Pan India';
 
+        const titleLower = title.toLowerCase();
+
         // STRICT FILTERING FOR INDIAMART TOO
-        if (qLower.includes('fire')) {
-          if (/\b(garden|gardening|agri|agriculture|lawn|spray gun|sprayer|hose|watering|drip|irrigation)\b/i.test(title)) {
+        // 1. Automotive exclusion
+        if (!/\b(car|auto|vehicle|mercedes)\b/i.test(qLower)) {
+          if (/\b(car|automotive|mercedes|audi|bmw|towing rope|wiper|bumper|seat cover|air filter|oil filter|key cover)\b/i.test(titleLower)) {
             continue;
+          }
+        }
+
+        // 2. Fire Sprinkler vs Garden
+        if (qLower.includes('fire')) {
+          if (/\b(garden|gardening|agri|agriculture|lawn|spray gun|sprayer|hose|watering|drip|irrigation)\b/i.test(titleLower)) {
+            continue;
+          }
+        }
+
+        // 3. Pipe Size & Type matching
+        if (/\bpipes?\b/i.test(qLower)) {
+          if (!/\b(pipe|tube|pipes|tubes)\b/i.test(titleLower)) {
+            continue;
+          }
+          const sizeMatch = qLower.match(/\b(\d+(?:\.\d+)?\s*mm|\d+(?:\/\d+)?\s*(?:inch|\"))\b/i);
+          if (sizeMatch) {
+            const rawSize = sizeMatch[1].replace(/\s+/g, '');
+            if (rawSize === '100mm' && !/\b(100\s*mm|4\s*inch|4\")\b/i.test(titleLower) && /\b(24\s*inch|50\s*x\s*50|150\s*mm|200\s*mm|25\s*mm|50\s*mm|80\s*mm)\b/i.test(titleLower)) {
+              continue;
+            }
+            if (rawSize === '150mm' && !/\b(150\s*mm|6\s*inch|6\")\b/i.test(titleLower) && /\b(24\s*inch|50\s*x\s*50|100\s*mm|200\s*mm|25\s*mm|50\s*mm)\b/i.test(titleLower)) {
+              continue;
+            }
           }
         }
 
@@ -499,22 +632,27 @@ async function searchIndiaMart(query) {
 /**
  * Main unified search method with caching & parallel resolution
  */
-async function getMarketRates(query) {
-  const clean = String(query || '').trim().toLowerCase();
-  if (!clean) {
+async function getMarketRates(query, options = {}) {
+  const raw = String(query || '').trim();
+  if (!raw) {
     return { query: '', moglix: [], indiamart: [], summary: null };
   }
 
-  const cacheKey = `market_rates:${clean}`;
-  const cached = getFromCache(cacheKey, clean);
+  // Auto-clean query if verbose BOQ clause or if options provided
+  const cleanSearch = extractCleanProcurementQuery(raw, options.size, options.make, options.spec);
+  const activeQuery = cleanSearch || raw;
+  const cleanKey = activeQuery.toLowerCase().trim();
+
+  const cacheKey = `market_rates:${cleanKey}`;
+  const cached = getFromCache(cacheKey, cleanKey);
   if (cached) {
     return { ...cached, isCached: true };
   }
 
   // Run searches in parallel with complete isolation
   const [moglixResult, indiamartResult] = await Promise.allSettled([
-    searchMoglix(clean),
-    searchIndiaMart(clean),
+    searchMoglix(activeQuery),
+    searchIndiaMart(activeQuery),
   ]);
 
   const moglixItems = moglixResult.status === 'fulfilled' ? moglixResult.value : [];
@@ -540,17 +678,18 @@ async function getMarketRates(query) {
     };
   }
 
-  const internalHistory = getInternalHistoricalRates(clean);
+  const internalHistory = getInternalHistoricalRates(activeQuery);
 
   const directLinks = {
-    moglix: `https://www.moglix.com/search?controller=search&s=${encodeURIComponent(clean)}`,
-    indiamart: `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(clean)}`,
-    amazon: `https://www.amazon.in/s?k=${encodeURIComponent(clean)}`,
-    industrybuying: `https://www.industrybuying.com/search/?q=${encodeURIComponent(clean)}`,
+    moglix: `https://www.moglix.com/search?controller=search&s=${encodeURIComponent(activeQuery)}`,
+    indiamart: `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(activeQuery)}`,
+    amazon: `https://www.amazon.in/s?k=${encodeURIComponent(activeQuery)}`,
+    industrybuying: `https://www.industrybuying.com/search/?q=${encodeURIComponent(activeQuery)}`,
   };
 
   const result = {
-    query: clean,
+    rawQuery: raw,
+    query: activeQuery,
     moglix: moglixItems,
     indiamart: indiamartItems,
     internalHistory,
@@ -572,4 +711,5 @@ module.exports = {
   getInternalHistoricalRates,
   searchMoglix,
   searchIndiaMart,
+  extractCleanProcurementQuery,
 };
