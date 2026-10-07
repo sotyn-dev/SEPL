@@ -2,23 +2,137 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
-import { FiSearch, FiExternalLink, FiClock, FiCheck, FiShoppingBag, FiGlobe, FiAlertCircle } from 'react-icons/fi';
+import { FiSearch, FiExternalLink, FiClock, FiCheck, FiShoppingBag, FiGlobe, FiAlertCircle, FiTag } from 'react-icons/fi';
+
+/**
+ * Intelligent Query Extractor for EPC / MEP Tender Items (Solution A)
+ */
+export function extractCleanQuery(rawText, size = '', make = '', spec = '') {
+  let text = String(rawText || '').trim();
+  if (!text) return '';
+
+  const hasBoqNoise = text.length > 25 && /(conforming to|together with|including|excavation|supply,?\s*install|providing|necessary|adapter pieces|flanges,\s*gaskets)/i.test(text);
+  if (!hasBoqNoise && text.length <= 40) {
+    if (size && !text.toLowerCase().includes(size.toLowerCase().replace(/\s*dia\b/i, ''))) {
+      text = `${text} ${size}`.trim();
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  // 1. Strip leading numbering / bullets: i), (i), 1., 1.1, a), (a), A., 1)
+  text = text.replace(/^(\([0-9a-zivx]+\)|[0-9a-zivx]+[\).])\s*/i, '');
+
+  // 2. Strip tender contract prefixes (case-insensitive)
+  text = text.replace(/^(providing\s*(and|&)?\s*fixing(\s*of)?|supply\s*(and|&)?\s*delivery(\s*of)?|supply\s*,?\s*(installation\s*,?\s*)?testing\s*(and|&)?\s*commissioning(\s*of)?)\s*/i, '');
+  text = text.replace(/^all\s+/i, '');
+
+  // 3. Detect standards (IS 1239, IS 3589, BS 5154, ASTM A53) before cutting
+  const standardMatch = text.match(/\b(IS\s*\d+|BS\s*\d+|ASTM\s*[A-Z0-9]+)\b/i);
+  const standard = standardMatch ? standardMatch[1].replace(/\s+/g, ' ') : '';
+
+  // 4. Cut off trailing contractual / site activity clauses
+  const cutOffKeywords = [
+    /\btogether with\b.*/i,
+    /\balong with\b.*/i,
+    /\bcomplete with\b.*/i,
+    /\bincluding\b.*/i,
+    /\bas per\b.*/i,
+    /\bas specified\b.*/i,
+    /\bconforming to\b.*/i,
+    /\bnecessary\b.*/i
+  ];
+  for (const regex of cutOffKeywords) {
+    text = text.replace(regex, '');
+  }
+
+  // 5. Clean brackets and extra punctuation
+  text = text.replace(/[();:,]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // 6. Domain-specific normalization:
+  // PIPES:
+  if (/\bpipes?\b/i.test(text)) {
+    const isGI = /\b(gi|galvanised|galvanized)\b/i.test(rawText);
+    const pipeType = isGI ? 'GI Pipe' : 'MS Pipe';
+    const cls = rawText.match(/class[-\s]*([abc])/i);
+    const classStr = cls ? 'Class ' + cls[1].toUpperCase() : '';
+    text = `${pipeType} ${classStr}`.trim();
+  }
+
+  // 7. Append structured size if not already included
+  if (size && !text.toLowerCase().includes(size.toLowerCase().replace(/\s*dia\b/i, ''))) {
+    text = `${text} ${size}`.trim();
+  }
+
+  // 8. Append IS standard if extracted and not included
+  if (standard && !text.toLowerCase().includes(standard.toLowerCase())) {
+    text = `${text} ${standard}`.trim();
+  }
+
+  // 9. Append Make/Brand if valid single make
+  if (make && !/^[—\-]|n\/?a|any|reputed|approved/i.test(make) && !text.toLowerCase().includes(make.toLowerCase())) {
+    const firstMake = make.split(/[\/,]/)[0].trim();
+    if (firstMake && firstMake.length > 1) {
+      text = `${text} ${firstMake}`.trim();
+    }
+  }
+
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export function getQuerySuggestions(rawText, size = '', make = '', spec = '') {
+  const primary = extractCleanQuery(rawText, size, make, spec);
+  const list = [];
+  if (primary) list.push({ label: 'Clean Spec (Auto)', query: primary, type: 'primary' });
+
+  // Shorter spec without brand/standard
+  let simple = primary;
+  if (make) {
+    const firstMake = make.split(/[\/,]/)[0].trim();
+    simple = simple.replace(new RegExp('\\b' + firstMake + '\\b', 'i'), '').trim();
+  }
+  simple = simple.replace(/\b(IS\s*\d+|BS\s*\d+)\b/i, '').replace(/\s+/g, ' ').trim();
+  if (simple && simple !== primary) {
+    list.push({ label: 'Generic Size', query: simple, type: 'simple' });
+  }
+
+  // Brand variant
+  if (make && size && /\bpipe\b/i.test(primary)) {
+    const firstMake = make.split(/[\/,]/)[0].trim();
+    const brandQ = `${firstMake} Pipe ${size}`.trim();
+    if (!list.some(x => x.query === brandQ)) {
+      list.push({ label: `${firstMake} Pipe`, query: brandQ, type: 'brand' });
+    }
+  }
+
+  // Original raw BOQ
+  const rawClean = String(rawText || '').trim();
+  if (rawClean && rawClean !== primary) {
+    list.push({ label: 'Full BOQ Text', query: rawClean, type: 'raw' });
+  }
+
+  return list;
+}
 
 export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [activeTab, setActiveTab] = useState('online'); // 'online' | 'internal'
+  const [suggestions, setSuggestions] = useState([]);
 
   useEffect(() => {
     if (isOpen && item) {
-      const initialQuery = item.item_name || item.name || '';
-      setQuery(initialQuery);
-      if (initialQuery) {
-        fetchRates(initialQuery);
+      const rawName = item.item_name || item.name || '';
+      const suggs = getQuerySuggestions(rawName, item.size, item.make, item.specification);
+      setSuggestions(suggs);
+      const defaultQ = suggs[0]?.query || rawName;
+      setQuery(defaultQ);
+      if (defaultQ) {
+        fetchRates(defaultQ);
       }
     } else {
       setData(null);
+      setSuggestions([]);
     }
   }, [isOpen, item]);
 
@@ -27,7 +141,14 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
     if (!q) return;
     setLoading(true);
     try {
-      const res = await api.get('/market-rates/search', { params: { q } });
+      const res = await api.get('/market-rates/search', {
+        params: {
+          q,
+          size: item?.size || '',
+          make: item?.make || '',
+          spec: item?.specification || ''
+        }
+      });
       setData(res.data);
     } catch (err) {
       toast.error('Could not load market rates');
@@ -56,23 +177,68 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Live Market Rates & Price Discovery (TSK-0378)" wide>
-      <div className="space-y-4">
+      <div className="space-y-3.5">
+        {/* ITEM CONTEXT CARD (Shows original BOQ clause + structured attributes) */}
+        {item && (
+          <div className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-semibold text-slate-800 line-clamp-2 flex-1" title={item.item_name}>
+                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1.5 tracking-wider">BOQ Line:</span>
+                {item.item_name}
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                {item.size && <span>Size: <strong className="text-slate-900">{item.size}</strong></span>}
+                {item.make && <span className="border-l pl-2 border-slate-200">Make: <strong className="text-slate-900">{item.make}</strong></span>}
+                {item.uom && <span className="border-l pl-2 border-slate-200">UOM: <strong className="text-slate-900">{item.uom}</strong></span>}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TOP SEARCH BAR */}
         <form onSubmit={handleSearchSubmit} className="flex gap-2">
           <div className="relative flex-1">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
             <input
               type="text"
-              className="input pl-9 text-sm w-full"
+              className="input pl-9 text-sm w-full font-medium"
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder="Search Moglix, IndiaMART & ERP POs by product name or spec..."
             />
           </div>
-          <button type="submit" disabled={loading} className="btn btn-primary text-sm flex items-center gap-1.5 px-4">
+          <button type="submit" disabled={loading} className="btn btn-primary text-sm flex items-center gap-1.5 px-4 font-semibold">
             {loading ? 'Searching…' : 'Search'}
           </button>
         </form>
+
+        {/* SOLUTION B: QUICK SPECIFICATION SUGGESTION CHIPS */}
+        {suggestions.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 -mt-1">
+            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mr-1 flex items-center gap-1">
+              <FiTag size={10} /> Smart Suggestions:
+            </span>
+            {suggestions.map((s, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => {
+                  setQuery(s.query);
+                  fetchRates(s.query);
+                }}
+                className={`text-[11px] px-2.5 py-1 rounded-md border transition-all flex items-center gap-1 ${
+                  query === s.query
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-2xs font-semibold'
+                    : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}
+                title={s.query}
+              >
+                <span className="text-[10px] opacity-75">{s.label}:</span>
+                <span className="truncate max-w-[220px]">{s.query}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* EXTERNAL DIRECT SEARCH SHORTCUTS */}
         <div className="flex flex-wrap items-center gap-2 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs">
