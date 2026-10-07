@@ -8,6 +8,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import ProofPreview from '../components/ProofPreview';
 import PmsFollowupRemarks, { PmsFollowupSummary } from '../components/PmsFollowupRemarks';
+import './PMSTasks.css';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -326,13 +327,13 @@ export default function PMSTasks() {
   }));
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div>
+    <div className="pms-tasks-page min-w-0 w-full space-y-4">
+      <div className="flex flex-wrap justify-between items-start gap-3">
+        <div className="min-w-0 flex-1 basis-80">
           <h3 className="text-xl font-bold text-gray-800">PMS Tasks</h3>
           <p className="text-sm text-gray-500">Project Management tasks by CRM — pick a project, CRM auto-fills from the latest Client PO.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => exportCsv('pms-tasks',
             ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
             tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
@@ -407,13 +408,18 @@ export default function PMSTasks() {
         </div>
       </div>
 
-      {/* Desktop table — bounded scroll + sticky thead so columns stay
-          pinned while scrolling.  Mam, 2026-05-13. */}
-      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto hidden md:block">
-        <table className="text-sm w-full min-w-[950px]">
+      {/* Fit all columns to the available content width, including the sidebar.
+          Use the complete task cards when there is too little room for a table. */}
+      <div className="pms-task-table-wrap card p-0 max-h-[70vh] overflow-auto">
+        <table className="pms-task-table">
+          <colgroup>
+            {[3, 6, 12, 7, 16, 13, 8, 8, 7, 6, 8, 6].map((width, index) => (
+              <col key={index} style={{ width: `${width}%` }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
-              <th className="w-12 text-center">S.No.</th>
+              <th className="text-center">S.No.</th>
               <th>Task ID</th>
               <th>Project</th>
               <th>Created By <span className="text-[9px] text-gray-400 font-normal normal-case">(CRM below)</span></th>
@@ -449,8 +455,8 @@ export default function PMSTasks() {
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{(pager.page - 1) * pager.perPage + idx + 1}</td>
-                  <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
-                  <td className="max-w-[220px]">
+                  <td className="font-mono text-[10px] text-red-700">PMS-{String(t.id).padStart(4, '0')}</td>
+                  <td>
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
                     <div className="text-[10px] text-gray-500">
                       {t.lead_no && <span className="font-mono mr-1">{t.lead_no}</span>}
@@ -466,20 +472,20 @@ export default function PMSTasks() {
                     </div>
                     {t.crm_name && <div className="text-[10px] text-gray-400">CRM: {t.crm_name}</div>}
                   </td>
-                  <td className="max-w-md min-w-[240px]">
+                  <td>
                     {/* Wrap properly across all viewports — no more line-clamp,
                         long descriptions break onto multiple lines. */}
                     {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</div>}
-                    <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
+                    <div className="text-gray-800 whitespace-pre-wrap break-words text-xs">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
                   </td>
-                  <td className="min-w-[200px] max-w-[260px]">
+                  <td>
                     <PmsFollowupSummary task={t} onOpen={setRemarkTask} />
                   </td>
-                  <td className="whitespace-nowrap">{t.assigned_to_name}</td>
-                  <td className="whitespace-nowrap text-xs">
+                  <td>{t.assigned_to_name}</td>
+                  <td className="text-xs">
                     {completedDate
                       ? <span className="text-emerald-700 font-medium">Done {completedDate}</span>
                       : t.due_date
@@ -506,7 +512,7 @@ export default function PMSTasks() {
                       )}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap">
+                  <td>
                     {t.extension_status === 'pending' && t.requested_due_date ? (
                       <div className="flex flex-col gap-1">
                         <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block">→ {t.requested_due_date}</span>
@@ -544,8 +550,8 @@ export default function PMSTasks() {
         </table>
       </div>
 
-      {/* Mobile cards */}
-      <div className="md:hidden space-y-2">
+      {/* Cards for phones and narrow content areas. */}
+      <div className="pms-task-cards space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
         {pager.pageItems.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
