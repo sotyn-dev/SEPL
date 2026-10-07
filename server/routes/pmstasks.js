@@ -98,6 +98,10 @@ router.get('/', (req, res) => {
       au.name AS assigned_by_name,
       tu.name AS assigned_to_name,
       rv.name AS reviewer_name,
+      fr.remark AS followup_remark,
+      fr.author_name AS followup_remark_by,
+      fr.created_at AS followup_remark_at,
+      (SELECT COUNT(*) FROM pms_followup_remarks WHERE task_id=p.id) AS followup_remark_count,
       bb.lead_no,
       bb.client_name,
       bb.company_name,
@@ -106,6 +110,9 @@ router.get('/', (req, res) => {
     LEFT JOIN users au ON au.id = p.assigned_by
     LEFT JOIN users tu ON tu.id = p.assigned_to
     LEFT JOIN users rv ON rv.id = p.reviewer_id
+    LEFT JOIN pms_followup_remarks fr ON fr.id = (
+      SELECT id FROM pms_followup_remarks WHERE task_id=p.id ORDER BY created_at DESC, id DESC LIMIT 1
+    )
     LEFT JOIN business_book bb ON bb.id = p.project_id
     LEFT JOIN sites s ON s.business_book_id = bb.id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -113,7 +120,39 @@ router.get('/', (req, res) => {
       CASE p.status WHEN 'rejected' THEN 0 WHEN 'pending' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
       COALESCE(p.due_date, '9999-12-31') ASC,
       p.created_at DESC`;
-  res.json(db.prepare(sql).all(...params));
+  const canManageFollowup = isAdmin || can(uid, 'approve');
+  res.json(db.prepare(sql).all(...params).map(task => ({
+    ...task,
+    can_add_followup_remark: canManageFollowup || task.assigned_by === uid
+      || task.assigned_to === uid || isCrmOwner(task, req.user),
+  })));
+});
+
+// Follow-up notes retain their author and date without changing task/proof state.
+router.get('/:id/followup-remarks', (req, res) => {
+  const db = getDb();
+  const task = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (task.assigned_to !== req.user.id && !canApprovePmsTask(task, req.user) && !can(req.user.id, 'view')) {
+    return res.status(403).json({ error: 'Not allowed to view PMS follow-up remarks' });
+  }
+  res.json(db.prepare(`SELECT * FROM pms_followup_remarks
+    WHERE task_id=? ORDER BY created_at DESC, id DESC`).all(task.id));
+});
+
+router.post('/:id/followup-remarks', (req, res) => {
+  const db = getDb();
+  const task = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (task.assigned_to !== req.user.id && !canApprovePmsTask(task, req.user)) {
+    return res.status(403).json({ error: 'Only the assignee, assigner, project CRM owner or PMS approver can add a follow-up remark' });
+  }
+  const remark = typeof req.body?.remark === 'string' ? req.body.remark.trim() : '';
+  if (!remark) return res.status(400).json({ error: 'Follow-up remark is required' });
+  if (remark.length > 2000) return res.status(400).json({ error: 'Keep the remark within 2,000 characters' });
+  const result = db.prepare(`INSERT INTO pms_followup_remarks(task_id,remark,user_id,author_name)
+    VALUES(?,?,?,?)`).run(task.id, remark, req.user.id, req.user.name || 'User');
+  res.status(201).json(db.prepare('SELECT * FROM pms_followup_remarks WHERE id=?').get(result.lastInsertRowid));
 });
 
 // Create a PMS task. Admin or anyone with pms_tasks.create permission.

@@ -2833,6 +2833,17 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS pms_followup_remarks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES pms_tasks(id) ON DELETE CASCADE,
+      remark TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pms_followup_task
+      ON pms_followup_remarks(task_id, created_at DESC, id DESC);
+
     -- Checklist completions — one row per (checklist, user, date). Used to
     -- show the daily checklist widget on dashboard and track whether the user
     -- uploaded proof today. Unique per-day so users can't double-complete.

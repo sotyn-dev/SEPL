@@ -7,6 +7,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import ProofPreview from '../components/ProofPreview';
+import PmsFollowupRemarks, { PmsFollowupSummary } from '../components/PmsFollowupRemarks';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -65,6 +66,7 @@ export default function PMSTasks() {
   const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
+  const [remarkTask, setRemarkTask] = useState(null);
   const [form, setForm] = useState({});
   // Upload state for the new attachment field on the create modal
   // (mam, 2026-05-22: "give here option also upload file like take
@@ -332,8 +334,8 @@ export default function PMSTasks() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('pms-tasks',
-            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number'],
-            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '']))}
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
@@ -416,6 +418,7 @@ export default function PMSTasks() {
               <th>Project</th>
               <th>Created By <span className="text-[9px] text-gray-400 font-normal normal-case">(CRM below)</span></th>
               <th>Description</th>
+              <th>Follow-up Remark</th>
               <th>Assigned To</th>
               <th>Due / Done</th>
               <th>Status</th>
@@ -425,7 +428,7 @@ export default function PMSTasks() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
+            {tasks.length === 0 && <tr><td colSpan="12" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
             {pager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
@@ -471,6 +474,9 @@ export default function PMSTasks() {
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
+                  </td>
+                  <td className="min-w-[200px] max-w-[260px]">
+                    <PmsFollowupSummary task={t} onOpen={setRemarkTask} />
                   </td>
                   <td className="whitespace-nowrap">{t.assigned_to_name}</td>
                   <td className="whitespace-nowrap text-xs">
@@ -579,6 +585,10 @@ export default function PMSTasks() {
               {t.status === 'rejected' && t.reject_reason && (
                 <div className="bg-red-50 border border-red-200 rounded px-2 py-1 text-[11px] text-red-700 mb-2 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5" /> {t.reject_reason}</div>
               )}
+              <div className="my-3 rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                <p className="text-[10px] uppercase font-semibold text-gray-500 mb-1">Follow-up remark</p>
+                <PmsFollowupSummary task={t} onOpen={setRemarkTask} />
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
@@ -621,6 +631,11 @@ export default function PMSTasks() {
       <Pagination {...pager} className="card p-0" />
 
       {/* Create Modal */}
+      {remarkTask && <PmsFollowupRemarks key={remarkTask.id} task={remarkTask} onClose={() => setRemarkTask(null)}
+        onSaved={(taskId, remark) => setTasks(previous => previous.map(task => task.id === taskId ? {
+          ...task, followup_remark: remark.remark, followup_remark_by: remark.author_name,
+          followup_remark_at: remark.created_at, followup_remark_count: (task.followup_remark_count || 0) + 1,
+        } : task))} />}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>
         <form onSubmit={save} className="space-y-3">
           <div>
