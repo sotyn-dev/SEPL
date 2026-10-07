@@ -19,6 +19,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { listAssignments, setAssignments } = require('../lib/scoreTemplateAssignments');
 const { metricSettings, entryDates, hoursFromDates, achievement } = require('../lib/scoreMetricValues');
+const { dprActualCostScore } = require('../lib/dprActualCostScore');
 
 router.use(authMiddleware);
 
@@ -710,6 +711,18 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         return { given: null, done: Math.round((r.done / r.n) * 100) };
       }
 
+      // Actual Cost is the DPR list's B-actual amount, independently scoped
+      // per KPI. It has a manually entered Plan, rather than a DPR count.
+      if (source === 'auto:dpr_actual_cost_all') {
+        return dprActualCostScore(db, sinceDate, untilDate);
+      }
+      if (source === 'auto:dpr_actual_cost_sites') {
+        return dprActualCostScore(db, sinceDate, untilDate, { siteIds: siteIdsForUser() });
+      }
+      if (source === 'auto:dpr_actual_cost_by_user') {
+        return dprActualCostScore(db, sinceDate, untilDate, { userId });
+      }
+
       // Site-scoped KPIs (Site Engineer / Supervisor templates) need the list
       // of sites this user manages. ONLY those ten sources are gated: this
       // early return used to sit in front of EVERY source below it, so a user
@@ -1376,6 +1389,14 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const currentEntries = new Map();
     for (const ce of currentEntriesArr) currentEntries.set(ce.kpi_id, ce);
 
+    // A current-work commitment carries forward for one immediately following
+    // week only. Read the exact prior week's saved entry, independently of the
+    // older entry/snapshot used by the historical score comparison below.
+    // This is a display default: reading a scorecard never persists a copy.
+    const priorCommitments = new Map(db.prepare(
+      'SELECT kpi_id, commitment FROM score_entries WHERE user_id=? AND week_start=?'
+    ).all(userId, lastWeekStart).map(row => [row.kpi_id, row.commitment]));
+
     // Batch load immediately preceding valid scorecard entry for EACH KPI
     // for the same user (week_start < current weekStart).
     // Uses MAX(week_start) grouped by kpi_id in ONE query to avoid N+1 queries.
@@ -1406,6 +1427,12 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     let totalScore = 0, totalWeight = 0;
     const result = activeKpis.map(k => {
       const entry = currentEntries.get(k.id) || null;
+      const priorCommitment = priorCommitments.get(k.id);
+      // Explicit zero and an intentionally cleared empty string both win.
+      // Blank/null prior values do not create a carried-forward commitment.
+      const commitmentInherited = entry?.commitment == null
+        && priorCommitment != null && String(priorCommitment).trim() !== '';
+      const commitment = commitmentInherited ? priorCommitment : entry?.commitment ?? null;
       const prevRecord = precedingEntries.get(k.id) || null;
       let prevPeriod = prevRecord ? {
         periodId: prevRecord.week_start,
@@ -1673,7 +1700,9 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         carry_prev_pending: carryPrevPending,
         carry_prev_done: carryPrevDone,
         pending_pct: entry?.pending_pct ?? null,
-        commitment: entry?.commitment ?? null,
+        commitment,
+        commitment_inherited: commitmentInherited,
+        commitment_from_week: commitmentInherited ? lastWeekStart : null,
         commitment_prev: entry?.commitment_prev ?? null,
         notes: entry?.notes ?? null,
       };
@@ -1778,6 +1807,7 @@ router.get('/scorecard-range', (req, res) => {
             planned_at: null, actual_at: null,
             last_week_pct: null, total_uptodate: null, pending_uptodate: null,
             pending_work: null, pending_pct: null, commitment: null, commitment_prev: null, notes: null,
+            commitment_inherited: false, commitment_from_week: null,
             pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
         } else {
           if (measured) { agg.planned += +k.planned || 0; agg.actual += +k.actual || 0; agg.measured_weeks++; }

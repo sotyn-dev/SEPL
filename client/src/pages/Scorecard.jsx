@@ -117,6 +117,9 @@ const SOURCE_INFO = {
   'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
   'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
   'auto:dpr_cost_by_user':      { plan: 'DPRs submitted',                     actual: 'DPRs approved' },
+  'auto:dpr_actual_cost_all':   { scope: 'All sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) across all sites’ submitted Daily Reports dated Mon–Sat; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_sites': { scope: 'Assigned sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) for the employee’s assigned sites, by report date Mon–Sat, regardless of uploader; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_by_user': { scope: 'Employee uploads', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) from Daily Reports submitted by this employee, by report date Mon–Sat; planned-only reports are excluded' },
   // Sales / CRM
   'auto:leads_created':         { plan: 'You set',                            actual: 'Leads assigned to user this week' },
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
@@ -528,17 +531,13 @@ export default function Scorecard() {
                 <button
                   onClick={() => exportCsv(
                     `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Previous Period', 'Previous Plan', 'Previous Actual', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
+                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
                       k.template_name || '',
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
-                      k.previous_period?.label || (k.previous_planned != null ? 'Previous' : '—'),
-                      k.previous_planned ?? '—',
-                      k.previous_actual ?? '—',
-                      vsPlan(k.last_week_pct) ?? '',
                       k.planned ?? 0,
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
@@ -627,12 +626,11 @@ export default function Scorecard() {
                   <tr>
                     <th className="text-left p-2 w-[260px]">Team / Person</th>
                     <th className="text-center p-2 w-16">Weight %</th>
-                    <th className="text-center p-2 w-24" title="Previous period Plan / Actual and Achievement %">Previous<br />Plan / Actual</th>
                     <th className="text-center p-2 w-24">Planned</th>
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
                     <th className="text-center p-2 w-24">Previous<br />Pending / Done</th>
-                    <th className="text-left p-2">Commitment</th>
+                    <th className="text-left p-2 w-40">Commitment</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -650,7 +648,7 @@ export default function Scorecard() {
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
-                            <td colSpan={8} className="p-3">
+                            <td colSpan={7} className="p-3">
                               {raci.loading
                                 ? <p className="text-sm text-gray-500">Loading step-wise…</p>
                                 : <RaciBreakdown data={raci.data} />}
@@ -1100,8 +1098,8 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       pending_uptodate: pendingUp === '' ? null : Number(pendingUp),
       pending_work: pendingWork === '' ? null : Number(pendingWork),
       total_uptodate: totalUp === '' ? null : Number(totalUp),
-      commitment: commitment || null,
-      commitment_prev: commitmentPrev || null,
+      ...(String(commitment ?? '') !== String(kpi.commitment ?? '') ? { commitment } : {}),
+      ...(String(commitmentPrev ?? '') !== String(kpi.commitment_prev ?? '') ? { commitment_prev: commitmentPrev } : {}),
       ...(extra?.nativeEvent ? {} : extra),
     });
   };
@@ -1126,6 +1124,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       <td className="p-2">
         <div className="font-medium">{kpi.metric_name}</div>
         {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
+        {actualAuto && SOURCE_INFO[kpi.data_source]?.scope && <div className="text-[10px] text-gray-500" title={SOURCE_INFO[kpi.data_source].actual}>B-actual · {SOURCE_INFO[kpi.data_source].scope}</div>}
         <ScoreMetricDates kpi={kpi} readOnly={readOnly} onSave={flush} />
         <div className="text-[10px] text-gray-500">
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
@@ -1141,38 +1140,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         </div>
       </td>
       <td className="text-center p-2">{kpi.weightage}%</td>
-      <td className="text-center p-2">
-        {kpi.previous_planned != null || kpi.previous_actual != null ? (
-          <div className="flex flex-col items-center justify-center leading-tight"
-               title={`Previous (${kpi.previous_period?.label || 'Last Period'}): Plan ${kpi.previous_planned ?? '—'}, Actual ${kpi.previous_actual ?? '—'}${kpi.last_week_pct != null ? ` · Achievement ${fmtVs(kpi.last_week_pct)}` : ''}`}>
-            <div className="font-semibold text-gray-700">
-              <span>{kpi.previous_planned ?? '—'}</span>
-              <span className="text-gray-300 mx-1">/</span>
-              <span>{kpi.previous_actual ?? '—'}</span>
-            </div>
-            <div className="text-[9px] font-normal text-gray-400">plan / act</div>
-            {kpi.last_week_pct != null && (
-              <div className={`text-[10px] font-bold mt-0.5 ${vsClr(kpi.last_week_pct)}`}>
-                {fmtVs(kpi.last_week_pct)}
-              </div>
-            )}
-          </div>
-        ) : kpi.last_week_pct != null ? (
-          <div className="text-center" title={`Previous: Achievement ${fmtVs(kpi.last_week_pct)}`}>
-            <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span>
-          </div>
-        ) : (
-          <span className="text-gray-300" title="No previous data">—</span>
-        )}
-      </td>
       {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
           pendency shows ONLY in the Pending column (up), not added here. */}
-      <td className="text-center p-2" title={kpi.previous_planned != null ? `Current: ${planned} · Prev Plan: ${kpi.previous_planned}` : undefined}>
+      <td className="text-center p-2">
         {!plannedEditable ? (
           <span className="text-gray-700 cursor-help"
                 title={(kpi.target_auto
                   ? sourceInfoFor(kpi.data_source).plan
-                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`) + (kpi.previous_planned != null ? ` (Prev Plan: ${kpi.previous_planned})` : '')}>
+                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`)}>
             {planned}
             {!kpi.target_auto && (
               <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
@@ -1184,7 +1159,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           <input aria-label={`Planned ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
         )}
       </td>
-      <td className="text-center p-2" title={kpi.previous_actual != null ? `Current: ${actual} · Prev Actual: ${kpi.previous_actual}` : undefined}>
+      <td className="text-center p-2">
         {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
           <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
         {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
@@ -1223,23 +1198,38 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           {fmtVs(prevAch)}
         </div>
       </td>
-      <td className="p-2">
+      <td className="p-2 w-40">
         {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
             pending tasks, and the CURRENT week's commitment. */}
         <div className="space-y-1">
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment on the previous pending tasks — when will the backlog be cleared?">Prev</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="previous pending — by when…"
-              value={commitmentPrev} onChange={e => setCommitmentPrev(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment for previous pending tasks (%)">Prev</span>
+            <KpiCommitmentInput label={`Previous commitment ${kpi.metric_name}`} value={commitmentPrev} onChange={setCommitmentPrev} onSave={flush} disabled={readOnly || saving} />
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for the current week's work">Now</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="current commitment…"
-              value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for current work (%) — carried into the following week">Now</span>
+            <KpiCommitmentInput label={`Current commitment ${kpi.metric_name}`} value={commitment} onChange={setCommitment} onSave={flush} disabled={readOnly || saving} />
           </div>
+          {kpi.commitment_inherited && String(commitment ?? '') === String(kpi.commitment ?? '') && <p className="text-[9px] text-gray-400 pl-10" title={`Commitment entered for week starting ${kpi.commitment_from_week}`}>From last week</p>}
         </div>
       </td>
     </tr>
+  );
+}
+
+function KpiCommitmentInput({ label, value, onChange, onSave, disabled }) {
+  const text = String(value ?? '');
+  const isNumber = text.trim() !== '' && Number.isFinite(Number(text));
+  const legacyNote = text.trim() !== '' && !isNumber;
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <input type="number" step="any" className="input text-center text-xs !w-20 py-1" aria-label={label} placeholder="—"
+          value={isNumber ? text : ''} onChange={e => onChange(e.target.value)} onBlur={() => onSave()} disabled={disabled} />
+        <span className="text-[10px] text-gray-400">%</span>
+      </div>
+      {legacyNote && <p className="max-w-40 truncate text-[9px] text-gray-500" title={text}>{text}</p>}
+    </div>
   );
 }
 
@@ -1304,6 +1294,14 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 // Per-step RACI <optgroup>s for the template editor's source pickers — one group
 // per module, each step an option whose value is "auto:raci_step:<module>:<step>".
 // Indent to Dispatch sources count the whole module; other steps use personal RACI.
+function DprActualCostOptions() {
+  return <>
+    <option value="auto:dpr_actual_cost_all">DPR Actual Cost (B-actual) — all sites</option>
+    <option value="auto:dpr_actual_cost_sites">DPR Actual Cost (B-actual) — assigned sites</option>
+    <option value="auto:dpr_actual_cost_by_user">DPR Actual Cost (B-actual) — submitted by employee</option>
+  </>;
+}
+
 function RaciStepOptions({ modules }) {
   if (!modules || !modules.length) return null;
   return modules.map(m => (
@@ -1675,7 +1673,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                 </select>
               </td>
               <td className="p-2">
-                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
+                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
                   <option value="manual">manual entry</option>
                   <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
                   <optgroup label="Tasks & Tickets">
@@ -1708,6 +1706,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:sysflow_progress_pct">ERP implementation progress % (at week end)</option>
                   </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
+                    <DprActualCostOptions />
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
                     <option value="auto:dpr_by_user">DPR submitted BY user (count)</option>
@@ -1885,6 +1884,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
           </select>
           <select aria-label="New metric source" className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value,
             ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' }
+              : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' }
               : e.target.value.startsWith('auto:amount_received') ? { metric_type: 'amount', actual_mode: 'source' } : {}),
           }))}>
             <option value="manual">manual entry</option>
@@ -1896,6 +1896,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:checklists">auto: checklists</option>
             <option value="auto:tickets">auto: tickets</option>
             <option value="auto:snags">auto: snag list</option>
+            <optgroup label="DPR Actual Cost (B-actual)"><DprActualCostOptions /></optgroup>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
             <optgroup label="Procurement">
