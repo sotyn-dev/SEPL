@@ -15,7 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import RatesItems from './RatesItems';
 import MakeApproval from './MakeApproval';
 
-const CRM_OPTIONS = ['Sushila', 'Lovely'];
+const CRM_OPTIONS = ['Lovely'];
 
 // Auto-growing textarea (mam 2026-06-24): the BOQ Description must WRAP and
 // show the whole text — no fixed-height box that scrolls "top to down". It
