@@ -10,6 +10,7 @@ import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import TemplateAssignmentPicker from '../components/TemplateAssignmentPicker';
+import { ScoreMetricSettings, ScoreMetricDates } from '../components/ScoreMetricInputs';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
@@ -85,6 +86,7 @@ const scorePill = (s) => {
 // `value` attributes on the <option> elements in the source dropdown.
 const SOURCE_INFO = {
   manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
+  'auto:lead_response_hours': { plan: 'You set the allowed response hours', actual: 'Average hours from Sales Funnel lead creation to its first completed follow-up by this user, for leads created in the week. Older completions without a timestamp are excluded.' },
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
   'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
   'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
@@ -298,9 +300,11 @@ export default function Scorecard() {
         ...patch,
       });
       // Reload to get fresh totals
-      loadScorecard();
+      await loadScorecard();
+      return true;
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
+      return false;
     } finally {
       setSavingKpi(null);
     }
@@ -1088,9 +1092,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     setTotalUp(kpi.total_uptodate ?? '');
   }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.commitment_prev, kpi.total_uptodate]);
 
-  const flush = () => {
+  const flush = (extra = {}) => {
     if (readOnly) return;
-    onSave({
+    return onSave({
       planned: Number(planned) || 0,
       actual: Number(actual) || 0,
       pending_uptodate: pendingUp === '' ? null : Number(pendingUp),
@@ -1098,6 +1102,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       total_uptodate: totalUp === '' ? null : Number(totalUp),
       commitment: commitment || null,
       commitment_prev: commitmentPrev || null,
+      ...(extra?.nativeEvent ? {} : extra),
     });
   };
 
@@ -1111,15 +1116,22 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const prevDoneN = +(kpi.pending_auto ? kpi.pending_work : pendingWork) || 0;
   const prevAch = prevPend > 0 ? (prevDoneN / prevPend) * 100 : 100;
   const isAuto = kpi.is_auto;
+  const actualAuto = kpi.actual_auto ?? isAuto;
+  const plannedEditable = kpi.planned_editable ?? !isAuto;
+  const calculatedHours = kpi.actual_mode === 'dates';
+  const unit = kpi.metric_type === 'hours' ? 'hrs' : kpi.metric_type === 'amount' ? 'amount' : '';
 
   return (
     <tr className={`border-t ${saving ? 'bg-amber-50' : ''}`}>
       <td className="p-2">
         <div className="font-medium">{kpi.metric_name}</div>
+        {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
+        <ScoreMetricDates kpi={kpi} readOnly={readOnly} onSave={flush} />
         <div className="text-[10px] text-gray-500">
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
           {kpi.direction !== 'lower_better' && <span className="text-emerald-600">↑ higher better</span>}
-          {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
+          {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">{plannedEditable || !actualAuto ? 'MIXED' : 'AUTO'}</span>}
+          {calculatedHours && <span className="ml-2 text-blue-700">Date/time → hours</span>}
           {kpi.data_source?.startsWith('auto:raci_step:indent_to_dispatch:') && <span className="ml-2 text-[9px] text-slate-500" title="Counts all Indent to Dispatch records for the selected step, regardless of employee RACI assignment">Whole module</span>}
           {onStepWise && (
             <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">
@@ -1156,7 +1168,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
           pendency shows ONLY in the Pending column (up), not added here. */}
       <td className="text-center p-2" title={kpi.previous_planned != null ? `Current: ${planned} · Prev Plan: ${kpi.previous_planned}` : undefined}>
-        {isAuto ? (
+        {!plannedEditable ? (
           <span className="text-gray-700 cursor-help"
                 title={(kpi.target_auto
                   ? sourceInfoFor(kpi.data_source).plan
@@ -1169,12 +1181,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
             )}
           </span>
         ) : (
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />
+          <input aria-label={`Planned ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
         )}
       </td>
       <td className="text-center p-2" title={kpi.previous_actual != null ? `Current: ${actual} · Prev Actual: ${kpi.previous_actual}` : undefined}>
-        {isAuto ? <span className="text-gray-700" title={sourceInfoFor(kpi.data_source).actual}>{actual}</span> :
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
+        {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
+          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
+        {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
+        {kpi.observations != null && <span className="block text-[9px] text-gray-500">{kpi.observations} response{kpi.observations === 1 ? '' : 's'}</span>}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
       {/* Total Up-to-date column removed (mam 2026-09-14: "no need here").
@@ -1303,8 +1317,10 @@ function RaciStepOptions({ modules }) {
 
 function TemplateKpiEditor({ templateId, onChange }) {
   const [tpl, setTpl] = useState(null);
+  const [expandedMetric, setExpandedMetric] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+  const emptyForm = { group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0, planned_mode: 'source', actual_mode: 'source', metric_type: 'number', time_basis: 'elapsed' };
+  const [form, setForm] = useState(emptyForm);
   // Module + step catalogue for the per-step RACI source options (one fetch).
   const [raciModules, setRaciModules] = useState([]);
   useEffect(() => { api.get('/raci/modules').then(r => setRaciModules(r.data || [])).catch(() => {}); }, []);
@@ -1353,7 +1369,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
       })
       .catch(() => setPreviewKpis({}))
       .finally(() => setPreviewLoading(false));
-  }, [previewUserId, templateId, me?.id]);
+  }, [previewUserId, templateId, me?.id, tpl]);
 
   // Per-user KPI overrides — mam (2026-06-02): "every person different
   // KPIs" (Option B).  Three things mam can override per user:
@@ -1423,7 +1439,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
     e.preventDefault();
     try {
       await api.post(`/scoring/templates/${templateId}/kpis`, form);
-      setForm({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+      setForm(emptyForm);
       setAdding(false);
       load(); onChange?.();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -1507,7 +1523,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
             const userWeight = userRow?.weight_override;
             const hasWeightOverride = userWeight != null;
             return (
-            <tr key={k.id} className={`border-t ${previewUserId && !userEnabled ? 'opacity-40 line-through' : ''}`}>
+            <Fragment key={k.id}>
+            <tr className={`border-t ${previewUserId && !userEnabled ? 'opacity-40 line-through' : ''}`}>
               <td className="p-2">
                 <div className="flex items-center gap-2">
                   {/* Mam (2026-06-02): per-user enable toggle.  When a
@@ -1584,7 +1601,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   // every auto source was locked as "auto" even where the
                   // description said "You set" — 49 sources with no box.
                   const live = previewKpis[k.id];
-                  const autoLocksTarget = isAuto && (live
+                  const autoLocksTarget = isAuto && k.planned_mode !== 'manual' && (live
                     ? !!live.target_auto
                     : !/^you set/i.test(sourceInfoFor(k.data_source)?.plan || ''));
                   const youSetHint = (
@@ -1652,14 +1669,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
                 })()}
               </td>
               <td className="p-2">
-                <select className="select text-xs" defaultValue={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
+                <select className="select text-xs" value={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
                   <option value="higher_better">↑ higher</option>
                   <option value="lower_better">↓ lower</option>
                 </select>
               </td>
               <td className="p-2">
-                <select key={`src-${k.id}-${raciModules.length}`} className="select text-xs" defaultValue={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value })}>
+                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
                   <option value="manual">manual entry</option>
+                  <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
                   <optgroup label="Tasks & Tickets">
                     <option value="auto:delegations">delegations (assigned/done)</option>
                     <option value="auto:pms">pms tasks (assigned/done)</option>
@@ -1789,6 +1807,9 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:vendors_added">vendors added</option>
                   </optgroup>
                 </select>
+                <button type="button" aria-expanded={expandedMetric === k.id} onClick={() => setExpandedMetric(expandedMetric === k.id ? null : k.id)} className="mt-2 rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[10px] font-semibold text-blue-700">
+                  Plan / Actual options
+                </button>
                 {/* Mam (2026-06-02): "how plan actual say in template that
                     pick from here".  Plain-English mapping so admin sees
                     exactly which DB field feeds Plan vs Actual for this
@@ -1800,11 +1821,11 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <div className="mt-1 space-y-0.5 text-[9px] leading-tight">
                       <div className="flex items-start gap-1">
                         <span className="font-bold text-blue-700 whitespace-nowrap">Plan:</span>
-                        <span className="text-gray-600">{info.plan}</span>
+                        <span className="text-gray-600">{k.planned_mode === 'manual' ? 'You enter the weekly plan; template target is the default' : info.plan}</span>
                       </div>
                       <div className="flex items-start gap-1">
                         <span className="font-bold text-emerald-700 whitespace-nowrap">Actual:</span>
-                        <span className="text-gray-600">{info.actual}</span>
+                        <span className="text-gray-600">{k.actual_mode === 'manual' ? 'You enter the weekly value manually' : k.actual_mode === 'dates' ? 'You enter both date/times manually; SOTYN calculates hours (IST)' : info.actual}</span>
                       </div>
                     </div>
                   );
@@ -1822,7 +1843,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   const row = previewKpis[k.id];
                   if (!row) return <span className="text-gray-300 text-[10px]">no data</span>;
                   const actual = row.actual ?? row.actual_value ?? null;
-                  const isAuto = k.data_source && k.data_source.startsWith('auto:');
+                  const isAuto = row.actual_auto;
                   let cls = 'bg-gray-100 text-gray-500';
                   if (actual !== null && actual !== undefined && actual !== 0) {
                     cls = 'bg-emerald-100 text-emerald-800';
@@ -1842,6 +1863,11 @@ function TemplateKpiEditor({ templateId, onChange }) {
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>
             </tr>
+            {expandedMetric === k.id && <tr className="bg-blue-50/40"><td colSpan={8} className="p-3">
+              <div className="mb-2 font-semibold text-blue-800">{k.metric_name} · Plan / Actual settings</div>
+              <ScoreMetricSettings value={k} onChange={patch => updateKpi(k, patch)} />
+            </td></tr>}
+            </Fragment>
             );
           })}
         </tbody>
@@ -1857,8 +1883,14 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="higher_better">↑ higher better</option>
             <option value="lower_better">↓ lower better</option>
           </select>
-          <select className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value }))}>
+          <select aria-label="New metric source" className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value,
+            ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' }
+              : e.target.value.startsWith('auto:amount_received') ? { metric_type: 'amount', actual_mode: 'source' } : {}),
+          }))}>
             <option value="manual">manual entry</option>
+            <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
+            <option value="auto:amount_received">Amount received (by user)</option>
+            <option value="auto:amount_received_all">Amount received (all)</option>
             <option value="auto:delegations">auto: delegations</option>
             <option value="auto:pms">auto: pms tasks</option>
             <option value="auto:checklists">auto: checklists</option>
@@ -1880,6 +1912,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <option value="auto:sysflow_progress_pct">auto: ERP implementation progress %</option>
             </optgroup>
           </select>
+          <div className="col-span-2 rounded-lg border bg-blue-50/40 p-3"><ScoreMetricSettings value={form} onChange={patch => setForm(f => ({ ...f, ...patch }))} /></div>
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="btn btn-secondary text-sm">Cancel</button>
             <button type="submit" className="btn btn-primary text-sm">Add</button>

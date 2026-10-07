@@ -3089,6 +3089,13 @@ function initializeDatabase() {
     // previous pending task and current commitment". commitment_prev = the
     // promise on clearing the backlog; commitment stays the current-week one.
     ['score_entries', 'commitment_prev TEXT'],
+    ['score_kpis', "planned_mode TEXT NOT NULL DEFAULT 'source'"],
+    ['score_kpis', "actual_mode TEXT NOT NULL DEFAULT 'source'"],
+    ['score_kpis', "metric_type TEXT NOT NULL DEFAULT 'number'"],
+    ['score_kpis', "time_basis TEXT NOT NULL DEFAULT 'elapsed'"],
+    ['score_entries', 'planned_at TEXT'],
+    ['score_entries', 'actual_at TEXT'],
+    ['lead_followups', 'completed_at TEXT'],
     // Quote-with-margin from a funnel BOQ (mam 2026-08-27, SOP-02 F5-F7):
     // the quotation remembers which funnel lead it came from, the margin %
     // applied on the BOQ base, and the uploaded quotation file.

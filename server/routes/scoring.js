@@ -18,6 +18,7 @@ const router = express.Router();
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { listAssignments, setAssignments } = require('../lib/scoreTemplateAssignments');
+const { metricSettings, entryDates, hoursFromDates, achievement } = require('../lib/scoreMetricValues');
 
 router.use(authMiddleware);
 
@@ -102,18 +103,26 @@ router.delete('/templates/:id', adminOnly, (req, res) => {
 
 // Add KPI
 router.post('/templates/:id/kpis', adminOnly, (req, res) => {
-  const { group_name, metric_name, weightage, direction, data_source, display_order } = req.body;
+  const { group_name, metric_name, weightage, direction, data_source, display_order, default_planned = 0 } = req.body;
   if (!metric_name) return res.status(400).json({ error: 'metric_name required' });
+  let settings;
+  try { settings = metricSettings(req.body); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (!Number.isFinite(Number(default_planned))) return res.status(400).json({ error: 'Enter a valid target' });
   const db = getDb();
   const r = db.prepare(
-    `INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(req.params.id, group_name || 'Weekly', metric_name, weightage || 0, direction || 'higher_better', data_source || 'manual', display_order || 0);
+    `INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, default_planned, planned_mode, actual_mode, metric_type, time_basis)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(req.params.id, group_name || 'Weekly', metric_name, weightage || 0, direction || 'higher_better', data_source || 'manual', display_order || 0, Number(default_planned), settings.planned_mode, settings.actual_mode, settings.metric_type, settings.time_basis);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/kpis/:id', adminOnly, (req, res) => {
   const { group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned } = req.body;
+  const current = getDb().prepare('SELECT * FROM score_kpis WHERE id=?').get(req.params.id);
+  if (!current) return res.status(404).json({ error: 'Metric not found' });
+  let settings;
+  try { settings = metricSettings(req.body, current); } catch (error) { return res.status(400).json({ error: error.message }); }
+  if (default_planned !== undefined && !Number.isFinite(Number(default_planned))) return res.status(400).json({ error: 'Enter a valid target' });
   getDb().prepare(
     `UPDATE score_kpis SET
        group_name=COALESCE(?, group_name),
@@ -123,7 +132,10 @@ router.put('/kpis/:id', adminOnly, (req, res) => {
        data_source=COALESCE(?, data_source),
        display_order=COALESCE(?, display_order),
        active=COALESCE(?, active),
-       default_planned=COALESCE(?, default_planned)
+       default_planned=COALESCE(?, default_planned),
+       planned_mode=COALESCE(?, planned_mode),
+       actual_mode=COALESCE(?, actual_mode),
+       metric_type=?, time_basis=?
      WHERE id=?`
   ).run(
     group_name || null, metric_name || null,
@@ -132,6 +144,7 @@ router.put('/kpis/:id', adminOnly, (req, res) => {
     display_order === undefined ? null : display_order,
     active === undefined ? null : (active ? 1 : 0),
     default_planned === undefined ? null : default_planned,
+    settings.planned_mode, settings.actual_mode, settings.metric_type, settings.time_basis,
     req.params.id
   );
   res.json({ message: 'Updated' });
@@ -1189,11 +1202,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         return { given: null, done: leads > 0 ? Math.round((quoted / leads) * 100) : 0 };
       }
       if (source === 'auto:lead_response_hours') {
-        // Avg hours from lead created -> first follow-up, for leads created this week.
-        const r = db.prepare(`SELECT AVG((julianday(f.first_at) - julianday(l.created_at)) * 24) a
-          FROM leads l JOIN (SELECT lead_id, MIN(created_at) first_at FROM lead_followups GROUP BY lead_id) f ON f.lead_id = l.id
-          WHERE l.created_at BETWEEN ? AND ?`).get(since, until);
-        return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
+        return require('../lib/leadResponseScore').leadResponseScore(db, userId, sinceDate, untilDate);
       }
       if (source === 'auto:dpr_billed_pct') {
         // % of billing-ready DPRs this week that have been billed (sales_bill linked).
@@ -1418,12 +1427,16 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       //   3. Template default_planned  — fallback for everyone
       // Same fallback chain for weight: per-user weight_override → k.weightage.
       const userOverride = userOverrides[k.id];
-      let planned = (entry?.planned != null && entry?.planned !== 0)
+      const sourceIsAuto = k.data_source?.startsWith('auto:');
+      const planFromSource = sourceIsAuto && k.planned_mode !== 'manual';
+      const actualFromSource = sourceIsAuto && !['manual', 'dates'].includes(k.actual_mode);
+      let planned = (entry?.planned != null && (entry?.planned !== 0 || k.planned_mode === 'manual'))
         ? entry.planned
         : (userOverride?.planned_value != null
             ? userOverride.planned_value
             : (k.default_planned || 0));
       let actual = entry?.actual ?? 0;
+      let observations = null;
 
       // Auto-fill from ERP if data_source is 'auto:*'. Wrap in try/catch
       // so one broken auto source (e.g. table missing a column on a stale
@@ -1444,11 +1457,11 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       // automatically pick plan, how I can justify".
       let targetAuto = false;
       let carryPrevPending = 0, carryPrevDone = 0;
-      if (k.data_source && k.data_source.startsWith('auto:')) {
+      if (planFromSource || actualFromSource) {
         try {
           const autoRes = computeAutoCount(k.data_source, startTs, endTs);
           const { given, done } = autoRes;
-          if (k.data_source === 'auto:checklists') {
+          if (planFromSource && actualFromSource && k.data_source === 'auto:checklists') {
             // Saved score entries can contain the old uploader-based totals.
             // Previous week must use the same live task/date approvals as this week.
             const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
@@ -1465,7 +1478,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
               commitment: saved?.commitment ?? null, commitment_prev: saved?.commitment_prev ?? null,
             };
           }
-          if (k.data_source.startsWith('auto:raci_step:indent_to_dispatch:')) {
+          if (planFromSource && actualFromSource && k.data_source.startsWith('auto:raci_step:indent_to_dispatch:')) {
             const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
             lastWeekPct = previous.given > 0
               ? (k.direction === 'lower_better'
@@ -1489,7 +1502,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
               };
             }
           }
-          if (given !== null && given !== undefined) {
+          if (planFromSource && given !== null && given !== undefined) {
             planned = given;
             // A %-type source that had nothing to judge this week returns a
             // neutral 0/0 WITH typedTarget: the target is still the one typed
@@ -1498,14 +1511,16 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
             // ERP progress).
             targetAuto = !autoRes.typedTarget;
           }
-          if (done !== null && done !== undefined) {
+          if (actualFromSource && done !== null && done !== undefined) {
             actual = done;
           }
+          if (actualFromSource && autoRes.noData) actual = null;
+          if (actualFromSource) observations = autoRes.observations ?? null;
           // Previous pendency shows in the PENDING column ONLY — mam saw the
           // first cut live (2026-08-26) and said the "incl N prev" additions
           // in Planned/Actual should go: Planned/Actual stay this week's
           // cohort; the backlog lives in Pending "up".
-          const carry = computeCarry(k.data_source, startTs, endTs);
+          const carry = planFromSource && actualFromSource ? computeCarry(k.data_source, startTs, endTs) : null;
           if (carry) {
             carryPrevPending = carry.prevPending;
             carryPrevDone = carry.prevDone;
@@ -1525,7 +1540,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
             pendingWk = previous.done;
             carryPrevPending = previous.pending;
             pendingAuto = true;
-          } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
+          } else if (planFromSource && actualFromSource && pendingWeekOnly(k.data_source) && given !== null && done !== null) {
             // RACI: same pair — openBefore joins the outstanding total (never
             // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
             // user closed this week. Checklists have neither → 0s.
@@ -1540,6 +1555,42 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         } catch (e) {
           console.warn(`auto-fetch failed for ${k.data_source}:`, e.message);
         }
+      }
+
+      let dateError = null;
+      if (k.actual_mode === 'dates') {
+        try { actual = hoursFromDates(entry?.planned_at, entry?.actual_at, k.time_basis); }
+        catch (error) { actual = null; dateError = error.message; }
+      }
+      // Explicit entry choices and typed metrics use the same calculation for
+      // the immediately previous week; saved automatic snapshots may be stale.
+      if (k.planned_mode === 'manual' || ['manual', 'dates'].includes(k.actual_mode)
+          || (k.metric_type || 'number') !== 'number' || k.data_source === 'auto:lead_response_hours') {
+        const previousEntry = prevRecord?.week_start === lastWeekStart ? prevRecord : null;
+        let previousPlanned = previousEntry?.planned ?? userOverride?.planned_value ?? k.default_planned ?? 0;
+        let previousActual = previousEntry?.actual ?? 0;
+        if (planFromSource || actualFromSource) {
+          // The general RACI helpers memoize one period at a time.
+          const cache = [_raciAgg, _raciBreakdown];
+          try {
+            _raciAgg = undefined; _raciBreakdown = undefined;
+            const previous = computeAutoCount(k.data_source, lastStartTs, lastEndTs);
+            if (planFromSource && previous.given != null) previousPlanned = previous.given;
+            if (actualFromSource) previousActual = previous.noData ? null : previous.done ?? previousActual;
+          } catch (error) { console.warn(`previous auto-fetch failed for ${k.data_source}:`, error.message); }
+          finally { [_raciAgg, _raciBreakdown] = cache; }
+        }
+        if (k.actual_mode === 'dates') {
+          try { previousActual = hoursFromDates(previousEntry?.planned_at, previousEntry?.actual_at, k.time_basis); }
+          catch (_) { previousActual = null; }
+        }
+        lastWeekPct = previousActual == null ? null : achievement(previousPlanned, previousActual, k.direction);
+        prevPeriod = {
+          periodId: lastWeekStart, period_id: lastWeekStart, label: formatWeekLabel(lastWeekStart),
+          planned: previousPlanned, actual: previousActual, actual_pct: lastWeekPct,
+          recordId: previousEntry?.id ?? null, record_id: previousEntry?.id ?? null,
+          commitment: previousEntry?.commitment ?? null, commitment_prev: previousEntry?.commitment_prev ?? null,
+        };
       }
 
       // Calculate Actual % — plain "achievement vs plan" (mam 2026-07-03:
@@ -1567,6 +1618,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         }
         if (actualPct < 0) actualPct = 0;
       }
+      if (actual == null) actualPct = null;
 
       // Weight resolution: per-user weight_override → k.weightage default.
       // Mam (2026-06-02): "every person different KPIs" — Option B per-user
@@ -1575,8 +1627,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       const weight = (userOverride?.weight_override != null)
         ? +userOverride.weight_override
         : (k.weightage || 0);
-      totalWeight += weight;
-      totalScore += weight * actualPct;
+      if (actualPct != null) { totalWeight += weight; totalScore += weight * actualPct; }
 
       return {
         kpiId: k.id,
@@ -1592,7 +1643,17 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         direction: k.direction,
         data_source: k.data_source,
         default_planned: k.default_planned || 0,
-        is_auto: k.data_source && k.data_source.startsWith('auto:'),
+        is_auto: !!(planFromSource || actualFromSource),
+        planned_mode: k.planned_mode || 'source',
+        actual_mode: k.actual_mode || 'source',
+        actual_auto: !!actualFromSource,
+        planned_editable: !sourceIsAuto || k.planned_mode === 'manual',
+        metric_type: k.metric_type || 'number',
+        time_basis: k.time_basis || 'elapsed',
+        planned_at: entry?.planned_at ?? null,
+        actual_at: entry?.actual_at ?? null,
+        date_error: dateError,
+        observations,
         target_auto: targetAuto,            // true = Planned counted live; false = Planned is the typed target
         planned,
         actual,
@@ -1622,9 +1683,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     // 0% weight on every KPI): score = plain unweighted average of the KPI
     // achievement %s, instead of a constant 0 (which displayed as an eternal
     // -100% and made Champions treat the whole template as unscoreable).
+    const judgedRows = result.filter(row => row.actual_pct != null);
     const score = totalWeight > 0
       ? Math.round((totalScore / totalWeight) * 100) / 100
-      : (result.length ? Math.round((result.reduce((s, r) => s + (r.actual_pct || 0), 0) / result.length) * 100) / 100 : 0);
+      : (judgedRows.length ? Math.round((judgedRows.reduce((s, r) => s + r.actual_pct, 0) / judgedRows.length) * 100) / 100 : 0);
 
     // Total auto work units this week — the Champions League min-activity gate
     // uses this to decide whether a week counts toward a player's score (so a
@@ -1632,7 +1694,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     // Repeated automatic sources on different role templates measure the same
     // work. Count that activity once for the Champions League activity gate.
     const autoActivity = new Map();
-    for (const row of result) if (row.is_auto && Number.isFinite(+row.actual)) {
+    for (const row of result) if (row.actual_auto && Number.isFinite(+row.actual)) {
       autoActivity.set(row.data_source, Math.max(autoActivity.get(row.data_source) || 0, +row.actual));
     }
     const activity = [...autoActivity.values()].reduce((sum, n) => sum + n, 0);
@@ -1710,14 +1772,15 @@ router.get('/scorecard-range', (req, res) => {
       weeksCounted++;
       for (const k of sc.kpis) {
         const agg = byKpi.get(k.kpi_id);
+        const measured = k.actual != null;
         if (!agg) {
-          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
+          byKpi.set(k.kpi_id, { ...k, planned: measured ? +k.planned || 0 : 0, actual: measured ? +k.actual || 0 : 0, measured_weeks: measured ? 1 : 0,
+            planned_at: null, actual_at: null,
             last_week_pct: null, total_uptodate: null, pending_uptodate: null,
             pending_work: null, pending_pct: null, commitment: null, commitment_prev: null, notes: null,
             pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
         } else {
-          agg.planned += +k.planned || 0;
-          agg.actual += +k.actual || 0;
+          if (measured) { agg.planned += +k.planned || 0; agg.actual += +k.actual || 0; agg.measured_weeks++; }
           // keep the latest week's definition (name/weight/direction may evolve)
           agg.group_name = k.group_name; agg.metric_name = k.metric_name;
           agg.weightage = k.weightage; agg.direction = k.direction;
@@ -1728,6 +1791,11 @@ router.get('/scorecard-range', (req, res) => {
     // Same % + weighted-score math as the weekly compute, on the summed values.
     let totalScore = 0, totalWeight = 0;
     const kpis = [...byKpi.values()].map(k => {
+      if (!k.measured_weeks) return { ...k, actual: null, actual_pct: null };
+      if (k.metric_type === 'hours' || k.data_source === 'auto:lead_response_hours') {
+        k.planned = Math.round(k.planned / k.measured_weeks * 100) / 100;
+        k.actual = Math.round(k.actual / k.measured_weeks * 100) / 100;
+      }
       let pct = 0;
       if (+k.planned === 0 && +k.actual === 0) pct = 100;
       else if (k.planned > 0) {
@@ -1742,9 +1810,10 @@ router.get('/scorecard-range', (req, res) => {
       return k;
     });
     // Same zero-weight-template rule as the weekly compute above.
+    const judgedKpis = kpis.filter(k => k.actual_pct != null);
     const score = totalWeight > 0
       ? Math.round((totalScore / totalWeight) * 100) / 100
-      : (kpis.length ? Math.round((kpis.reduce((s, r) => s + (r.actual_pct || 0), 0) / kpis.length) * 100) / 100 : 0);
+      : (judgedKpis.length ? Math.round((judgedKpis.reduce((s, r) => s + r.actual_pct, 0) / judgedKpis.length) * 100) / 100 : 0);
 
     res.json({
       user_id: userId, period: true, from, to,
@@ -1794,7 +1863,7 @@ router.get('/raci-breakdown', (req, res) => {
 // PUT save a single KPI entry (planned / actual / pending counts / notes)
 router.put('/scorecard/entry', (req, res) => {
   try {
-    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes } = req.body;
+    const { user_id, kpi_id, week_start } = req.body;
     if (!kpi_id || !week_start) return res.status(400).json({ error: 'kpi_id and week_start required' });
     const targetUser = parseInt(user_id, 10) || req.user.id;
     // Only admin or the target user themselves can edit
@@ -1802,7 +1871,17 @@ router.put('/scorecard/entry', (req, res) => {
       return res.status(403).json({ error: 'Cannot edit another user\'s scorecard' });
     }
     const db = getDb();
-    const k = db.prepare('SELECT direction FROM score_kpis WHERE id=?').get(kpi_id);
+    const k = db.prepare('SELECT * FROM score_kpis WHERE id=?').get(kpi_id);
+    if (!k) return res.status(404).json({ error: 'Metric not found' });
+    const existing = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(targetUser, kpi_id, week_start) || {};
+    let dates;
+    try { dates = entryDates(req.body, existing, k); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
+    const planned = req.body.planned ?? existing.planned ?? k.default_planned ?? 0;
+    const actual = k.actual_mode === 'dates' ? dates.hours : req.body.actual ?? existing.actual ?? 0;
+    if (!Number.isFinite(Number(planned)) || (actual != null && !Number.isFinite(Number(actual)))) {
+      return res.status(400).json({ error: 'Plan and Actual must be valid numbers' });
+    }
     // Achievement vs plan — same rule as the weekly compute (mam 2026-07-03, 2026-08-13).
     let actualPct = 0;
     if (+planned === 0 && +actual === 0) {
@@ -1815,9 +1894,11 @@ router.put('/scorecard/entry', (req, res) => {
       }
       if (actualPct < 0) actualPct = 0;
     }
+    if (actual == null) actualPct = null;
+    const optionalValue = key => Object.prototype.hasOwnProperty.call(req.body, key) ? req.body[key] : existing[key] ?? null;
     db.prepare(`
-      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes, updated_by, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes, updated_by, planned_at, actual_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
         planned=excluded.planned,
         actual=excluded.actual,
@@ -1830,9 +1911,11 @@ router.put('/scorecard/entry', (req, res) => {
         commitment_prev=excluded.commitment_prev,
         notes=excluded.notes,
         updated_by=excluded.updated_by,
+        planned_at=excluded.planned_at,
+        actual_at=excluded.actual_at,
         updated_at=CURRENT_TIMESTAMP
-    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, commitment_prev || null, notes || null, req.user.id);
-    res.json({ message: 'Saved', actual_pct: actualPct });
+    `).run(targetUser, kpi_id, week_start, planned || 0, actual == null ? null : Number(actual), actualPct, optionalValue('total_uptodate'), optionalValue('pending_uptodate'), optionalValue('pending_work'), optionalValue('pending_pct'), optionalValue('commitment'), optionalValue('commitment_prev'), optionalValue('notes'), req.user.id, dates.planned_at, dates.actual_at);
+    res.json({ message: 'Saved', actual_pct: actualPct, actual, planned_at: dates.planned_at, actual_at: dates.actual_at });
   } catch (err) {
     console.error('scorecard save error', err);
     res.status(500).json({ error: err.message });
