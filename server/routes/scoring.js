@@ -19,6 +19,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { listAssignments, setAssignments } = require('../lib/scoreTemplateAssignments');
 const { metricSettings, entryDates, hoursFromDates, achievement } = require('../lib/scoreMetricValues');
+const { dprActualCostScore } = require('../lib/dprActualCostScore');
 
 router.use(authMiddleware);
 
@@ -708,6 +709,18 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
            WHERE date(sy.created_at, '+330 minutes') <= ?`).get(weekEnd, weekEnd);
         if (!r || !r.n) return { given: 0, done: 0, typedTarget: true };
         return { given: null, done: Math.round((r.done / r.n) * 100) };
+      }
+
+      // Actual Cost is the DPR list's B-actual amount, independently scoped
+      // per KPI. It has a manually entered Plan, rather than a DPR count.
+      if (source === 'auto:dpr_actual_cost_all') {
+        return dprActualCostScore(db, sinceDate, untilDate);
+      }
+      if (source === 'auto:dpr_actual_cost_sites') {
+        return dprActualCostScore(db, sinceDate, untilDate, { siteIds: siteIdsForUser() });
+      }
+      if (source === 'auto:dpr_actual_cost_by_user') {
+        return dprActualCostScore(db, sinceDate, untilDate, { userId });
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) need the list

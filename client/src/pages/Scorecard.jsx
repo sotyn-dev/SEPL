@@ -117,6 +117,9 @@ const SOURCE_INFO = {
   'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
   'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
   'auto:dpr_cost_by_user':      { plan: 'DPRs submitted',                     actual: 'DPRs approved' },
+  'auto:dpr_actual_cost_all':   { scope: 'All sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) across all sites’ submitted Daily Reports dated Mon–Sat; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_sites': { scope: 'Assigned sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) for the employee’s assigned sites, by report date Mon–Sat, regardless of uploader; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_by_user': { scope: 'Employee uploads', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) from Daily Reports submitted by this employee, by report date Mon–Sat; planned-only reports are excluded' },
   // Sales / CRM
   'auto:leads_created':         { plan: 'You set',                            actual: 'Leads assigned to user this week' },
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
@@ -1121,6 +1124,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       <td className="p-2">
         <div className="font-medium">{kpi.metric_name}</div>
         {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
+        {actualAuto && SOURCE_INFO[kpi.data_source]?.scope && <div className="text-[10px] text-gray-500" title={SOURCE_INFO[kpi.data_source].actual}>B-actual · {SOURCE_INFO[kpi.data_source].scope}</div>}
         <ScoreMetricDates kpi={kpi} readOnly={readOnly} onSave={flush} />
         <div className="text-[10px] text-gray-500">
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
@@ -1290,6 +1294,14 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 // Per-step RACI <optgroup>s for the template editor's source pickers — one group
 // per module, each step an option whose value is "auto:raci_step:<module>:<step>".
 // Indent to Dispatch sources count the whole module; other steps use personal RACI.
+function DprActualCostOptions() {
+  return <>
+    <option value="auto:dpr_actual_cost_all">DPR Actual Cost (B-actual) — all sites</option>
+    <option value="auto:dpr_actual_cost_sites">DPR Actual Cost (B-actual) — assigned sites</option>
+    <option value="auto:dpr_actual_cost_by_user">DPR Actual Cost (B-actual) — submitted by employee</option>
+  </>;
+}
+
 function RaciStepOptions({ modules }) {
   if (!modules || !modules.length) return null;
   return modules.map(m => (
@@ -1661,7 +1673,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                 </select>
               </td>
               <td className="p-2">
-                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
+                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
                   <option value="manual">manual entry</option>
                   <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
                   <optgroup label="Tasks & Tickets">
@@ -1694,6 +1706,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:sysflow_progress_pct">ERP implementation progress % (at week end)</option>
                   </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
+                    <DprActualCostOptions />
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
                     <option value="auto:dpr_by_user">DPR submitted BY user (count)</option>
@@ -1871,6 +1884,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
           </select>
           <select aria-label="New metric source" className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value,
             ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' }
+              : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' }
               : e.target.value.startsWith('auto:amount_received') ? { metric_type: 'amount', actual_mode: 'source' } : {}),
           }))}>
             <option value="manual">manual entry</option>
@@ -1882,6 +1896,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:checklists">auto: checklists</option>
             <option value="auto:tickets">auto: tickets</option>
             <option value="auto:snags">auto: snag list</option>
+            <optgroup label="DPR Actual Cost (B-actual)"><DprActualCostOptions /></optgroup>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
             <optgroup label="Procurement">
