@@ -3081,6 +3081,13 @@ function initializeDatabase() {
     console.warn('[labour_management] migrations skipped (non-fatal):', e.message);
   }
 
+  try {
+    const { runHandoverSnagsMigrations } = require('./handoverSnagsSchema');
+    runHandoverSnagsMigrations(db);
+  } catch (e) {
+    console.warn('[handover_snags] migrations skipped (non-fatal):', e.message);
+  }
+
   require('../lib/scoreTemplateAssignments').initialize(db);
 
   // Safe schema migrations for columns added after initial release

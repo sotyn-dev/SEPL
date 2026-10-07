@@ -25,6 +25,9 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// SOP-15 Handover & Snags Pipeline (Owner: Project Manager — Adarsh Kumar)
+router.use('/sop15', require('./handoverSnags'));
+
 function isApprover(db, user) {
   if (user.role === 'admin') return true;
   const r = db.prepare(`

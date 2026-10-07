@@ -19,7 +19,14 @@ import Pagination from '../components/Pagination';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers } from 'react-icons/fi';
+import {
+  FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2,
+  FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers, FiUsers, FiLock, FiUnlock,
+  FiPrinter, FiClock, FiShield, FiFileText, FiCheck, FiChevronRight, FiChevronDown, FiChevronUp, FiCalendar
+} from 'react-icons/fi';
+import HandoverRaciModal from '../components/HandoverRaciModal';
+import HandoverCertificateModal from '../components/HandoverCertificateModal';
+import { StartHandoverModal, ClientWalkModal, GenerateCertificateModal } from '../components/HandoverWorkflowModals';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
 
@@ -110,6 +117,68 @@ export default function Snags() {
   const [, setLoading] = useState(false);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
 
+  // SOP-15 Handover & Snags Pipeline State
+  const [raci, setRaci] = useState(null);
+  const [raciOpen, setRaciOpen] = useState(false);
+  const [handoverSiteId, setHandoverSiteId] = useState('');
+  const [handoverData, setHandoverData] = useState(null);
+  const [startHandoverOpen, setStartHandoverOpen] = useState(false);
+  const [clientWalkOpen, setClientWalkOpen] = useState(false);
+  const [generateCertOpen, setGenerateCertOpen] = useState(false);
+  const [viewCert, setViewCert] = useState(null);
+  const [escalationsModalOpen, setEscalationsModalOpen] = useState(false);
+  const [escalationsList, setEscalationsList] = useState([]);
+  const [sop15Expanded, setSop15Expanded] = useState(true);
+
+  const loadRaci = useCallback(() => {
+    api.get('/snags/sop15/raci').then(r => setRaci(r.data.raci)).catch(() => { });
+  }, []);
+
+  const loadHandoverStatus = useCallback((siteId) => {
+    if (!siteId) { setHandoverData(null); return; }
+    api.get(`/snags/sop15/site-status/${siteId}`)
+      .then(r => setHandoverData(r.data))
+      .catch(() => { });
+  }, []);
+
+  useEffect(() => { loadRaci(); }, [loadRaci]);
+
+  useEffect(() => {
+    if (filters.site_id && filters.site_id !== handoverSiteId) {
+      setHandoverSiteId(filters.site_id);
+      loadHandoverStatus(filters.site_id);
+    }
+  }, [filters.site_id, handoverSiteId, loadHandoverStatus]);
+
+  const onSelectHandoverSite = (sid) => {
+    setHandoverSiteId(sid);
+    loadHandoverStatus(sid);
+    if (sid) setFilters(f => ({ ...f, site_id: sid }));
+  };
+
+  const handleClientTick = async (s) => {
+    try {
+      await api.post(`/snags/sop15/client-tick/${s.id}`);
+      toast.success(`Snag ${s.snag_no} verified and client-ticked (SOP-15.4)`);
+      load();
+      if (handoverSiteId) loadHandoverStatus(handoverSiteId);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to client tick');
+    }
+  };
+
+  const handleViewEscalations = async () => {
+    try {
+      const res = await api.get('/snags/sop15/escalations', {
+        params: handoverSiteId ? { site_id: handoverSiteId } : {}
+      });
+      setEscalationsList(res.data.escalations || []);
+      setEscalationsModalOpen(true);
+    } catch (_) {
+      toast.error('Failed to load escalations');
+    }
+  };
+
   // 500ms debounced search input sync with filters.search
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -142,7 +211,7 @@ export default function Snags() {
           setTotalPages(1);
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoading(false));
   }, [filters, page, perPage]);
 
@@ -228,8 +297,8 @@ export default function Snags() {
 
   useEffect(() => {
     load();
-    api.get('/dpr/sites?all=1').then(r => setSites(r.data || [])).catch(() => {});
-    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    api.get('/dpr/sites?all=1').then(r => setSites(r.data || [])).catch(() => { });
+    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
   }, [load]);
 
   const upload = async (file) => {
@@ -419,12 +488,173 @@ export default function Snags() {
           <p className="text-sm text-gray-500">Management raises site snags · assignee uploads proof · raiser approves to close.</p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={() => setRaciOpen(true)}
+            className="btn btn-secondary flex items-center gap-1.5 text-sm"
+            title="View or Configure SOP-15 Roles & Delegation"
+          >
+            <FiUsers size={14} className="text-slate-600" /> Roles (RACI)
+          </button>
           <button onClick={() => exportXlsx(true)}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('snags') && (
             <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
           )}
         </div>
+      </div>
+
+      {/* ─── SOP-15: HANDOVER & SNAGS WORKFLOW PIPELINE ─────────────────── */}
+      <div className="card p-4 bg-slate-900 text-white rounded-xl shadow-md space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+
+            <span className="font-semibold text-sm text-slate-100">Handover &amp; Snags Pipeline</span>
+            <span className="text-xs text-slate-400 hidden sm:inline">
+              · Owner: <span className="text-slate-200 font-medium">{raci?.sop_owner?.assigned_name ? (raci.sop_owner.assigned_name.toLowerCase().includes('project manager') || raci.sop_owner.assigned_name.toLowerCase().includes('(pm)') ? raci.sop_owner.assigned_name : `Project Manager — ${raci.sop_owner.assigned_name}`) : 'Project Manager — Adarsh Kumar'}</span> ({[raci?.s1_cost_lock?.assigned_name, raci?.s2_snag_walk?.assigned_name, raci?.s4_client_tick?.assigned_name].filter(Boolean).join(' · ') || 'Site Eng · Lovely'})
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Site Selector for Handover */}
+            <div className="w-56">
+              <select
+                className="select text-xs w-full bg-slate-800 text-slate-200 border-slate-700 py-1"
+                value={handoverSiteId}
+                onChange={e => onSelectHandoverSite(e.target.value)}
+              >
+                <option value="">— Select Site for Handover —</option>
+                {sites.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Cost Lock Badge */}
+            {handoverData?.site?.cost_locked === 1 ? (
+              <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs px-2.5 py-1 rounded font-bold flex items-center gap-1" title="Costs Locked: No new indents allowed">
+                <FiLock size={12} /> Costs Locked (S1)
+              </span>
+            ) : handoverSiteId ? (
+              <span className="bg-slate-800 text-slate-400 border border-slate-700 text-xs px-2.5 py-1 rounded flex items-center gap-1">
+                <FiUnlock size={12} /> Costs Open
+              </span>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => setSop15Expanded(e => !e)}
+              className="text-slate-400 hover:text-white p-1 text-xs"
+              title={sop15Expanded ? 'Collapse' : 'Expand'}
+            >
+              {sop15Expanded ? <FiChevronUp size={16} /> : <FiChevronDown size={16} />}
+            </button>
+          </div>
+        </div>
+
+        {sop15Expanded && (
+          <div className="space-y-4">
+            {/* 6-Step Stepper */}
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+              {[
+                { key: 's1', num: 'S1', title: 'Work 100%', who: raci?.s1_cost_lock?.assigned_name || raci?.sop_owner?.assigned_name || 'Adarsh Kumar', desc: 'Costs Locked', done: handoverData?.site?.work_completed_100 === 1 },
+                { key: 's2', num: 'S2', title: 'Snag Walk', who: raci?.s2_snag_walk?.assigned_name || 'Site Eng + Client', desc: handoverData?.site?.client_walk_date ? fmtDate(handoverData.site.client_walk_date) : 'Joint Client Walk', done: Boolean(handoverData?.site?.client_walk_date) },
+                { key: 's3', num: 'S3', title: 'Snag Clock', who: raci?.s3_snag_clock?.assigned_name || raci?.sop_owner?.assigned_name || 'Adarsh Kumar (PM)', desc: `${handoverData?.snags_summary?.open || 0} open snags`, done: Boolean(handoverData?.snags_summary?.total > 0 && handoverData?.snags_summary?.open === 0) },
+                { key: 's4', num: 'S4', title: 'Client Tick', who: raci?.s4_client_tick?.assigned_name || 'Lovely (CRM)', desc: `${handoverData?.snags_summary?.client_verified || 0} ticked`, done: Boolean(handoverData?.snags_summary?.total > 0 && handoverData?.snags_summary?.client_verified === handoverData?.snags_summary?.total) },
+                { key: 's5', num: 'S5', title: 'Handover Cert', who: raci?.s5_handover_cert?.assigned_name || 'Lovely (CRM)', desc: handoverData?.certificate?.certificate_number || 'HC-YYYY-XXXX', done: Boolean(handoverData?.certificate) },
+                { key: 's6', num: 'S6', title: 'Final Bill & Ret.', who: raci?.s6_retention_warranty?.assigned_name || 'Lovely (CRM)', desc: handoverData?.certificate?.status === 'signed' ? 'Active ✓' : 'Retention & Warranty', done: handoverData?.certificate?.status === 'signed' },
+              ].map(st => (
+                <div
+                  key={st.key}
+                  className={`p-2.5 rounded-lg border text-left transition-all ${st.done
+                      ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-200'
+                      : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase mb-1">
+                    <span className="font-mono text-red-400">{st.num}</span>
+                    {st.done ? (
+                      <span className="text-emerald-400 flex items-center gap-0.5">✓ Done</span>
+                    ) : (
+                      <span className="text-slate-500">Pending</span>
+                    )}
+                  </div>
+                  <div className="font-semibold text-xs text-white truncate">{st.title}</div>
+                  <div className="text-[10px] text-slate-400 truncate mt-0.5" title={st.who}>👤 {st.who}</div>
+                  <div className="text-[10px] text-slate-500 truncate mt-0.5">{st.desc}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Contextual Action Bar for Selected Site */}
+            {handoverSiteId ? (
+              <div className="pt-2 border-t border-slate-800 flex items-center justify-between flex-wrap gap-3">
+                <div className="text-xs text-slate-300 flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-white">Active Site: {handoverData?.site?.name}</span>
+                  {handoverData?.site?.client_rep_name && (
+                    <span className="text-slate-400">· Client Rep: {handoverData.site.client_rep_name}</span>
+                  )}
+                  {handoverData?.certificate && (
+                    <span className="text-emerald-400 font-mono font-bold bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                      Cert: {handoverData.certificate.certificate_number} ({handoverData.certificate.status})
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* S1 Action */}
+                  {handoverData?.site?.work_completed_100 !== 1 && (
+                    <button
+                      onClick={() => setStartHandoverOpen(true)}
+                      className="btn btn-warning text-xs font-bold px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
+                    >
+                      <FiLock size={13} /> Declare 100% Work &amp; Lock Costs (S1)
+                    </button>
+                  )}
+
+                  {/* S2 Action */}
+                  <button
+                    onClick={() => setClientWalkOpen(true)}
+                    className="btn btn-secondary text-xs font-semibold px-3 py-1.5 flex items-center gap-1.5 bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700"
+                  >
+                    <FiCalendar size={13} /> {handoverData?.site?.client_walk_date ? 'Update Client Walk (S2)' : 'Record Client Walk (S2)'}
+                  </button>
+
+                  {/* S3 Action: View Escalation Clock */}
+                  <button
+                    onClick={handleViewEscalations}
+                    className="btn btn-secondary text-xs font-semibold px-3 py-1.5 flex items-center gap-1.5 bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700"
+                  >
+                    <FiClock size={13} /> Snag Clock &amp; Escalations (S3)
+                  </button>
+
+                  {/* S5 Action: Generate Certificate */}
+                  {!handoverData?.certificate && handoverData?.snags_summary?.total > 0 && handoverData?.snags_summary?.open === 0 && (
+                    <button
+                      onClick={() => setGenerateCertOpen(true)}
+                      className="btn btn-primary text-xs font-bold px-3 py-1.5 flex items-center gap-1.5 shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                    >
+                      <FiFileText size={13} /> Generate Handover Certificate (S5)
+                    </button>
+                  )}
+
+                  {/* S5/S6 Action: View or Sign Certificate */}
+                  {handoverData?.certificate && (
+                    <button
+                      onClick={() => setViewCert(handoverData.certificate)}
+                      className="btn btn-success text-xs font-bold px-3 py-1.5 flex items-center gap-1.5 shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                    >
+                      <FiPrinter size={13} /> View / Sign Handover Certificate (S5 &amp; S6)
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="pt-2 border-t border-slate-800 text-xs text-slate-400">
+                💡 Select a site from the dropdown above to view or update its SOP-15 Handover Pipeline.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {stats && (
@@ -506,89 +736,112 @@ export default function Snags() {
             keeps the Snag-No column fixed during horizontal scroll.
             mam (2026-07-28): "freeze like excel". */}
         <div ref={scrollBoxRef} className="overflow-auto max-h-[70vh]">
-        <table className="freeze-head freeze-col min-w-[850px]">
-          <thead>
-            <tr>
-              <th>Snag No</th><th>Raised</th><th>Aging</th><th>Site / Location</th><th>Description</th>
-              <th>Snag Photo</th><th>Assigned To</th><th>Target Date</th><th>Proof</th>
-              <th>Priority</th><th>Status</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {snags.length === 0 && (
-              <tr><td colSpan="11" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
-            )}
-            {pg.rows.map(s => (
-              <tr key={s.id}>
-                <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
-                <td className="text-xs">
-                  <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
-                  <div className="text-[10px] text-gray-500">{s.raised_by_name || '—'}</div>
-                </td>
-                <td className="text-xs whitespace-nowrap">
-                  {s.status !== 'approved' ? (() => {
-                    const age = snagAge(s.raised_at);
-                    if (!age) return <span className="text-gray-300">—</span>;
-                    return (
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${age.cls}`}>
-                        {age.label}
-                      </span>
-                    );
-                  })() : <span className="text-gray-300 text-[10px]">—</span>}
-                </td>
-                <td className="text-xs">
-                  <div className="font-medium">{s.site_name || s.site_name_live || '—'}</div>
-                  {s.location && <div className="text-[10px] text-gray-500">{s.location}</div>}
-                </td>
-                <td className="text-xs max-w-md">
-                  <div className="line-clamp-2" title={s.description}>{s.description}</div>
-                  {s.status === 'rejected' && s.reject_reason && (
-                    <div className="text-[10px] text-red-600 mt-0.5 italic" title={s.reject_reason}>↳ rejected: {s.reject_reason.slice(0, 60)}</div>
-                  )}
-                </td>
-                <td>
-                  {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={toThumb(s.photo_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
-                    : <span className="text-gray-300 text-xs">—</span>}
-                </td>
-                <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
-                <td className="text-xs whitespace-nowrap">
-                  {s.target_date
-                    ? <span className={isOverdue(s) ? 'text-red-600 font-bold' : ''}>{fmtDate(s.target_date)}{isOverdue(s) && <span className="block text-[9px] font-semibold">OVERDUE</span>}</span>
-                    : <span className="text-gray-300">—</span>}
-                </td>
-                <td>
-                  {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={toThumb(s.proof_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
-                    : <span className="text-gray-300 text-xs">—</span>}
-                </td>
-                <td>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[s.priority] || ''}`}>{s.priority}</span>
-                </td>
-                <td>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[s.status] || ''}`}>{STATUS_LABEL[s.status] || s.status}</span>
-                </td>
-                <td className="whitespace-nowrap">
-                  {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
-                    <button onClick={() => { setProofModal(s); proofModalIdRef.current = s.id; setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
-                  )}
-                  {s.status === 'submitted' && canActAsApprover(s) && (
-                    <>
-                      <button onClick={() => approve(s)} className="btn btn-success text-[10px] px-2 py-1 mr-1"><FiCheckCircle size={11} className="inline" /> Approve</button>
-                      <button onClick={() => reject(s)} className="btn btn-danger text-[10px] px-2 py-1 mr-1"><FiXCircle size={11} className="inline" /> Reject</button>
-                    </>
-                  )}
-                  {(canEdit('snags') || isAdmin()) && s.status !== 'approved' && (
-                    <button onClick={() => openEdit(s)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={12} /></button>
-                  )}
-                  {canDelete('snags') && (
-                    <button onClick={() => remove(s)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>
-                  )}
-                </td>
+          <table className="freeze-head freeze-col min-w-[850px]">
+            <thead>
+              <tr>
+                <th>Snag No</th><th>Raised</th><th>Aging</th><th>Site / Location</th><th>Description</th>
+                <th>Snag Photo</th><th>Assigned To</th><th>Target Date</th><th>Proof</th>
+                <th>Priority</th><th>Status</th><th>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {snags.length === 0 && (
+                <tr><td colSpan="11" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
+              )}
+              {pg.rows.map(s => (
+                <tr key={s.id}>
+                  <td className="font-bold text-red-700 text-xs">
+                    <div>{s.snag_no}</div>
+                    {s.is_client_walk === 1 && (
+                      <span className="inline-block text-[9px] bg-purple-100 text-purple-700 font-bold px-1 rounded mt-0.5" title="Logged during Joint Client Walk (SOP-15.2)">
+                        Client Walk
+                      </span>
+                    )}
+                  </td>
+                  <td className="text-xs">
+                    <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
+                    <div className="text-[10px] text-gray-500">{s.raised_by_name || '—'}</div>
+                  </td>
+                  <td className="text-xs whitespace-nowrap">
+                    {s.status !== 'approved' ? (() => {
+                      const age = snagAge(s.raised_at);
+                      if (!age) return <span className="text-gray-300">—</span>;
+                      return (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${age.cls}`}>
+                          {age.label}
+                        </span>
+                      );
+                    })() : <span className="text-gray-300 text-[10px]">—</span>}
+                  </td>
+                  <td className="text-xs">
+                    <div className="font-medium">{s.site_name || s.site_name_live || '—'}</div>
+                    {s.location && <div className="text-[10px] text-gray-500">{s.location}</div>}
+                  </td>
+                  <td className="text-xs max-w-md">
+                    <div className="line-clamp-2" title={s.description}>{s.description}</div>
+                    {s.status === 'rejected' && s.reject_reason && (
+                      <div className="text-[10px] text-red-600 mt-0.5 italic" title={s.reject_reason}>↳ rejected: {s.reject_reason.slice(0, 60)}</div>
+                    )}
+                  </td>
+                  <td>
+                    {s.photo_url
+                      ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={toThumb(s.photo_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-xs whitespace-nowrap">
+                    {s.target_date
+                      ? <span className={isOverdue(s) ? 'text-red-600 font-bold' : ''}>{fmtDate(s.target_date)}{isOverdue(s) && <span className="block text-[9px] font-semibold">OVERDUE</span>}</span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td>
+                    {s.proof_url
+                      ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={toThumb(s.proof_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[s.priority] || ''}`}>{s.priority}</span>
+                  </td>
+                  <td>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[s.status] || ''}`}>{STATUS_LABEL[s.status] || s.status}</span>
+                    {s.status === 'approved' && (
+                      s.client_verified ? (
+                        <span className="block text-[9px] text-emerald-700 font-semibold mt-0.5">✓ Client Ticked</span>
+                      ) : (
+                        <span className="block text-[9px] text-amber-600 font-medium mt-0.5">⏳ Awaiting Tick</span>
+                      )
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap">
+                    {s.status === 'approved' && !s.client_verified && (
+                      <button
+                        onClick={() => handleClientTick(s)}
+                        className="btn btn-sm text-[10px] px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white font-bold mr-1 inline-flex items-center gap-1 shadow-xs"
+                        title="Client Tick: Verify & Close defect per SOP-15.4 (Lovely / Client)"
+                      >
+                        <FiCheck size={11} /> Client Tick (S4)
+                      </button>
+                    )}
+                    {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
+                      <button onClick={() => { setProofModal(s); proofModalIdRef.current = s.id; setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
+                    )}
+                    {s.status === 'submitted' && canActAsApprover(s) && (
+                      <>
+                        <button onClick={() => approve(s)} className="btn btn-success text-[10px] px-2 py-1 mr-1"><FiCheckCircle size={11} className="inline" /> Approve</button>
+                        <button onClick={() => reject(s)} className="btn btn-danger text-[10px] px-2 py-1 mr-1"><FiXCircle size={11} className="inline" /> Reject</button>
+                      </>
+                    )}
+                    {(canEdit('snags') || isAdmin()) && s.status !== 'approved' && (
+                      <button onClick={() => openEdit(s)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={12} /></button>
+                    )}
+                    {canDelete('snags') && (
+                      <button onClick={() => remove(s)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -601,22 +854,20 @@ export default function Snags() {
             <button
               type="button"
               onClick={() => setSnagMode('single')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${
-                snagMode === 'single'
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${snagMode === 'single'
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'text-gray-600 hover:bg-gray-100'
-              }`}
+                }`}
             >
               <FiPlus size={13} /> Single Snag
             </button>
             <button
               type="button"
               onClick={() => setSnagMode('walk')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${
-                snagMode === 'walk'
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${snagMode === 'walk'
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'text-gray-600 hover:bg-gray-100'
-              }`}
+                }`}
             >
               <FiLayers size={13} /> Snag Walk (Multi-Photo Batch)
             </button>
@@ -961,6 +1212,133 @@ export default function Snags() {
           </form>
         )}
       </Modal>
+
+      {/* ─── SOP-15 MODALS ────────────────────────────────────────────── */}
+      {raciOpen && (
+        <HandoverRaciModal
+          onClose={() => setRaciOpen(false)}
+          onSaved={() => {
+            loadRaci();
+            if (handoverSiteId) loadHandoverStatus(handoverSiteId);
+          }}
+        />
+      )}
+
+      {startHandoverOpen && handoverData?.site && (
+        <StartHandoverModal
+          site={handoverData.site}
+          raci={raci}
+          onClose={() => setStartHandoverOpen(false)}
+          onSaved={() => {
+            loadHandoverStatus(handoverSiteId);
+            load();
+          }}
+        />
+      )}
+
+      {clientWalkOpen && handoverData?.site && (
+        <ClientWalkModal
+          site={handoverData.site}
+          raci={raci}
+          onClose={() => setClientWalkOpen(false)}
+          onSaved={() => {
+            loadHandoverStatus(handoverSiteId);
+            load();
+          }}
+        />
+      )}
+
+      {generateCertOpen && handoverData?.site && (
+        <GenerateCertificateModal
+          site={handoverData.site}
+          raci={raci}
+          onClose={() => setGenerateCertOpen(false)}
+          onSaved={() => {
+            loadHandoverStatus(handoverSiteId);
+            load();
+          }}
+        />
+      )}
+
+      {viewCert && (
+        <HandoverCertificateModal
+          cert={viewCert}
+          onClose={() => setViewCert(null)}
+          onSigned={() => {
+            loadHandoverStatus(handoverSiteId);
+            load();
+          }}
+        />
+      )}
+
+      {escalationsModalOpen && (
+        <Modal
+          isOpen
+          onClose={() => setEscalationsModalOpen(false)}
+          title={`SOP-15.3 · Snag Turnaround Clock & Escalations ${handoverData?.site?.name ? `(${handoverData.site.name})` : ''}`}
+          wide
+        >
+          <div className="space-y-4 text-xs">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5">
+                <FiClock size={14} className="text-red-700" /> Automated Turnaround Clock &amp; Escalation Gate (SOP-15.3):
+              </div>
+              <p>
+                Every open snag tracks target turnaround time. Overdue by 1–3 days escalates directly to <strong>Project Manager ({raci?.s3_snag_clock?.assigned_name || raci?.sop_owner?.assigned_name || 'Adarsh Kumar'})</strong>. Overdue by &gt;3 days escalates to <strong>Project Head</strong>.
+              </p>
+            </div>
+
+            {escalationsList.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg border">
+                <FiCheckCircle className="mx-auto text-emerald-500 mb-2" size={28} />
+                <div className="font-semibold text-gray-700">No Overdue Snags!</div>
+                <p className="text-gray-400 text-xs mt-1">All snags are currently on schedule or closed within turnaround targets.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-96 border rounded-lg">
+                <table className="w-full text-left">
+                  <thead className="bg-gray-100 text-gray-600 uppercase text-[10px] font-bold sticky top-0">
+                    <tr>
+                      <th className="p-2.5">Snag #</th>
+                      <th className="p-2.5">Site / Location</th>
+                      <th className="p-2.5">Assigned To</th>
+                      <th className="p-2.5">Target Date</th>
+                      <th className="p-2.5">Days Overdue</th>
+                      <th className="p-2.5">Escalation Level</th>
+                      <th className="p-2.5">Escalated To</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {escalationsList.map(e => (
+                      <tr key={e.id} className="hover:bg-red-50/50">
+                        <td className="p-2.5 font-bold text-red-700">{e.snag_no}</td>
+                        <td className="p-2.5">
+                          <div className="font-semibold">{e.site_name}</div>
+                          <div className="text-[10px] text-gray-400">{e.location || '—'}</div>
+                        </td>
+                        <td className="p-2.5">{e.assigned_to_name || '—'}</td>
+                        <td className="p-2.5 text-red-600 font-semibold">{fmtDate(e.target_date)}</td>
+                        <td className="p-2.5 font-bold text-red-700">{e.days_overdue} days</td>
+                        <td className="p-2.5">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${e.escalation_level === 'head' ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-800 border border-amber-300'
+                            }`}>
+                            {e.escalation_level === 'head' ? 'Level 2 · Head' : 'Level 1 · PM'}
+                          </span>
+                        </td>
+                        <td className="p-2.5 font-semibold text-gray-800">{e.escalated_to}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2 border-t">
+              <button type="button" onClick={() => setEscalationsModalOpen(false)} className="btn btn-secondary text-sm">Close</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
