@@ -5,6 +5,7 @@ import MultiUserSelect from '../components/MultiUserSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiDownload, FiUploadCloud, FiEdit2, FiSave, FiRotateCcw, FiRotateCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import BoqItemBreakdownModal from '../components/BoqItemBreakdownModal';
 
 // AI Auto-Quotation (Estimator) — mam 2026-06-09.
 // Build a BOQ by picking items from Item Master (material rate PP auto-fills
@@ -73,6 +74,8 @@ export default function Estimator() {
   // Which row's "Manual breakup" panel is expanded (discount / acc% / extra
   // cost / make). One at a time; null = all collapsed.
   const [openRow, setOpenRow] = useState(null);
+  // Row currently being decomposed via AI BOQ breakdown (TSK-0822)
+  const [breakdownRowIndex, setBreakdownRowIndex] = useState(null);
   // Auto-save status (mam #5: "auto save like google sheets").
   const [saveState, setSaveState] = useState('');   // '' | 'saving' | 'saved' | 'error'
   const [savedAt, setSavedAt] = useState(null);
@@ -235,6 +238,48 @@ export default function Estimator() {
     if (!row.item_id) return toast.error('Match or create an item first');
     openKitTab(i, row.item_id);
     toast.success('Edit this item’s price breakup in the new tab, then come back here');
+  };
+
+  // AI BOQ to Item-wise Breakdown (TSK-0822)
+  const openBreakdownModal = (i) => {
+    setBreakdownRowIndex(i);
+  };
+
+  const handleApprovedBreakdown = (approvedItems, summary) => {
+    if (breakdownRowIndex === null || !rows[breakdownRowIndex]) return;
+    const idx = breakdownRowIndex;
+    const current = rows[idx];
+
+    // Identify primary item, accessories, and labour
+    const primaryItem = approvedItems.find(it => it.type === 'primary') || approvedItems[0];
+    const accessoriesAndConsumables = approvedItems.filter(it => it !== primaryItem && it.type !== 'labour');
+    const labourItems = approvedItems.filter(it => it.type === 'labour');
+    const totalLabourRate = labourItems.reduce((acc, it) => acc + (Number(it.active_rate) || 0) * (Number(it.qty_per_boq_unit) || 1), 0);
+
+    // Map accessories & consumables into row.subs
+    const subRows = accessoriesAndConsumables.map(sub => ({
+      item_id: sub.sepl_item_id || null,
+      name: sub.item_name,
+      qty: sub.qty_per_boq_unit || (Number(current.qty) > 0 ? (Number(sub.total_qty) / Number(current.qty)) : 1),
+      rate: sub.active_rate || 0,
+      foc: false
+    }));
+
+    patchRow(idx, {
+      item_id: primaryItem?.sepl_item_id || current.item_id,
+      description: current.description || primaryItem?.item_name || current.boq_text,
+      pp: primaryItem ? (primaryItem.active_rate || primaryItem.sepl_rate || 0) : current.pp,
+      lab: totalLabourRate > 0 ? totalLabourRate : current.lab,
+      subs: subRows,
+      category: primaryItem?.category || current.category || 'General',
+      confidence: 'high',
+      matchedName: primaryItem?.item_name || current.matchedName,
+      matchScore: 98,
+      fromKit: false
+    });
+
+    setBreakdownRowIndex(null);
+    toast.success(`Applied ${approvedItems.length} items (Material + Labour + Accessories) to line #${idx + 1}`);
   };
 
   const patchRow = (i, patch) =>
@@ -745,10 +790,52 @@ export default function Estimator() {
           <div className="text-xs text-gray-500">Upload the client's BOQ — Excel, PDF or Word. AI matches each line to your Item Master and fills the rates. Review the lines it flags ❗.</div>
         </div>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" className="hidden" onChange={uploadBoq} />
-        <button type="button" disabled={matching} onClick={() => fileRef.current?.click()}
-          className="btn btn-primary text-sm flex items-center gap-1">
-          <FiUploadCloud size={15} /> {matching ? 'Matching…' : 'Upload Client BOQ'}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button type="button" onClick={() => {
+            setTitle('MEPF Composite Scope (Test BOQ)');
+            setRows([
+              {
+                ...blankRow(),
+                description: 'SITC of 100mm dia MS ERW Heavy Class Fire Hydrant Riser Pipe inclusive of cutting, welding, pipe supports, primer and red enamel paint',
+                boq_text: 'SITC of 100mm dia MS ERW Heavy Class Fire Hydrant Riser Pipe inclusive of cutting, welding, pipe supports, primer and red enamel paint',
+                qty: 250,
+                unit: 'Mtr',
+                category: 'Fire Fighting'
+              },
+              {
+                ...blankRow(),
+                description: 'Supply and laying of 3.5C x 240 sq.mm XLPE aluminium armoured cable in pre-laid cable tray with brass double compression glands and aluminium lugs',
+                boq_text: 'Supply and laying of 3.5C x 240 sq.mm XLPE aluminium armoured cable in pre-laid cable tray with brass double compression glands and aluminium lugs',
+                qty: 500,
+                unit: 'Mtr',
+                category: 'Electrical'
+              },
+              {
+                ...blankRow(),
+                description: 'Internal point wiring for light/fan/plug point in concealed 25mm PVC conduit using 3 x 1.5 sq.mm FRLS copper wire with modular switches and accessories',
+                boq_text: 'Internal point wiring for light/fan/plug point in concealed 25mm PVC conduit using 3 x 1.5 sq.mm FRLS copper wire with modular switches and accessories',
+                qty: 120,
+                unit: 'Point',
+                category: 'Electrical'
+              },
+              {
+                ...blankRow(),
+                description: 'SITC of 250 kVA Oil Immersed Distribution Transformer 11kV/433V with first filling of oil, HT/LT cable termination boxes, and standard accessories',
+                boq_text: 'SITC of 250 kVA Oil Immersed Distribution Transformer 11kV/433V with first filling of oil, HT/LT cable termination boxes, and standard accessories',
+                qty: 1,
+                unit: 'Set',
+                category: 'Electrical'
+              }
+            ]);
+            toast.success('Loaded 4 realistic composite BOQ test items! Click 🪄 AI Breakdown on any row to test.');
+          }} className="btn btn-secondary text-sm flex items-center gap-1 border-purple-300 text-purple-700 hover:bg-purple-50">
+            ⚡ Load Sample Test BOQ
+          </button>
+          <button type="button" disabled={matching} onClick={() => fileRef.current?.click()}
+            className="btn btn-primary text-sm flex items-center gap-1">
+            <FiUploadCloud size={15} /> {matching ? 'Matching…' : 'Upload Client BOQ'}
+          </button>
+        </div>
       </div>
 
       {/* Per-category margins */}
@@ -850,11 +937,18 @@ export default function Estimator() {
                       onChange={e => patchRow(i, { description: e.target.value })}
                       placeholder="Description (auto-filled)" />
                     {!row.item_id && (
-                      <button type="button" onClick={() => createItem(i)}
-                        className="mt-1 inline-block text-[10px] font-semibold text-emerald-700 border border-emerald-300 rounded px-1.5 py-0.5 hover:bg-emerald-50"
-                        title="No match? Creates this as a new item and opens its PO/FOC price-breakup form in a new tab. Set the PO rate / labour / FOC there, save, and come back — this line prices automatically.">
-                        ＋ Create in Item Master
-                      </button>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <button type="button" onClick={() => createItem(i)}
+                          className="inline-block text-[10px] font-semibold text-emerald-700 border border-emerald-300 rounded px-1.5 py-0.5 hover:bg-emerald-50"
+                          title="No match? Creates this as a new item and opens its PO/FOC price-breakup form in a new tab. Set the PO rate / labour / FOC there, save, and come back — this line prices automatically.">
+                          ＋ Create in Item Master
+                        </button>
+                        <button type="button" onClick={() => openBreakdownModal(i)}
+                          className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5 hover:bg-purple-100 transition shadow-2xs"
+                          title="AI BOQ Breakdown: Decompose into item-wise materials, accessories & labour with SEPL & Perplexity dual rates">
+                          🪄 AI Breakdown
+                        </button>
+                      </div>
                     )}
                     {row.suggestion && (row.suggestion.last_for_client || row.suggestion.last_overall) && (
                       <div className="text-[10px] text-indigo-600 mt-1">
@@ -888,6 +982,11 @@ export default function Estimator() {
                           className="inline-block text-[10px] font-semibold text-amber-700 border border-amber-300 rounded px-1.5 py-0.5 hover:bg-amber-50"
                           title="Open this item's PO/FOC price breakup (PO rate + labour + FOC) in a new tab — edits the existing one or creates it. Auto-prices this line when you return.">
                           ✏ Edit price breakup
+                        </button>
+                        <button type="button" onClick={() => openBreakdownModal(i)}
+                          className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5 hover:bg-purple-100 transition shadow-2xs"
+                          title="AI BOQ Breakdown: Decompose into item-wise materials, accessories & labour with SEPL & Perplexity dual rates">
+                          🪄 AI Breakdown
                         </button>
                       </div>
                     )}
@@ -1153,6 +1252,21 @@ export default function Estimator() {
         Formula: TPA = (PP + LAB) × Qty + ACC, where ACC = the total of this line's FOC / accessory items. SP = TPA × (1 + category margin%). Material (PP), labour (LAB) and FOC all pull from the 🔗 PO/FOC kit when the item has one.
       </p>
       </>)}
+
+      {/* TSK-0822: AI BOQ to Item-wise Breakdown Preview Modal */}
+      {breakdownRowIndex !== null && rows[breakdownRowIndex] && (
+        <BoqItemBreakdownModal
+          isOpen={breakdownRowIndex !== null}
+          onClose={() => setBreakdownRowIndex(null)}
+          boqLine={{
+            description: rows[breakdownRowIndex].boq_text || rows[breakdownRowIndex].description,
+            quantity: rows[breakdownRowIndex].qty || 1,
+            unit: rows[breakdownRowIndex].unit || 'Nos',
+            trade: rows[breakdownRowIndex].category || ''
+          }}
+          onApprove={handleApprovedBreakdown}
+        />
+      )}
     </div>
   );
 }

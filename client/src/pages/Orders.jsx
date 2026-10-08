@@ -14,6 +14,7 @@ import { useAuth } from '../context/AuthContext';
 // (mam 2026-09-05), rather than duplicating a second items table here.
 import RatesItems from './RatesItems';
 import MakeApproval from './MakeApproval';
+import BoqItemBreakdownModal from '../components/BoqItemBreakdownModal';
 
 const CRM_OPTIONS = ['Lovely'];
 
@@ -88,6 +89,8 @@ export default function Orders() {
   const [groupPo, setGroupPo] = useState(true);
   const [poExpanded, setPoExpanded] = useState({});
   const [masterItems, setMasterItems] = useState([]);
+  // TSK-0822: AI BOQ to Item-wise breakdown row index
+  const [breakdownPoItemIndex, setBreakdownPoItemIndex] = useState(null);
   const [siteEngineers, setSiteEngineers] = useState([]);
   // All active users — source for the extra project-role pickers (jr site
   // eng / supervisor / welder / helper), which aren't tied to a single role.
@@ -767,6 +770,16 @@ export default function Orders() {
                         }}
                       />
                     </div>
+                    {item.description && (
+                      <button
+                        type="button"
+                        onClick={() => setBreakdownPoItemIndex(i)}
+                        className="mt-1 text-[10px] text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 font-semibold"
+                        title="AI BOQ Item Breakdown: Decompose into item-wise materials with SEPL & Perplexity dual rates"
+                      >
+                        🪄 AI Item Breakdown
+                      </button>
+                    )}
                   </div>
                   {/* Qty — wider on mobile so digits fit */}
                   <div className="col-span-4 md:col-span-1">
@@ -929,6 +942,41 @@ export default function Orders() {
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button><button type="submit" className="btn btn-primary w-full sm:w-auto">Create</button></div>
         </form>
       </Modal>
+
+      {/* TSK-0822: AI BOQ to Item-wise Breakdown Preview Modal for PO Items */}
+      {breakdownPoItemIndex !== null && poItems[breakdownPoItemIndex] && (
+        <BoqItemBreakdownModal
+          isOpen={breakdownPoItemIndex !== null}
+          onClose={() => setBreakdownPoItemIndex(null)}
+          boqLine={{
+            description: poItems[breakdownPoItemIndex].description,
+            quantity: poItems[breakdownPoItemIndex].quantity || 1,
+            unit: poItems[breakdownPoItemIndex].unit || 'Nos'
+          }}
+          onApprove={(approvedItems, summary) => {
+            const idx = breakdownPoItemIndex;
+            const current = poItems[idx];
+            const newItems = approvedItems.map((ai, subIdx) => ({
+              sr_no: `${current.sr_no || (idx + 1)}.${subIdx + 1}`,
+              description: ai.item_name,
+              item_master_id: ai.sepl_item_id || '',
+              quantity: ai.total_qty || 1,
+              unit: (ai.uom || 'nos').toLowerCase(),
+              part_price: ai.active_rate || ai.sepl_rate || 0,
+              rate: ai.active_rate || ai.sepl_rate || current.rate || 0,
+              amount: Math.round((ai.total_qty || 1) * (ai.active_rate || ai.sepl_rate || current.rate || 0)),
+              labour_rate: ai.type === 'labour' ? (ai.active_rate || 0) : (current.labour_rate || 0)
+            }));
+
+            const updated = [...poItems];
+            updated.splice(idx, 1, ...newItems);
+            setPoItems(updated);
+            setPoItemsDirty(true);
+            setBreakdownPoItemIndex(null);
+            toast.success(`Expanded composite line into ${newItems.length} itemized BOQ lines!`);
+          }}
+        />
+      )}
     </div>
   );
 }

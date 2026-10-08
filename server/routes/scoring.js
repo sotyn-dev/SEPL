@@ -2110,8 +2110,9 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
     // Active employees with a login user (we score by user_id since that's
     // what every module references).
     const users = db.prepare(`
-      SELECT u.id, u.name, u.role, u.department
+      SELECT u.id, u.name, u.role, u.department, u.manager_id, m.name as manager_name
       FROM users u
+      LEFT JOIN users m ON m.id = u.manager_id
       WHERE COALESCE(u.active, 1) = 1
       ORDER BY u.name
     `).all();
@@ -2181,6 +2182,8 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
         name: u.name,
         role: u.role,
         department: u.department,
+        manager_id: u.manager_id || null,
+        manager_name: u.manager_name || null,
         delegations: { given: delGiven, done: delDone },
         pms: { given: pmsGiven, done: pmsDone },
         checklists: { given: cklGiven, done: cklDone },
@@ -2256,6 +2259,163 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
     res.json({ user_id: userId, module: moduleName, week_start: start, week_end: end, rows });
   } catch (err) {
     console.error('scoring detail error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- /scoring/team-summary (TSK-0914) ----------
+// Returns a team leader's direct reports and their weekly scores under the leader
+router.get('/team-summary', requirePermission('scoring', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const leaderId = parseInt(req.query.leader_id, 10) || req.user.id;
+    if (req.user.role !== 'admin' && req.user.id !== leaderId) {
+      return res.status(403).json({ error: 'Only admins or the team leader can view team scoring' });
+    }
+
+    const leader = db.prepare('SELECT id, name, role, department FROM users WHERE id=?').get(leaderId);
+    if (!leader) return res.status(404).json({ error: 'Leader not found' });
+
+    const { start, end } = weekRange(req);
+
+    // Find direct reports via users.manager_id or employees.reports_to
+    const directReports = db.prepare(`
+      SELECT u.id, u.name, u.role, u.department
+      FROM users u
+      WHERE (
+        u.manager_id = ?
+        OR u.id IN (
+          SELECT e.user_id FROM employees e
+          WHERE e.user_id IS NOT NULL AND e.reports_to IN (SELECT id FROM employees WHERE user_id = ?)
+        )
+      )
+      AND COALESCE(u.active, 1) = 1
+      AND COALESCE(u.archived, 0) = 0
+      AND u.id != ?
+      ORDER BY u.name
+    `).all(leaderId, leaderId, leaderId);
+
+    const members = directReports.map(u => {
+      let score = null;
+      let templateName = null;
+      try {
+        const sc = computeScorecard(db, u.id, start);
+        if (sc && sc.template) {
+          score = sc.score != null ? Math.round(sc.score * 100) / 100 : null;
+          templateName = sc.template?.name || null;
+        }
+      } catch (_) {}
+
+      const delGiven = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ?`).get(u.id, start, end).c;
+      const delDone = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ? AND status = 'approved'`).get(u.id, start, end).c;
+      const pmsGiven = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ?`).get(u.id, start, end).c;
+      const pmsDone = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ? AND status = 'approved'`).get(u.id, start, end).c;
+      const { given: cklGiven, done: cklDone } = require('../lib/checklistWeekScore').checklistWeekScore(db, u.id, start);
+      const tktGiven = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ?`).get(u.id, start, end).c;
+      const tktDone = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved', 'closed')`).get(u.id, start, end).c;
+
+      const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
+      const totalDone = delDone + pmsDone + cklDone + tktDone;
+
+      if (score == null) {
+        try {
+          const rw = require('../utils/raciModules').raciUserWeek(db, u.id, start, end);
+          const raciPlanned = rw.stepsPlanned || 0, raciActual = rw.stepsClosed || 0;
+          score = raciPlanned > 0
+            ? Math.round((raciActual / raciPlanned) * 100)
+            : (totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0);
+        } catch (_) {
+          score = totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0;
+        }
+      }
+
+      return {
+        user_id: u.id,
+        name: u.name,
+        role: u.role,
+        department: u.department,
+        template_name: templateName,
+        delegations: { given: delGiven, done: delDone },
+        pms: { given: pmsGiven, done: pmsDone },
+        checklists: { given: cklGiven, done: cklDone },
+        tickets: { given: tktGiven, done: tktDone },
+        total_given: totalGiven,
+        total_done: totalDone,
+        score,
+        variance: score != null ? score - 100 : null,
+      };
+    });
+
+    members.sort((a, b) => (b.score ?? -999) - (a.score ?? -999));
+
+    const scored = members.filter(m => m.score != null);
+    const avgScore = scored.length > 0
+      ? Math.round((scored.reduce((s, m) => s + m.score, 0) / scored.length) * 100) / 100
+      : null;
+
+    res.json({
+      leader: { id: leader.id, name: leader.name, role: leader.role, department: leader.department },
+      week_start: start,
+      week_end: end,
+      has_team: members.length > 0,
+      team_count: members.length,
+      team_average_score: avgScore,
+      team_variance: avgScore != null ? avgScore - 100 : null,
+      members,
+    });
+  } catch (err) {
+    console.error('team-summary error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- /scoring/viewable-users (TSK-0914) ----------
+// Returns the list of users whose scorecard the current user is allowed to view
+router.get('/viewable-users', requirePermission('scoring', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    if (req.user.role === 'admin') {
+      const all = listAssignments(db);
+      return res.json({ is_admin: true, is_leader: true, users: all });
+    }
+
+    const myReports = db.prepare(`
+      SELECT u.id as user_id, u.name, u.role, u.department
+      FROM users u
+      WHERE (
+        u.manager_id = ?
+        OR u.id IN (
+          SELECT e.user_id FROM employees e
+          WHERE e.user_id IS NOT NULL AND e.reports_to IN (SELECT id FROM employees WHERE user_id = ?)
+        )
+      )
+      AND COALESCE(u.active, 1) = 1
+      AND COALESCE(u.archived, 0) = 0
+      AND u.id != ?
+      ORDER BY u.name
+    `).all(req.user.id, req.user.id, req.user.id);
+
+    const isLeader = myReports.length > 0;
+    const me = {
+      user_id: req.user.id,
+      name: req.user.name,
+      role: req.user.role,
+      department: req.user.department,
+      is_self: true,
+    };
+
+    const userIds = [req.user.id, ...myReports.map(r => r.user_id)];
+    const assignments = listAssignments(db).filter(a => userIds.includes(a.user_id));
+    const asgMap = new Map(assignments.map(a => [a.user_id, a.template_name]));
+
+    const users = [
+      { ...me, template_name: asgMap.get(req.user.id) || null },
+      ...myReports.map(r => ({ ...r, template_name: asgMap.get(r.user_id) || null, is_team_member: true })),
+    ];
+
+    res.json({ is_admin: false, is_leader: isLeader, users });
+  } catch (err) {
+    console.error('viewable-users error', err);
     res.status(500).json({ error: err.message });
   }
 });

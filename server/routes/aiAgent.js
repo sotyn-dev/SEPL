@@ -107,21 +107,27 @@ router.get('/item-history', requirePermission('quotations', 'view'), (req, res) 
 
 router.get('/settings', adminOnly, (req, res) => {
   const key = getSetting('ai_api_key');
+  const pplx = getSetting('perplexity_api_key');
   res.json({
     provider: getSetting('ai_provider') || 'anthropic',
     model: getSetting('ai_model') || 'claude-opus-4-7',
     api_key_set: !!key,
     api_key_masked: key ? `${key.slice(0, 7)}…${key.slice(-4)}` : null,
+    perplexity_api_key_set: !!pplx,
+    perplexity_api_key_masked: pplx ? `${pplx.slice(0, 7)}…${pplx.slice(-4)}` : null,
   });
 });
 
 router.put('/settings', adminOnly, (req, res) => {
-  const { provider, model, api_key } = req.body || {};
+  const { provider, model, api_key, perplexity_api_key } = req.body || {};
   if (provider) setSetting('ai_provider', String(provider).trim() || 'anthropic');
   if (model) setSetting('ai_model', String(model).trim() || 'claude-opus-4-7');
   if (typeof api_key === 'string' && api_key.trim()) {
     // Accept both bare keys and "sk-ant-..."; just trim and store.
     setSetting('ai_api_key', api_key.trim());
+  }
+  if (typeof perplexity_api_key === 'string') {
+    setSetting('perplexity_api_key', perplexity_api_key.trim());
   }
   res.json({ message: 'AI settings saved' });
 });
