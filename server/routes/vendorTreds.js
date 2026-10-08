@@ -251,6 +251,23 @@ router.post('/:kind/:id/documents',wrap(async(req,res)=>{
   await new Promise((resolve,reject)=>upload(req,res,e=>e?reject(e):resolve()));
   res.status(201).json(await docs.addDocument(req.vt.db,kind,parent,req.body,req.file,req.user));
 }));
+router.get('/registration-stages',wrap((req,res)=>{
+  const scope=guard(req,'registrations'),query=filters(req.query);
+  const all=queries.buildQuery('registrations',{...query,workflow_stage:undefined},scope);
+  const counts={1:0,2:0,3:0,4:0};
+  for(const row of req.vt.db.prepare(`SELECT ${queries.REGISTRATION_STAGE} stage,COUNT(*) total ${all.from} ${all.where} GROUP BY stage`).all(...all.params))counts[row.stage]=row.total;
+  res.json({...queries.listEntity(req.vt.db,'registrations',query,scope),counts});
+}));
+router.post('/registrations/:id/stage',wrap((req,res)=>{
+  const scope=guard(req,'registrations','edit'),before=record(req,'registrations');
+  if(req.body.action==='accept_portal') {
+    access.requireOwner(guard(req,'approvals','create'),before.owner_id);
+    access.requireOwner(guard(req,'approvals','approve'),before.owner_id);
+  }
+  if(req.body.action==='record_enquiry')access.requireOwner(guard(req,'enquiries','create'),before.owner_id);
+  const result=service.advanceRegistration(req.vt.db,before.id,req.body,actor(req,scope));
+  audit(req,'registrations',before,result,'STATUS_CHANGE');res.json(result);
+}));
 router.get('/:kind/:id/history',wrap((req,res)=>{
   const kind=entity(req);record(req,kind);res.json(service.getHistory(req.vt.db,kind,Number(req.params.id),actor(req,guard(req,kind))));
 }));

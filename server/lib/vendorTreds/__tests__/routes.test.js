@@ -27,6 +27,80 @@ async function harness(){
   return {db,files,origin,request,close:async()=>{await new Promise(r=>server.close(r));db.close();Object.assign(storage,original);}};
 }
 const regData=(name='Client Alpha')=>({company_name:name,website_url:`https://${name.toLowerCase().replaceAll(' ','-')}.example.invalid`,owner_id:2,registration_date:'2026-10-07'});
+test('four stages keep one company through documents, portal acceptance and multiple enquiries',async()=>{
+  const h=await harness();try{
+    const today=require('../kpis').istToday();
+    const call=async(url,options={},expected=200)=>{
+      const result=await h.request(url,options);
+      assert.equal(result.status,expected,`${url}: ${JSON.stringify(result.data)}`);return result.data;
+    };
+    let reg=await call('/registrations',{method:'POST',body:{company_name:'Four Stage Test Company',contact_person:'Test Contact',phone:'1234567890',owner_id:2,registration_date:today}},201);
+    const originalId=reg.id,customerId=reg.customer_id;
+    const stage=(action,extra={},expected=200)=>call(`/registrations/${reg.id}/stage`,{method:'POST',body:{version:reg.version,action,...extra}},expected);
+    const checkStage=async(number)=>{
+      const list=await call(`/registration-stages?workflow_stage=${number}`);
+      assert.equal(list.total,1);assert.equal(list.rows[0].id,originalId);assert.equal(list.rows[0].workflow_stage,number);
+      assert.deepEqual(list.counts,Object.fromEntries([1,2,3,4].map(n=>[n,n===number?1:0])));
+    };
+    await checkStage(1);
+    assert.equal((await stage('accept_portal',{portal_url:'https://portal.example.invalid',approval_date:today},409)).code,'DOCUMENTS_NOT_SUBMITTED');
+    assert.equal((await stage('record_enquiry',{enquiry_date:today,product_service:'Too early'},409)).code,'PORTAL_NOT_ACCEPTED');
+    reg=await stage('start_documents');await checkStage(2);
+    assert.equal((await stage('submit_documents',{},409)).code,'DOCUMENTS_PENDING');
+    const types=(await call('/options')).catalog.filter(type=>type.kind==='doc_type'&&type.required);
+    for(const type of types){
+      const form=new FormData();form.append('file',new Blob(['%PDF-1.4\nFour-stage isolated fixture'],{type:'application/pdf'}),`${type.code}.pdf`);form.append('type_id',String(type.id));
+      await call(`/registrations/${reg.id}/documents`,{method:'POST',form},201);
+    }
+    reg=await stage('submit_documents');assert(reg.submitted_at);await checkStage(2);
+    const submittedVersion=reg.version;
+    // A failure inside acceptance rolls back the portal update and approval insert.
+    await stage('accept_portal',{portal_url:'https://portal.example.invalid',approval_date:today,remarks:42},400);
+    const afterFailure=(await call(`/registrations/${reg.id}`)).record;
+    assert.equal(afterFailure.version,submittedVersion);assert.equal(afterFailure.portal_url,null);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_approvals').get().n,0);
+    await stage('accept_portal',{approval_date:today},400);
+    reg=await stage('accept_portal',{portal_url:'https://portal.example.invalid',portal_login_id:'test-login',approval_date:today});
+    assert.equal(reg.status,'approved');assert.equal(reg.owner_name,'Test Owner');await checkStage(3);
+    const approval=h.db.prepare('SELECT * FROM vt_approvals').get();assert.equal(approval.status,'approved');assert.equal(approval.vendor_code,null);assert.equal(approval.application_date,today);
+    await call(`/registrations/${reg.id}/stage`,{method:'POST',body:{version:submittedVersion,action:'accept_portal',portal_url:'https://portal.example.invalid',approval_date:today}},409);
+    const firstEnquiryVersion=reg.version;
+    reg=await stage('record_enquiry',{enquiry_date:today,product_service:'Test material requirement',rfq_number:'TEST-RFQ-1',due_date:''});
+    assert.equal(reg.customer_id,customerId);await checkStage(4);
+    await call(`/registrations/${reg.id}/stage`,{method:'POST',body:{version:firstEnquiryVersion,action:'record_enquiry',enquiry_date:today,product_service:'Duplicate retry'}},409);
+    const secondVersion=reg.version;
+    reg=await stage('record_enquiry',{enquiry_date:today,product_service:'Second requirement',rfq_number:'TEST-RFQ-2'});
+    assert(reg.version>secondVersion);await checkStage(4);
+    const list=await call('/registration-stages?workflow_stage=4');assert.equal(list.rows[0].enquiry_count,2);
+    const enquiries=await call(`/enquiries?registration_id=${reg.id}`);assert.equal(enquiries.total,2);assert(enquiries.rows.every(e=>e.customer_id===customerId&&e.owner_id===2));
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM customers').get().n,1);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_registrations').get().n,1);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM crm_funnel').get().n,2);
+  }finally{await h.close();}
+});
+
+test('four-stage counts and mutations respect ownership, filters, permissions and versions',async()=>{
+  const h=await harness();try{
+    const today=require('../kpis').istToday();
+    const create=async(name,owner_id)=>(await h.request('/registrations',{method:'POST',body:{company_name:name,owner_id,registration_date:today}})).data;
+    const owned=await create('Owned Stage Company',2),other=await create('Other Stage Company',3);
+    const ownList=await h.request('/registration-stages?workflow_stage=1&limit=1',{user:2});assert.equal(ownList.status,200);assert.equal(ownList.data.total,1);assert.deepEqual(ownList.data.counts,{1:1,2:0,3:0,4:0});
+    const adminList=await h.request('/registration-stages?workflow_stage=1&limit=1');assert.equal(adminList.data.total,2);assert.equal(adminList.data.rows.length,1);assert.equal(adminList.data.counts[1],2);
+    assert.equal((await h.request('/registration-stages?workflow_stage=1&search=Owned')).data.total,1);
+    assert.equal((await h.request('/registration-stages?workflow_stage=5')).status,400);
+    assert.equal((await h.request('/registration-stages',{user:3})).status,403);
+    const mutate=(id,action,user=2,extra={})=>h.request(`/registrations/${id}/stage`,{user,method:'POST',body:{version:1,action,...extra}});
+    assert.equal((await mutate(other.id,'start_documents')).status,404);
+    assert.equal((await mutate(owned.id,'accept_portal',2,{portal_url:'https://portal.example.invalid',approval_date:today})).status,403);
+    assert.equal((await mutate(owned.id,'record_enquiry',2,{enquiry_date:today,product_service:'Test'})).status,403);
+    assert.equal((await mutate(owned.id,'start_documents',2,{owner_id:3})).status,400);
+    assert.equal((await mutate(owned.id,'start_documents')).status,200);
+    assert.equal((await mutate(owned.id,'start_documents')).status,409);
+    const result=await h.request('/registration-stages?workflow_stage=2',{user:4});assert.equal(result.data.total,1);assert.deepEqual(result.data.counts,{1:0,2:1,3:0,4:0});
+    assert.equal((await h.request('/registration-stages?owner_id=3',{user:2})).data.total,0);
+  }finally{await h.close();}
+});
+
 test('merged permissions apply consistently to list/detail/edit and finance stays scoped',async()=>{
   const h=await harness();try{
     const created=await h.request('/registrations',{user:2,method:'POST',body:regData()});assert.equal(created.status,201,JSON.stringify(created.data));

@@ -221,7 +221,6 @@ function saveCustomer(db,row,user) {
   const values={};for(const [key,column] of Object.entries(CUSTOMER_FIELDS))if(Object.hasOwn(row,key))values[column]=row[key];
   const next={...(before||{}),...values};
   if(!String(next.company_name||'').trim())fail('Company Name is required',400,'VALIDATION_ERROR',{company_name:'Required'});
-  if(!next.website_url)fail('Website URL is required',400,'VALIDATION_ERROR',{website_url:'Required'});
   values.website_domain=normalizeDomain(next.website_url);
   for(const key of ['pan','gst_number','udyam'])if(values[key])values[key]=String(values[key]).trim().toUpperCase();
   const duplicates=findDuplicateCandidates(db,{...next,...values},before?.id);
@@ -401,7 +400,8 @@ function approvalAction(db,before,changes,user) {
   if(changes.status==='approved') {
     requireDocuments(db,before.registration_id);
     const merged={...before,...changes};
-    if(!String(merged.vendor_code||'').trim())fail('Vendor code is required for approval',400,'VENDOR_CODE_REQUIRED');
+    const registration=load(db,'registrations',before.registration_id,user);
+    if(!String(merged.vendor_code||'').trim()&&!registration.portal_url)fail('Record the vendor portal URL or vendor code for acceptance',400,'VENDOR_CODE_REQUIRED');
     changes.approval_date=merged.approval_date||istToday();
     if(changes.approval_date>istToday())fail('Approval date cannot be in the future');
     if(merged.valid_until&&merged.valid_until<changes.approval_date)fail('Approval already expired');
@@ -543,12 +543,52 @@ function transitionEntity(db,kind,id,status,input,user) {
 }
 function getDetail(db,kind,id,user) {
   ({kind}=entity(kind));const row=load(db,kind,id,user);
-  return {...row,...(kind==='registrations'?customerProfile(db,row.customer_id):{}),allowed_transitions:allowedTransitions(db,kind,row,user)};
+  return {...row,...(kind==='registrations'?{...customerProfile(db,row.customer_id),owner_name:db.prepare('SELECT name FROM users WHERE id=?').get(row.owner_id)?.name}:{}),allowed_transitions:allowedTransitions(db,kind,row,user)};
 }
 function getHistory(db,kind,id,user) {
   ({kind}=entity(kind));load(db,kind,id,user);
   return db.prepare(`SELECT h.*,u.name AS actor_name FROM vt_history h LEFT JOIN users u ON u.id=h.actor_id
     WHERE h.entity_type=? AND h.entity_id=? ORDER BY h.changed_at DESC,h.id DESC LIMIT 500`).all(kind,Number(id));
 }
-module.exports = {createEntity,updateEntity,transitionEntity,getDetail,getHistory,requiredDocuments,assertScope,ownerVisible,
+// Four-stage actions reuse the same registration, documents, approval and CRM enquiry.
+// The transaction/version guard prevents a partial acceptance or duplicate retry.
+function advanceRegistration(db,id,input,user) {
+  return db.transaction(()=>{
+    const before=load(db,'registrations',id,user);expectVersion(before,input);
+    const action=input.action;
+    const fields={start_documents:[],submit_documents:[],accept_portal:['portal_url','portal_login_id','vendor_code','approval_date','remarks'],
+      record_enquiry:['enquiry_date','rfq_number','product_service','due_date','expected_amount_paise','remarks']}[action];
+    if(!fields)fail('Choose a valid registration stage action');
+    for(const key of Object.keys(input))if(!['version','action',...fields].includes(key))fail(`Unknown stage field: ${key}`);
+    if(action==='start_documents'||action==='submit_documents') {
+      return transitionEntity(db,'registrations',id,{version:before.version,status:action==='start_documents'?'started':'submitted'},user);
+    }
+    if(action==='accept_portal') {
+      if(before.status!=='submitted'||!before.submitted_at)fail('Submit the documents before recording portal acceptance',409,'DOCUMENTS_NOT_SUBMITTED');
+      requireDocuments(db,id);
+      if(!String(input.portal_url||'').trim())fail('Vendor portal URL is required');
+      date(input.approval_date,'approval_date');
+      if(input.approval_date<before.registration_date||input.approval_date>istToday())fail('Acceptance date must be between registration date and today');
+      updateEntity(db,'registrations',id,{version:before.version,portal_url:input.portal_url,portal_login_id:input.portal_login_id||null},user);
+      let approval=db.prepare("SELECT * FROM vt_approvals WHERE registration_id=? AND status IN ('pending','docs_pending','under_review') ORDER BY id DESC LIMIT 1").get(id);
+      if(approval)assertScope(db,'approvals',approval,user);
+      else approval=createEntity(db,'approvals',{registration_id:id,application_date:new Date(Date.parse(before.submitted_at)+19800000).toISOString().slice(0,10),owner_id:before.owner_id},user);
+      transitionEntity(db,'approvals',approval.id,{version:approval.version,status:'approved',vendor_code:input.vendor_code||null,
+        approval_date:input.approval_date,remarks:input.remarks||null},user);
+    }
+    if(action==='record_enquiry') {
+      if(!['approved','enquiry_received','quote_sent','po_received'].includes(before.status))fail('Record portal acceptance before adding an enquiry',409,'PORTAL_NOT_ACCEPTED');
+      const payload=Object.fromEntries(fields.filter(key=>Object.hasOwn(input,key)).map(key=>[key,input[key]]));
+      if(!String(payload.product_service||'').trim()&&!String(payload.rfq_number||'').trim())fail('Enter an enquiry reference or requirement');
+      const accepted=db.prepare("SELECT MAX(approval_date) day FROM vt_approvals WHERE registration_id=? AND status='approved'").get(id)?.day;
+      date(payload.enquiry_date,'enquiry_date');
+      if(payload.enquiry_date<(accepted||before.registration_date)||payload.enquiry_date>istToday())fail('Enquiry date must be between acceptance date and today');
+      createEntity(db,'enquiries',{...payload,registration_id:id,customer_id:before.customer_id,owner_id:before.owner_id},user);
+      const current=load(db,'registrations',id,user);
+      if(current.version===before.version)persist(db,'registrations',current,{},user,'enquiry_received','Another enquiry recorded');
+    }
+    return getDetail(db,'registrations',id,user);
+  })();
+}
+module.exports = {advanceRegistration,createEntity,updateEntity,transitionEntity,getDetail,getHistory,requiredDocuments,assertScope,ownerVisible,
   findDuplicateCandidates,customerProfile,normalizeDomain,fail};

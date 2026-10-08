@@ -13,7 +13,7 @@ const definition = (table,label,permission,fields,statuses=[],transitions={},ini
 const ENTITY_DEFS = {
   registrations: definition('vt_registrations','Vendor Registration','vendor_registrations',[
     {...client,required:false},vendor,owner,f('registration_date','Registration Date','date',{required:true}),
-    f('company_name','Company Name','text',{virtual:true,required:true}),f('website_url','Website URL','url',{virtual:true,required:true}),
+    f('company_name','Company Name','text',{virtual:true,required:true}),f('website_url','Website URL','url',{virtual:true}),
     ...['sector','plant_location','city','state','contact_person','procurement_contact','phone','pan','gst_number','udyam'].map(key=>
       f(key,key.split('_').map(s=>s[0].toUpperCase()+s.slice(1)).join(' '),'text',{virtual:true})),
     f('turnover_amount','Turnover (₹)','number',{min:0,virtual:true}),f('address','Address','textarea',{virtual:true}),

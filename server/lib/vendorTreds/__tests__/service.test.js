@@ -92,7 +92,9 @@ test('registration creates a canonical client, normalizes identity, rejects dupl
   assert.throws(()=>create(db,'registrations',{company_name:'Different spelling',website_url:'https://new-client.test',owner_id:2,registration_date:'2026-10-07'}),e=>e.code==='POSSIBLE_DUPLICATE_VENDOR');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM customers').get().n,count);
   assert.throws(()=>create(db,'registrations',{customer_id:2,owner_id:2,registration_date:'2026-10-07',portal_password:'never-store'}),e=>e.code==='SECRET_NOT_ALLOWED');
-  assert.throws(()=>create(db,'registrations',{company_name:'Website missing',owner_id:2,registration_date:'2026-10-07'}),/Website URL/);
+  const basic=create(db,'registrations',{company_name:'Website not yet known',owner_id:2,registration_date:'2026-10-07'});
+  assert.equal(service.getDetail(db,'registrations',basic.id,owner).website_url,null);
+  assert.throws(()=>create(db,'registrations',{company_name:'Invalid website',website_url:'javascript:alert(1)',owner_id:2,registration_date:'2026-10-07'}),/HTTP or HTTPS/);
   db.close();
 });
 test('required and expired documents block submission; approval code drives registration without overwriting supplier code',()=>{

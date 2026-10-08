@@ -26,7 +26,7 @@ function amountPaise(text) {
   return value.startsWith('-') ? -amount : amount;
 }
 
-export function EntityForm({ kind, def, record, onClose, onSaved, endpoint, onOpenCandidate }) {
+export function EntityForm({ kind, def, record, onClose, onSaved, endpoint, onOpenCandidate, submitLabel = 'Save' }) {
   const fields = editableFields(def);
   const [values, setValues] = useState(() => initialValues(fields, record));
   const [busy, setBusy] = useState(false);
@@ -63,10 +63,9 @@ export function EntityForm({ kind, def, record, onClose, onSaved, endpoint, onOp
     setBusy(true); setFailure(''); setCandidates([]);
     try {
       const target = endpoint || `${BASE}/${kind}`;
-      if (record?.id) await api.patch(`${target}/${record.id}`, { ...body, version: record.version });
-      else await api.post(target, body);
+      const response = record?.id ? await api.patch(`${target}/${record.id}`, { ...body, version: record.version }) : await api.post(target, body);
       toast.success(record?.id ? 'Changes saved' : 'Record created');
-      onSaved();
+      onSaved(response.data);
     } catch (error) {
       const result = error.response?.data || {};
       setFailure(errorMessage(error));
@@ -88,13 +87,13 @@ export function EntityForm({ kind, def, record, onClose, onSaved, endpoint, onOp
         </div>)}
       </div>
       {!fields.length && <p className="text-sm text-slate-500">Field configuration is unavailable. Refresh the module before creating a record.</p>}
-      <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 border-t pt-4"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" className="btn btn-primary" disabled={busy || !fields.length}>{busy ? 'Saving…' : 'Save'}</button></div>
+      <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 border-t pt-4"><button type="button" className="btn btn-secondary" disabled={busy} onClick={onClose}>Cancel</button><button type="submit" className="btn btn-primary" disabled={busy || !fields.length}>{busy ? 'Saving…' : submitLabel}</button></div>
     </form>
   </Modal>;
 }
 
 export function Field({ field, value, record = {}, id, disabled, onChange }) {
-  if (field.lookup) return <RemoteSelect id={id} entity={field.lookup} value={value} onChange={onChange} selectedLabel={record[field.labelKey || field.key.replace(/_id$/, '_name')]} required={field.required} disabled={disabled} label={field.label} />;
+  if (field.lookup) return <RemoteSelect id={id} entity={field.lookup} value={value} onChange={onChange} selectedLabel={record[field.labelKey || field.key.replace(/_id$/, '_name')] || field.defaultLabel} required={field.required} disabled={disabled} label={field.label} />;
   if (field.options || field.type === 'select') return <select id={id} disabled={disabled} required={field.required} className="select" value={value ?? ''} onChange={event => onChange(event.target.value)}><option value="">Select…</option>{(field.options || []).map(item => { const option = choice(item); return <option key={option.value} value={option.value}>{option.label}</option>; })}</select>;
   if (field.type === 'boolean' && field.nullable) return <select id={id} disabled={disabled} className="select" value={value == null ? '' : value ? '1' : '0'} onChange={event => onChange(event.target.value === '' ? null : event.target.value === '1')}><option value="">Not confirmed</option><option value="1">Yes</option><option value="0">No</option></select>;
   if (field.type === 'boolean') return <label className="flex items-center gap-2 py-2 text-sm"><input id={id} type="checkbox" disabled={disabled} checked={value === true || value === 1 || value === '1'} onChange={event => onChange(event.target.checked)} />Yes</label>;

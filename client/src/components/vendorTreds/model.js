@@ -1,16 +1,10 @@
 export const BASE = '/vendor-treds';
 
 export const TABS = [
-  { id: 'dashboard', label: 'Dashboard', permission: 'vendor_treds_dashboard' },
-  { id: 'registrations', label: 'Vendor Registration', permission: 'vendor_registrations' },
-  { id: 'enquiries', label: 'Enquiries / RFQs', permission: 'vendor_enquiries' },
-  { id: 'approvals', label: 'Vendor Approvals', permission: 'vendor_approvals' },
-  { id: 'treds', label: 'TReDS', permission: 'treds_accounts' },
-  { id: 'invoices', label: 'Invoices', permission: 'treds_invoices' },
-  { id: 'discounting', label: 'Bill Discounting', permission: 'bill_discounting' },
-  { id: 'reports', label: 'Reports', permission: 'vendor_treds_reports' },
-  { id: 'masters', label: 'Master Data', permission: 'vendor_treds_masters' },
-  { id: 'settings', label: 'Settings', permission: 'vendor_treds_settings' },
+  { id: 'basics', label: 'Basic Information', permission: 'vendor_registrations' },
+  { id: 'documents', label: 'Submit Documents', permission: 'vendor_registrations' },
+  { id: 'accepted', label: 'Accepted / Portal Open', permission: 'vendor_registrations' },
+  { id: 'enquiries', label: 'Enquiry Received', permission: 'vendor_registrations' },
 ];
 
 export const KIND_TAB = { registrations: 'registrations', enquiries: 'enquiries', approvals: 'approvals', accounts: 'treds', mappings: 'treds', contacts: 'masters', invoices: 'invoices', funding: 'discounting', followups: 'enquiries', tasks: 'dashboard', history: 'dashboard', catalog: 'masters' };
