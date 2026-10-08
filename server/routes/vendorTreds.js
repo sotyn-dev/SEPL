@@ -255,7 +255,9 @@ router.get('/registration-stages',wrap((req,res)=>{
   const scope=guard(req,'registrations'),query=filters(req.query);
   const all=queries.buildQuery('registrations',{...query,workflow_stage:undefined},scope);
   const counts={1:0,2:0,3:0,4:0};
-  for(const row of req.vt.db.prepare(`SELECT ${queries.REGISTRATION_STAGE} stage,COUNT(*) total ${all.from} ${all.where} GROUP BY stage`).all(...all.params))counts[row.stage]=row.total;
+  for(const row of req.vt.db.prepare(`SELECT ${queries.REGISTRATION_REACHED_STAGE} stage,COUNT(*) total ${all.from} ${all.where} GROUP BY stage`).all(...all.params)) {
+    for(let stage=1;stage<=row.stage;stage++)counts[stage]+=row.total;
+  }
   res.json({...queries.listEntity(req.vt.db,'registrations',query,scope),counts});
 }));
 router.post('/registrations/:id/stage',wrap((req,res)=>{
@@ -277,7 +279,10 @@ router.get('/:kind/:id',wrap((req,res)=>{
   output.allowed_transitions=(detail.allowed_transitions||[]).filter(s=>access.allowed(req.vt.permissions,kind,statusAction(kind,s)));
   if(['invoices','funding'].includes(kind))Object.assign(output.record,queries.canonicalInvoiceWarning(req.vt.db,kind==='invoices'?row.id:row.invoice_id));
   if(['registrations','invoices'].includes(kind))output.documents=docs.documentsFor(req.vt.db,kind,row.id);
-  if(kind==='registrations')output.document_types=req.vt.db.prepare("SELECT id,label,required FROM vt_catalog WHERE kind='doc_type' AND active=1 ORDER BY label").all();
+  if(kind==='registrations') {
+    Object.assign(output.record,queries.registrationProgress(req.vt.db,row.id));
+    output.document_types=req.vt.db.prepare("SELECT id,label,required FROM vt_catalog WHERE kind='doc_type' AND active=1 ORDER BY label").all();
+  }
   res.json(output);
 }));
 router.get('/:kind',wrap((req,res)=>{

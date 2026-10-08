@@ -6,6 +6,16 @@ const dateOnly = expression => `date(${expression})`;
 const istDay = expression => `date(${expression}, '+5 hours', '+30 minutes')`;
 const COMMON_DATES = { created_at: 't.created_at', updated_at: 't.updated_at' };
 const REGISTRATION_STAGE = "CASE WHEN t.status IN ('enquiry_received','quote_sent','po_received') THEN 4 WHEN t.status='approved' THEN 3 WHEN t.status IN ('started','submitted','docs_pending') THEN 2 ELSE 1 END";
+// Tabs are cumulative work queues: saving basic details enables documents,
+// submitting documents enables acceptance, and acceptance enables enquiries.
+// Keep previously reached steps visible even if a registration needs rework.
+const REGISTRATION_REACHED_STAGE = `CASE WHEN t.status IN ('approved','enquiry_received','quote_sent','po_received')
+  OR EXISTS(SELECT 1 FROM vt_history rh WHERE rh.entity_type='registrations' AND rh.entity_id=t.id
+    AND rh.new_status IN ('approved','enquiry_received','quote_sent','po_received')) THEN 4
+  WHEN t.submitted_at IS NOT NULL OR t.status='submitted' THEN 3 ELSE 2 END`;
+const REGISTRATION_PROGRESS = `${REGISTRATION_STAGE} AS workflow_stage, ${REGISTRATION_REACHED_STAGE} AS available_stage,
+  (SELECT COUNT(*) FROM vt_enquiries e WHERE e.registration_id=t.id) AS enquiry_count,
+  (SELECT MAX(a.approval_date) FROM vt_approvals a WHERE a.registration_id=t.id AND a.status='approved') AS accepted_date`;
 const CANONICAL_WARNING = 'The ERP invoice amount or date differs from the recorded snapshot. Historical totals retain the snapshot; resolve the discrepancy before financial actions.';
 function canonicalProjection(invoiceAlias) {
   const amount = 'CAST(ROUND(sb.total_amount*100) AS INTEGER)';
@@ -30,9 +40,7 @@ const ENTITIES = {
     dates: { ...COMMON_DATES, registration_date: 't.registration_date', submitted_at: 't.submitted_at', next_followup_at: 't.next_followup_at',
       approval_date: `(SELECT MIN(va.approval_date) FROM vt_approvals va WHERE va.registration_id=t.id AND va.status='approved' AND TRIM(COALESCE(va.vendor_code,''))<>'')` },
     defaultDate: 'registration_date', stages: { registered: 'registration_date', submitted: 'submitted_at', approved: 'approval_date' },
-    select: `t.*, c.company_name, c.sector, c.website_url, u.name AS owner_name, ${REGISTRATION_STAGE} AS workflow_stage,
-      (SELECT COUNT(*) FROM vt_enquiries e WHERE e.registration_id=t.id) AS enquiry_count,
-      (SELECT MAX(a.approval_date) FROM vt_approvals a WHERE a.registration_id=t.id AND a.status='approved') AS accepted_date,
+    select: `t.*, c.company_name, c.sector, c.website_url, u.name AS owner_name, ${REGISTRATION_PROGRESS},
       (SELECT a.vendor_code FROM vt_approvals a WHERE a.registration_id=t.id
         AND a.status='approved' AND TRIM(COALESCE(a.vendor_code,''))<>'' ORDER BY a.approval_date DESC,a.id DESC LIMIT 1) AS vendor_code,
       (SELECT ve.status FROM vt_enquiries ve WHERE ve.registration_id=t.id
@@ -170,7 +178,7 @@ function buildQueryUnchecked(kind, filters = {}, scope) {
   if(kind==='registrations'&&filters.workflow_stage!=null&&filters.workflow_stage!=='') {
     const stage=Number(filters.workflow_stage);
     if(![1,2,3,4].includes(stage))throw new Error('Invalid registration stage');
-    add(`${REGISTRATION_STAGE}=?`,stage);
+    add(`(${REGISTRATION_REACHED_STAGE})>=?`,stage);
   }
   if (filters.status !== undefined && filters.status !== '') {
     if (!statusExpression) throw new Error('This entity has no status filter');
@@ -293,4 +301,7 @@ function canonicalInvoiceWarning(db, invoiceId) {
     LEFT JOIN sales_bills sb ON sb.id=i.sales_bill_id WHERE i.id=?`).get(id) || null;
 }
 
-module.exports = { REGISTRATION_STAGE, ENTITIES, CANONICAL_WARNING, isoDate, istDay, scopeIds, buildQuery, filterClause, listEntity, canonicalInvoiceWarning };
+function registrationProgress(db,id) {
+  return db.prepare(`SELECT ${REGISTRATION_PROGRESS} FROM vt_registrations t WHERE t.id=?`).get(id);
+}
+module.exports = { REGISTRATION_STAGE, REGISTRATION_REACHED_STAGE, registrationProgress, ENTITIES, CANONICAL_WARNING, isoDate, istDay, scopeIds, buildQuery, filterClause, listEntity, canonicalInvoiceWarning };
