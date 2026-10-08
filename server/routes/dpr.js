@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { getActiveProjectMetric } = require('../lib/activeProjects');
 const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray } = require('../lib/aiComplete');
 const router = express.Router();
 
@@ -696,11 +697,7 @@ router.get('/', (req, res) => {
 router.get('/summary', (req, res) => {
   const db = getDb();
   const today = istTodayIso();
-  // Use the normalized site key so phantom-duplicate rows (Excel paste
-  // junk) don't inflate the active-site count or the missing-DPR list.
-  const activeSites = db.prepare(
-    `SELECT COUNT(DISTINCT ${siteKeySql('name')}) as c FROM sites WHERE status='active'`
-  ).get();
+  const activeProjects = getActiveProjectMetric(db);
   const todayDprs = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE report_date=?').get(today);
   const pendingApproval = db.prepare("SELECT COUNT(*) as c FROM dpr WHERE approval_status='pending'").get();
   const billingReady = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE billing_ready=1').get();
@@ -737,7 +734,7 @@ router.get('/summary', (req, res) => {
     COALESCE(AVG(w.variance_pct),0) as avg_variance
     FROM dpr d JOIN sites s ON d.site_id=s.id LEFT JOIN dpr_work_items w ON w.dpr_id=d.id
     WHERE d.report_date >= date('now','-7 days') GROUP BY d.id ORDER BY d.report_date DESC LIMIT 20`).all();
-  res.json({ activeSites: activeSites.c, todaySubmissions: todayDprs.c, pendingApproval: pendingApproval.c, billingReady: billingReady.c, missingSites, recentVariance: variance });
+  res.json({ activeProjects, activeSites: activeProjects.count, todaySubmissions: todayDprs.c, pendingApproval: pendingApproval.c, billingReady: billingReady.c, missingSites, recentVariance: variance });
 });
 
 // ─── Weekly DPR Planning ───────────────────────────────────────

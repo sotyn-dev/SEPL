@@ -1,4 +1,5 @@
 import NumberedTable from '../components/NumberedTable';
+import ActiveProjectsMetric from '../components/ActiveProjectsMetric';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -1208,11 +1209,7 @@ export default function DPR() {
               padding/font through md so 4 tiles don't feel oversized below
               desktop; full size returns at lg (mam 2026-08-01). */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 lg:gap-4">
-            <button type="button" onClick={() => { setReportFilter(''); setTab('sites'); }}
-              className="card text-center border-l-4 border-red-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
-              <div className="text-xl lg:text-3xl font-bold text-red-600">{summary ? summary.activeSites : '—'}</div>
-              <div className="text-xs lg:text-sm text-gray-500">Active Sites <span className="text-[10px] text-red-600 font-semibold">→ view</span></div>
-            </button>
+            <ActiveProjectsMetric />
             <button type="button" onClick={() => { setFilterDate(new Date().toISOString().split('T')[0]); setDateTouched(true); setReportFilter(''); setTab('reports'); }}
               className="card text-center border-l-4 border-emerald-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
               <div className="text-xl lg:text-3xl font-bold text-emerald-600">{summary ? summary.todaySubmissions : '—'}</div>
@@ -1238,7 +1235,7 @@ export default function DPR() {
             </div>
           )}
           {summary && summary.missingSites.length === 0 && summary.activeSites > 0 && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3"><FiCheck className="text-emerald-600" size={24} /><h4 className="font-bold text-emerald-700">All sites submitted DPR today!</h4></div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3"><FiCheck className="text-emerald-600" size={24} /><h4 className="font-bold text-emerald-700">No missing DPRs in your site view today.</h4></div>
           )}
           {!summary && (
             <div className="text-center py-4 text-gray-400 text-sm">Loading dashboard summary…</div>

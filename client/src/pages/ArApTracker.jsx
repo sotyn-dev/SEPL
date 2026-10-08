@@ -1,4 +1,5 @@
 import NumberedTable from '../components/NumberedTable';
+import ActiveProjectsMetric from '../components/ActiveProjectsMetric';
 // Cash Flow Tracker — rolling weekly cash-flow forecast.
 // (Was "AR/AP Tracker"; renamed by mam on 2026-09-03 when the old Cash Flow
 // page was deleted and this became THE cash view in Finance.)
@@ -293,6 +294,7 @@ export default function ArApTracker() {
 
   return (
     <div className="space-y-5">
+      <ActiveProjectsMetric />
       {/* Shared party suggestions — top-level so both the Add and Bulk modals
           can use it. AR = clients; AP = vendors + clients combined. */}
       <datalist id="arapPartyDL">

@@ -155,7 +155,7 @@ export default function DashboardCMDToc() {
           <KpiTile label="Free-to-use inventory" value={fmtINR(pulse.free_inventory)} accent="amber"
             sub={`${inventory.total > 0 ? Math.round((inventory.free_to_use / inventory.total) * 100) : 0}% of stock`} />
           <KpiTile label="WIP locked" value={fmtINR(pulse.wip_locked)} accent="blue"
-            sub={`${operations.active_sites} active sites · unbilled ${fmtINR(pulse.wip_unbilled)}`} />
+            sub={`${operations.active_projects.count} active projects · unbilled ${fmtINR(pulse.wip_unbilled)}`} />
           <KpiTile label="Quote lead time" value={pulse.quote_lead_time_avg != null ? `${pulse.quote_lead_time_avg} d` : '—'} accent="red"
             sub={`target ≤4d · within SLA ${fmtPct(sales.quote_lead_time.within_sla_pct)}`} />
           <KpiTile label="Lead → PO conversion" value={fmtPct(pulse.lead_to_po_pct)} accent="red"
@@ -443,7 +443,7 @@ export default function DashboardCMDToc() {
           <Card title="Margin variance">
             <DataGap note="Worst-5 project margin variance lives in /audit/kpi; surface here in v3.1." />
             <div style={{ marginTop: 12, fontSize: 11, color: C.ink2 }}>
-              Active POs: <strong>{operations.active_sites}</strong> · billed share: <strong>{pulse.wip_locked > 0 ? Math.round(((pulse.wip_locked - pulse.wip_unbilled) / pulse.wip_locked) * 100) : 0}%</strong>
+              Active Projects: <strong>{operations.active_projects.count}</strong> · billed share: <strong>{pulse.wip_locked > 0 ? Math.round(((pulse.wip_locked - pulse.wip_unbilled) / pulse.wip_locked) * 100) : 0}%</strong>
             </div>
           </Card>
         </Row>
