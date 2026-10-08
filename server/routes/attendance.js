@@ -9,6 +9,7 @@ const { getEmailConfig } = require('../lib/email');
 // stops weak indoor phone-GPS from falsely blocking on-site staff.
 const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
 const { rosterCutoffs, ROSTERS } = require('../lib/roster');
+const { validCoordinates } = require('../lib/locationAvailability');
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
@@ -1011,7 +1012,6 @@ router.post('/track-location', (req, res) => {
         handleGpsOffEvent({
           userId: req.user.id,
           employeeName: req.user.name,
-          reason: reason || 'GPS location turned off on mobile',
           dbInstance: db,
         });
       } catch (err) {
@@ -1022,7 +1022,7 @@ router.post('/track-location', (req, res) => {
     return res.json({ site: 'GPS_OFF', recorded: true });
   }
 
-  if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
+  if (!validCoordinates(latitude, longitude)) return res.status(400).json({ error: 'Valid location coordinates required' });
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   // Same uncertainty-honest rule as the punch endpoints so the live map and the
   // punch UI agree. We mark the ping as on-site only when the GPS uncertainty

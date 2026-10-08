@@ -1,5 +1,6 @@
 const { getDb } = require('../db/schema');
 const { istToday } = require('../lib/istDate');
+const { getLocationInterruption, locationReason, validCoordinates, RECOVERY_MS, RECOVERY_MAX_GAP_MS } = require('../lib/locationAvailability');
 
 // Default Nancy Email & Profile
 const COMPLIANCE_MONITOR_EMAIL = 'nancy@securedengineers.com';
@@ -512,13 +513,13 @@ function formatISTTime(dateObj) {
 }
 
 /**
- * Handles GPS OFF event lifecycle:
- * - Initial detection: creates case + sends initial alerts to Monitor and Employee.
- * - Ongoing GPS OFF:
+ * Handles sustained location unavailability. Browser errors do not prove GPS
+ * was switched off. Incoming pings and the background scan share this policy.
+ * - Ongoing location interruption:
  *   • Employee: receives simple reminder every 15 minutes.
  *   • Monitor (Nancy): receives escalation follow-up alert every 30 minutes with elapsed duration.
  */
-function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) {
+function handleGpsOffEvent({ userId, employeeName, dbInstance = null }) {
   const db = dbInstance || getDb();
   const today = istToday();
 
@@ -541,34 +542,39 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
     return null;
   }
 
-  const monitor = getOrCreateComplianceMonitor(db);
-  const nowIso = new Date().toISOString();
   const nowMs = Date.now();
+  const interruption = getLocationInterruption(db, userId, attRecord, today, nowMs);
+  if (!interruption) return null;
+  const reason = interruption.reason;
+  const reasonText = locationReason(reason);
+  const monitor = getOrCreateComplianceMonitor(db);
+  const nowIso = new Date(nowMs).toISOString();
   const nowStr = new Date(nowMs + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
   const timeFormatted = formatISTTime(new Date());
 
-  // Check for active open location_off case
+  // Follow-up / pending-employee cases must also prevent duplicate cases.
   const activeCase = db.prepare(`
     SELECT * FROM compliance_cases 
-    WHERE user_id = ? AND violation_type = 'location_off' AND status = 'open'
+    WHERE user_id = ? AND violation_type IN ('location_off', 'location_unavailable')
+      AND status NOT IN ('resolved', 'closed')
     ORDER BY id DESC LIMIT 1
   `).get(userId);
 
   if (!activeCase) {
-    // Initial GPS OFF Event -> Create Case + Send Initial Notifications
+    // Alert only after sustained loss, not on an individual browser error.
     const metaObj = {
-      off_at: nowIso,
+      off_at: interruption.since,
       last_employee_notified_at: nowIso,
       last_monitor_notified_at: nowIso,
-      reason: reason || 'GPS location turned off on mobile',
+      reason,
     };
 
     return createComplianceCase({
       userId,
       employeeName,
-      violationType: 'location_off',
-      title: `GPS Location Turned Off: ${employeeName} (${timeFormatted} IST)`,
-      description: `Employee reported GPS turned off during duty hours at ${timeFormatted} IST. Reason: ${reason || 'GPS location turned off on mobile'}.`,
+      violationType: 'location_unavailable',
+      title: `Location unavailable: ${employeeName} (${timeFormatted} IST)`,
+      description: `No location reading has been available since ${formatISTTime(new Date(interruption.since))} IST during active attendance. ${reasonText} Check location permission and connectivity; this does not confirm that device GPS was switched off.`,
       slaHours: 2,
       impactsAttendance: 1,
       impactsExpense: 1,
@@ -588,7 +594,10 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
   const lastEmpNotif = new Date(meta.last_employee_notified_at || activeCase.detected_at);
   const lastMonNotif = new Date(meta.last_monitor_notified_at || activeCase.detected_at);
 
-  let updated = false;
+  let updated = meta.reason !== reason || !!meta.recovery_started_at || !!meta.recovery_last_at;
+  meta.reason = reason;
+  delete meta.recovery_started_at;
+  delete meta.recovery_last_at;
 
   // 1. Employee Reminder: every 15 minutes (in English)
   if (nowMs - lastEmpNotif.getTime() >= 15 * 60 * 1000) {
@@ -600,8 +609,8 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
       ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case', ?, ?, 'active', ?)
     `).run(
       userId,
-      `[REMINDER] GPS Location Still Turned Off`,
-      `Your device GPS is still turned off since ${offTimeStr} IST (${elapsedStr} elapsed). Please turn on your device GPS immediately.`,
+      `[REMINDER] Location still unavailable`,
+      `Location readings have been unavailable since ${offTimeStr} IST (${elapsedStr}). ${reasonText} Please check location permission and connectivity.`,
       `/compliance?case_id=${activeCase.id}`,
       activeCase.id,
       nowStr,
@@ -614,8 +623,8 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
       if (io) {
         io.to('u:' + userId).emit('notification:new', {
           type: 'compliance_alert',
-          title: `[REMINDER] GPS Location Still Turned Off`,
-          body: `Your device GPS is still turned off since ${offTimeStr} IST (${elapsedStr} elapsed). Please turn on your device GPS immediately.`,
+          title: `[REMINDER] Location still unavailable`,
+          body: `Location readings have been unavailable since ${offTimeStr} IST (${elapsedStr}). ${reasonText} Please check location permission and connectivity.`,
           link_url: `/compliance?case_id=${activeCase.id}`,
           created_at: nowStr,
         });
@@ -636,8 +645,8 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
       ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active', ?)
     `).run(
       monitor.id,
-      `[URGENT] GPS Still OFF: ${activeCase.employee_name} (${elapsedStr})`,
-      `Employee ${activeCase.employee_name} has kept GPS turned off since ${offTimeStr} IST (${elapsedStr} elapsed without turning ON). Follow-up required.`,
+      `[FOLLOW-UP] Location unavailable: ${activeCase.employee_name} (${elapsedStr})`,
+      `No location readings for ${activeCase.employee_name} since ${offTimeStr} IST (${elapsedStr}). ${reasonText} Please follow up; the cause is not confirmed.`,
       `/compliance?case_id=${activeCase.id}`,
       activeCase.id,
       nowStr,
@@ -650,8 +659,8 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
       if (io) {
         io.to('u:' + monitor.id).emit('notification:new', {
           type: 'compliance_monitor_alert',
-          title: `[URGENT] GPS Still OFF: ${activeCase.employee_name} (${elapsedStr})`,
-          body: `Employee ${activeCase.employee_name} has kept GPS turned off since ${offTimeStr} IST (${elapsedStr} elapsed without turning ON). Follow-up required.`,
+          title: `[FOLLOW-UP] Location unavailable: ${activeCase.employee_name} (${elapsedStr})`,
+          body: `No location readings for ${activeCase.employee_name} since ${offTimeStr} IST (${elapsedStr}). ${reasonText} Please follow up; the cause is not confirmed.`,
           link_url: `/compliance?case_id=${activeCase.id}`,
           created_at: nowStr,
         });
@@ -663,7 +672,7 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
       VALUES (?, 'followup_reminder', 'System Monitor', ?, ?)
     `).run(
       activeCase.id,
-      `GPS still OFF after ${elapsedStr} (since ${offTimeStr} IST). Escalation alert sent to monitor.`,
+      `Location still unavailable after ${elapsedStr} (since ${offTimeStr} IST). Follow-up alert sent to monitor. ${reasonText}`,
       nowStr
     );
 
@@ -688,12 +697,12 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
  * - Notifies Employee that GPS signal is successfully restored and active.
  */
 function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInstance = null }) {
+  if (!validCoordinates(latitude, longitude) || siteName === 'GPS_OFF') return;
   const db = dbInstance || getDb();
 
   // Do not track location compliance for MD Ankur Kaplesh (director@securedengineers.com)
   const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId);
   if (isMdLocationExempt(user)) return;
-  const today = istToday();
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
   const nowStr = new Date(nowMs + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -701,7 +710,7 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
   const activeCase = db.prepare(`
     SELECT * FROM compliance_cases 
     WHERE user_id = ? AND violation_type IN ('location_off', 'location_unavailable') 
-      AND status = 'open'
+      AND status NOT IN ('resolved', 'closed')
     ORDER BY id DESC LIMIT 1
   `).get(userId);
 
@@ -712,6 +721,19 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     meta = typeof activeCase.metadata === 'string' ? JSON.parse(activeCase.metadata) : (activeCase.metadata || {});
   } catch (_) { meta = {}; }
 
+  // Require a minute of returning readings. Other sessions' errors do not
+  // reset recovery while this account still supplies fresh valid locations.
+  const recoveryStart = Date.parse(meta.recovery_started_at);
+  const recoveryLast = Date.parse(meta.recovery_last_at);
+  if (!Number.isFinite(recoveryStart) || !Number.isFinite(recoveryLast)
+      || nowMs - recoveryLast > RECOVERY_MAX_GAP_MS || recoveryStart > nowMs) {
+    meta.recovery_started_at = nowIso;
+  }
+  meta.recovery_last_at = nowIso;
+  db.prepare('UPDATE compliance_cases SET metadata = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(meta), nowIso, activeCase.id);
+  if (nowMs - Date.parse(meta.recovery_started_at) < RECOVERY_MS) return;
+
   const offAt = new Date(meta.off_at || activeCase.detected_at);
   const onAt = new Date();
   const offTimeStr = formatISTTime(offAt);
@@ -721,7 +743,7 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
   const empName = activeCase.employee_name || `User #${userId}`;
 
   // 1. Resolve case in compliance_cases
-  const resNotes = `GPS restored at ${onTimeStr} IST on site: ${siteName} (${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}). Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`;
+  const resNotes = `Location readings resumed and remained available for at least one minute, confirmed at ${onTimeStr} IST. Last reported location: ${siteName} (${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}). Interruption to confirmed recovery: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`;
 
   db.prepare(`
     UPDATE compliance_cases 
@@ -739,6 +761,9 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     nowStr
   );
 
+  closeMandatoryTaskNotification('compliance_case', activeCase.id, null, db);
+  closeMandatoryTaskNotification('compliance_case_monitor', activeCase.id, null, db);
+
   // 3. Complete Lifecycle Report Notification to Nancy (in English)
   db.prepare(`
     INSERT INTO notifications (
@@ -747,8 +772,8 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 0, 0, 'compliance_case_monitor', ?, ?, 'active', ?)
   `).run(
     monitor.id,
-    `GPS Restored: ${empName} (Was OFF for ${durationStr})`,
-    `Employee ${empName} restored GPS at ${onTimeStr} IST on ${siteName}. Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`,
+    `Location available again: ${empName}`,
+    `Location readings for ${empName} have resumed, confirmed at ${onTimeStr} IST. Last reported location: ${siteName}. Interruption to confirmed recovery: ${durationStr}.`,
     `/compliance?case_id=${activeCase.id}`,
     activeCase.id,
     nowStr,
@@ -761,8 +786,8 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     if (io) {
       io.to('u:' + monitor.id).emit('notification:new', {
         type: 'compliance_monitor_alert',
-        title: `GPS Restored: ${empName} (Was OFF for ${durationStr})`,
-        body: `Employee ${empName} restored GPS at ${onTimeStr} IST on ${siteName}. Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`,
+        title: `Location available again: ${empName}`,
+        body: `Location readings for ${empName} have resumed, confirmed at ${onTimeStr} IST. Last reported location: ${siteName}. Interruption to confirmed recovery: ${durationStr}.`,
         link_url: `/compliance?case_id=${activeCase.id}`,
         created_at: nowStr,
       });
@@ -777,8 +802,8 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 0, 0, 'compliance_case', ?, ?, 'active', ?)
   `).run(
     userId,
-    `GPS Signal Restored`,
-    `Your device GPS is active and verified at ${siteName}. Thank you.`,
+    `Location available again`,
+    `Location readings are available again. Last reported location: ${siteName}. Thank you.`,
     `/compliance?case_id=${activeCase.id}`,
     activeCase.id,
     nowStr,
@@ -791,8 +816,8 @@ function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInsta
     if (io) {
       io.to('u:' + userId).emit('notification:new', {
         type: 'compliance_alert',
-        title: `GPS Signal Restored`,
-        body: `Your device GPS is active and verified at ${siteName}. Thank you.`,
+        title: `Location available again`,
+        body: `Location readings are available again. Last reported location: ${siteName}. Thank you.`,
         link_url: `/compliance?case_id=${activeCase.id}`,
         created_at: nowStr,
       });

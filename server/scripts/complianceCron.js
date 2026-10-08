@@ -3,7 +3,7 @@
 
 const { getDb } = require('../db/schema');
 const { istToday } = require('../lib/istDate');
-const { createComplianceCase } = require('../services/complianceService');
+const { createComplianceCase, handleGpsOffEvent } = require('../services/complianceService');
 
 const SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -50,66 +50,15 @@ function runComplianceScan(dbInstance = null) {
         continue;
       }
 
-      // Check latest location ping
-      const latestPing = db.prepare(`
-        SELECT time, latitude, longitude, site_name, COALESCE(gps_off, 0) as gps_off 
-        FROM location_tracking 
-        WHERE user_id = ? AND date = ?
-        ORDER BY time DESC LIMIT 1
-      `).get(staff.user_id, today);
-
-      let isViolation = false;
-      let violationReason = '';
-      let violationType = 'location_off';
-
-      if (!latestPing) {
-        // Punched in but zero location pings
-        isViolation = true;
-        violationReason = `Punched in at ${staff.in_time} today but no location signal received during duty hours.`;
-        violationType = 'location_unavailable';
-      } else if (latestPing.gps_off === 1) {
-        isViolation = true;
-        violationReason = `GPS is turned OFF on device during active field duty hours (last ping: ${latestPing.time}).`;
-        violationType = 'location_off';
-      } else {
-        // Check if last ping is older than 30 minutes
-        const lastPingTime = new Date(latestPing.time).getTime();
-        const curTimeMs = new Date(nowStr).getTime();
-        const diffMinutes = Math.round((curTimeMs - lastPingTime) / (60 * 1000));
-
-        if (diffMinutes > 30) {
-          isViolation = true;
-          violationReason = `No GPS location signal received for ${diffMinutes} minutes during active field duty hours (last ping: ${latestPing.time}).`;
-          violationType = 'location_unavailable';
-        }
-      }
-
-      if (isViolation) {
-        // Check if an open case already exists for this employee today for location violation
-        const existingCase = db.prepare(`
-          SELECT id FROM compliance_cases 
-          WHERE user_id = ? 
-            AND violation_type IN ('location_off', 'location_unavailable')
-            AND DATE(detected_at) = ?
-            AND status NOT IN ('resolved', 'closed')
-        `).get(staff.user_id, today);
-
-        if (!existingCase) {
-          createComplianceCase({
-            userId: staff.user_id,
-            employeeName: staff.employee_name,
-            violationType,
-            title: `Field Location Tracking Interrupted: ${staff.employee_name}`,
-            description: violationReason,
-            slaHours: 2,
-            impactsAttendance: 1,
-            impactsExpense: 1,
-            metadata: { attendance_id: staff.attendance_id, last_ping: latestPing },
-            dbInstance: db,
-          });
-          newCasesCount++;
-        }
-      }
+      // Share grace periods, account-wide recovery, accurate error reasons and
+      // case deduplication with the live endpoint. The old scan read a gps_off
+      // column that location_tracking does not have and mixed IST with UTC.
+      const created = handleGpsOffEvent({
+        userId: staff.user_id,
+        employeeName: staff.employee_name,
+        dbInstance: db,
+      });
+      if (created?.caseId) newCasesCount++;
     }
 
     // ── 2. SCAN OVERDUE MANDATORY DELEGATIONS & TASKS ──

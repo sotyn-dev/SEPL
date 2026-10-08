@@ -506,17 +506,22 @@ export default function Layout() {
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
   // team often closes that tab and just uses Leads / Procurement / etc.
   // Running it from the Layout means as long as ANY SOTYN.AI page is open in
-  // the browser (or installed PWA), GPS pings every 30 seconds. Each ping
+  // the browser (or installed PWA), location pings every 10 seconds. Each ping
   // also acts as a heartbeat for backend auto-punch.
   // Limitations: a fully-closed browser cannot ping. For 24/7 tracking
   // even when the app is closed, we'd need a native Android wrapper.
   useEffect(() => {
     if (!user) return;                    // not logged in -> no tracking
-    if (!navigator.geolocation) return;   // no GPS support
     let cancelled = false;
     let wakeLock = null;
 
     const trackLocation = () => {
+      if (!navigator.geolocation) {
+        api.post('/attendance/track-location', {
+          gps_off: true, reason: 'no-geolocation-api',
+        }).catch(() => {});
+        return;
+      }
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (cancelled) return;
@@ -533,6 +538,8 @@ export default function Layout() {
         },
         (err) => {
           if (cancelled) return;
+          // This reports a browser error, not proof that device GPS is off.
+          // The server applies a grace period and checks all account sessions.
           const reasonMap = { 1: 'permission-denied', 2: 'position-unavailable', 3: 'timeout' };
           api.post('/attendance/track-location', {
             gps_off: true,
