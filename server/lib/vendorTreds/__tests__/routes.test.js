@@ -135,6 +135,58 @@ test('document upload and preview enforce record ownership, file content and pro
     assert.equal(h.files.size,1);
   }finally{await h.close();}
 });
+test('one combined registration file covers selected types with separate reviews and private downloads',async()=>{
+  const h=await harness();try{
+    let reg=(await h.request('/registrations',{method:'POST',body:regData()})).data;
+    const ids=['pan','gst'].map(code=>h.db.prepare('SELECT id FROM vt_catalog WHERE code=?').get(code).id);
+    const form=()=>{const f=new FormData();f.append('file',new Blob(['%PDF-1.4\nCombined synthetic PAN and GST'],{type:'application/pdf'}),'combined.pdf');f.append('type_ids',JSON.stringify([...ids,ids[0]]));f.append('expiry_date','2099-12-31');f.append('remarks','Combined registration pack');return f;};
+    const other=(await h.request('/registrations',{method:'POST',body:{...regData('Other Company'),owner_id:3}})).data;
+    assert.equal((await h.request(`/registrations/${other.id}/documents`,{user:2,method:'POST',form:form()})).status,404);
+    assert.equal(h.files.size,0);
+    const upload=await h.request(`/registrations/${reg.id}/documents`,{user:2,method:'POST',form:form()});
+    assert.equal(upload.status,201,JSON.stringify(upload.data));assert.equal(upload.data.documents.length,2);
+    assert.deepEqual(upload.data.documents.map(d=>d.type_id),ids,'Duplicate selections create only one entry per type');
+    assert.equal(h.files.size,1,'Only one physical file is stored');
+    assert.equal(h.db.prepare('SELECT COUNT(DISTINCT storage_key) n FROM vt_documents').get().n,1);
+    for(const document of upload.data.documents){
+      assert.equal(document.registration_id,reg.id);assert.equal(document.expiry_date,'2099-12-31');assert.equal(document.remarks,'Combined registration pack');assert(!document.storage_key);
+      const download=await h.request(document.download_url.replace('/vendor-treds',''),{user:2});assert.equal(download.status,200);assert.equal(download.buffer.toString(),'%PDF-1.4\nCombined synthetic PAN and GST');
+      assert.equal((await h.request(document.download_url.replace('/vendor-treds',''),{user:0})).status,401);
+    }
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM vt_history WHERE event='document_uploaded'").get().n,2);
+    reg=(await h.request(`/registrations/${reg.id}/stage`,{user:2,method:'POST',body:{version:reg.version,action:'start_documents'}})).data;
+    const submitted=await h.request(`/registrations/${reg.id}/stage`,{user:2,method:'POST',body:{version:reg.version,action:'submit_documents'}});
+    assert.equal(submitted.status,200,JSON.stringify(submitted.data));
+    const pan=upload.data.documents[0],gst=upload.data.documents[1];
+    assert.equal((await h.request(`/documents/${pan.id}`,{method:'PATCH',body:{version:pan.version,status:'rejected',remarks:'PAN page needs replacement'}})).status,200);
+    const detail=await h.request(`/registrations/${reg.id}`);
+    assert.equal(detail.data.documents.find(d=>d.id===pan.id).status,'rejected');
+    assert.equal(detail.data.documents.find(d=>d.id===gst.id).status,'uploaded','Reviewing PAN leaves GST unchanged');
+  }finally{await h.close();}
+});
+
+test('combined uploads reject invalid selections before storage and roll back every link on failure',async()=>{
+  const h=await harness();try{
+    const reg=(await h.request('/registrations',{method:'POST',body:regData()})).data;
+    const ids=['pan','gst'].map(code=>h.db.prepare('SELECT id FROM vt_catalog WHERE code=?').get(code).id);
+    const form=(types,extra={})=>{const f=new FormData();f.append('file',new Blob(['%PDF-1.4\nSynthetic batch'],{type:'application/pdf'}),'combined.pdf');f.append('type_ids',typeof types==='string'?types:JSON.stringify(types));for(const [key,value] of Object.entries(extra))f.append(key,value);return f;};
+    const send=f=>h.request(`/registrations/${reg.id}/documents`,{user:2,method:'POST',form:f});
+    for(const invalid of [[],[ids[0],999999],[ids[0],true],'{invalid',String(ids[0]),Array(101).fill(ids[0])]){
+      const result=await send(form(invalid));assert.equal(result.status,400,JSON.stringify(result.data));
+    }
+    assert.equal((await send(form(ids,{type_id:String(ids[0])}))).status,400);
+    h.db.prepare('UPDATE vt_catalog SET active=0 WHERE id=?').run(ids[1]);
+    assert.equal((await send(form(ids))).status,400);assert.equal(h.files.size,0);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_documents').get().n,0);
+    h.db.prepare('UPDATE vt_catalog SET active=1 WHERE id=?').run(ids[1]);
+    h.db.exec(`CREATE TRIGGER fail_second_document BEFORE INSERT ON vt_documents WHEN NEW.type_id=${ids[1]} BEGIN SELECT RAISE(ABORT,'Synthetic insert failure'); END;`);
+    assert.equal((await send(form(ids))).status,500);
+    assert.equal(h.files.size,0,'Failed transaction removes the unreferenced file');
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_documents').get().n,0,'No partial checklist entries');
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM vt_history WHERE event='document_uploaded'").get().n,0);
+  }finally{await h.close();}
+});
+
 test('task adapter reuses PMS without fabricating a schedule and reminders persist once',async()=>{
   const h=await harness();try{
     const create=await h.request('/tasks',{method:'POST',body:{title:'Review vendor documents',owner_id:2,due_date:'2026-10-07',reminder_at:'2026-10-07T09:00:00',priority:'high'}});
