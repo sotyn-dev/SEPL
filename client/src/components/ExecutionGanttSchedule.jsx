@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from './Modal';
@@ -1217,7 +1218,7 @@ function ImportGantterModal({ isOpen, onClose, projectId, onSuccess }) {
                   <span className="text-[10px] text-slate-500">First 5 preview rows</span>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[10px]">
+                  <NumberedTable className="w-full text-[10px]">
                     <thead className="bg-slate-200/70 text-slate-700 font-bold uppercase">
                       <tr>
                         {preview.headers.map((h, i) => (
@@ -1234,7 +1235,7 @@ function ImportGantterModal({ isOpen, onClose, projectId, onSuccess }) {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}
@@ -1731,7 +1732,7 @@ function AiMilestonesModal({ isOpen, onClose, data, projectId, onSuccess }) {
         </div>
 
         <div className="border border-slate-200 rounded-lg overflow-hidden max-h-[50vh] overflow-y-auto">
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 sticky top-0">
               <tr>
                 <th className="py-2 px-3 text-left w-16">WBS</th>
@@ -1768,7 +1769,7 @@ function AiMilestonesModal({ isOpen, onClose, data, projectId, onSuccess }) {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
 
         {/* Application Mode */}

@@ -17,6 +17,21 @@ function fileType(file, invoiceOnly=false) {
 function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value||'')&&!Number.isNaN(Date.parse(value))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 }
+function registrationTypes(db,data) {
+  let ids=data.type_ids;
+  if(ids!=null) {
+    if(data.type_id!=null&&data.type_id!=='') fail('Choose document types using one selection field',400);
+    if(typeof ids==='string') {
+      try { ids=JSON.parse(ids); } catch { fail('Choose valid document types',400); }
+    }
+    if(!Array.isArray(ids)||!ids.length||ids.length>100) fail('Choose between 1 and 100 document types',400);
+  } else ids=[data.type_id];
+  if(ids.some(id=>!['number','string'].includes(typeof id)||!Number.isSafeInteger(Number(id))||Number(id)<1)) fail('Choose valid document types',400);
+  ids=[...new Set(ids.map(Number))];
+  const active=db.prepare("SELECT id FROM vt_catalog WHERE id=? AND kind='doc_type' AND active=1");
+  if(ids.some(id=>!active.get(id))) fail('Choose active document types',400);
+  return ids;
+}
 async function addDocument(db,kind,parent,data,file,user,options={}) {
   if(!['registrations','invoices'].includes(kind)) fail('Invalid document parent',400);
   if(storage.isRemote&&String(process.env.S3_PUBLIC_BASE_URL||'').trim())fail('Private documents require a private storage namespace. Upload is unavailable while a public storage base URL is enabled.',503);
@@ -24,7 +39,7 @@ async function addDocument(db,kind,parent,data,file,user,options={}) {
   if(invoice&&!['invoice','proof'].includes(purpose)) fail('Choose invoice or delivery proof',400);
   const type=fileType(file,invoice&&purpose==='invoice');
   if(data.expiry_date&&!validDate(data.expiry_date)) fail('Use a valid expiry date',400);
-  if(!invoice&&!db.prepare("SELECT id FROM vt_catalog WHERE id=? AND kind='doc_type' AND active=1").get(Number(data.type_id))) fail('Choose an active document type',400);
+  const typeIds=invoice?[]:registrationTypes(db,data);
   const key=`vendor-treds/${invoice?'invoices':'registrations'}/${parent.id}/${crypto.randomUUID()}.${type.ext}`;
   await storage.putObject({key,body:file.buffer,contentType:type.mime});
   try {
@@ -32,9 +47,14 @@ async function addDocument(db,kind,parent,data,file,user,options={}) {
       const at=options.now?options.now():new Date().toISOString();
       const table=invoice?'vt_invoice_documents':'vt_documents',parentKey=invoice?'invoice_id':'registration_id';
       const fields=[parentKey,invoice?'purpose':'type_id','storage_key','filename','mime','size_bytes','uploaded_at','expiry_date','status','remarks','created_by','updated_by'];
-      const values=[parent.id,invoice?purpose:Number(data.type_id),key,type.filename,type.mime,file.buffer.length,at,data.expiry_date||null,'uploaded',String(data.remarks||'').slice(0,2000),user.id,user.id];
-      const id=Number(db.prepare(`INSERT INTO ${table}(${fields.join(',')}) VALUES(${fields.map(()=>'?').join(',')})`).run(...values).lastInsertRowid);
-      const record=db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
+      // A combined file is stored once. Each selected type keeps its own review
+      // status and history, and every link is committed in one transaction.
+      const insert=db.prepare(`INSERT INTO ${table}(${fields.join(',')}) VALUES(${fields.map(()=>'?').join(',')})`);
+      const records=(invoice?[purpose]:typeIds).map(documentType=>{
+        const values=[parent.id,documentType,key,type.filename,type.mime,file.buffer.length,at,data.expiry_date||null,'uploaded',String(data.remarks||'').slice(0,2000),user.id,user.id];
+        const id=Number(insert.run(...values).lastInsertRowid);
+        return db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
+      });
       let current;
       if(invoice&&purpose==='invoice') {
         current=db.prepare('SELECT * FROM vt_invoices WHERE id=?').get(parent.id);
@@ -48,8 +68,11 @@ async function addDocument(db,kind,parent,data,file,user,options={}) {
           current=uploaded;
         }
       }
-      db.prepare('INSERT INTO vt_history(entity_type,entity_id,event,after_json,actor_id,changed_at,remarks) VALUES(?,?,?,?,?,?,?)').run(kind,parent.id,'document_uploaded',JSON.stringify({...record,storage_key:undefined}),user.id,at,record.remarks);
-      return {...record,storage_key:undefined,parent_type:kind,parent_version:current?.version,download_url:`/vendor-treds/documents/${invoice?'invoice-':''}${id}/download`};
+      const uploaded=records.map(record=>{
+        db.prepare('INSERT INTO vt_history(entity_type,entity_id,event,after_json,actor_id,changed_at,remarks) VALUES(?,?,?,?,?,?,?)').run(kind,parent.id,'document_uploaded',JSON.stringify({...record,storage_key:undefined}),user.id,at,record.remarks);
+        return {...record,storage_key:undefined,parent_type:kind,parent_version:current?.version,download_url:`/vendor-treds/documents/${invoice?'invoice-':''}${record.id}/download`};
+      });
+      return !invoice&&data.type_ids!=null?{documents:uploaded}:uploaded[0];
     })();
   } catch(e) { await storage.removeKey(key).catch(()=>{}); throw e; }
 }

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Dedicated Help Tickets page — full-screen version of the floating
 // HelpTicket panel. Adds tabs (Assigned to me / Assigned by me / All)
 // per mam's spec, plus the same close-by-raiser permission applied
@@ -341,7 +342,7 @@ export default function HelpTickets() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+      <div className="flex flex-wrap items-center gap-2 pb-1">
         {[
           { id: 'mine',  label: 'Assigned to me',  count: counts.mine },
           { id: 'given', label: 'Raised by me',    count: counts.given },
@@ -353,7 +354,7 @@ export default function HelpTickets() {
           </button>
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
-        <div className="w-[264px]">
+        <div className="w-[264px] max-w-full">
           <StatusMultiSelect
             options={[
               { id: 'open', name: 'Open' },
@@ -385,7 +386,7 @@ export default function HelpTickets() {
 
       {/* Tickets list — bounded scroll + sticky thead.  Mam, 2026-05-13. */}
       <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
-        <table className="text-sm w-full min-w-[900px]">
+        <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="text-sm w-full min-w-[900px]">
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ticket</th>
@@ -461,7 +462,7 @@ export default function HelpTickets() {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...pager} />
 

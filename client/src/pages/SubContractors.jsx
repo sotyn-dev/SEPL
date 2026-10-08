@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -164,7 +165,7 @@ export default function SubContractors() {
       </div>
 
       <div className="card p-0">
-        <table className="freeze-head">
+        <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head">
           <thead>
             <tr>
               <th>Name</th><th>Type</th><th>Contact</th><th>Location</th>
@@ -210,7 +211,7 @@ export default function SubContractors() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...pager} />
 

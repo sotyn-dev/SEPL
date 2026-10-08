@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // Admin Audit Log viewer — lists every mutating API action (create / update /
 // delete) with filters for user, module, action, date range, and free-text
 // search. Click a row to see the full body + optional before/after snapshot.
@@ -139,7 +140,7 @@ export default function AuditLog() {
 
       {/* Table */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-xs">
+        <NumberedTable start={suspicious ? 1 : (page - 1) * limit + 1} className="text-xs">
           <thead>
             <tr>
               <th className="px-2 py-2 text-left">When</th>
@@ -173,7 +174,7 @@ export default function AuditLog() {
             ))}
             {rows.length === 0 && <tr><td colSpan="8" className="text-center text-gray-400 py-8">No audit entries match these filters.</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* Pagination */}

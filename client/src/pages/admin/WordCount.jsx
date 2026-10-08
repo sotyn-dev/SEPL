@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // Admin "Daily Activity / Word Count" dashboard.
 //
 // Pick a date (or range), see how many characters each user typed into the SOTYN.AI that
@@ -298,7 +299,7 @@ export default function WordCount() {
             <span className="text-[11px] text-gray-400">click a row for details</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="text-sm w-full">
+            <NumberedTable className="text-sm w-full">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">User</th>
@@ -322,7 +323,7 @@ export default function WordCount() {
                   <tr><td colSpan="3" className="text-center py-8 text-gray-400 text-sm">No activity on this date</td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
 
@@ -332,7 +333,7 @@ export default function WordCount() {
             <h4 className="font-semibold text-gray-700 flex items-center gap-2"><FiPackage size={14} className="text-red-600" /> By Module</h4>
           </div>
           <div className="overflow-x-auto">
-            <table className="text-sm w-full">
+            <NumberedTable className="text-sm w-full">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Module</th>
@@ -352,7 +353,7 @@ export default function WordCount() {
                   <tr><td colSpan="3" className="text-center py-8 text-gray-400 text-sm">—</td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       </div>
@@ -437,7 +438,7 @@ export default function WordCount() {
                     </div>
                   );
                 })()}
-                <table className="text-xs w-full">
+                <NumberedTable className="text-xs w-full">
                   <thead className="bg-gray-50 sticky top-0">
                     <tr>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-24" title="Full date+time on hover for each row">Time</th>
@@ -507,7 +508,7 @@ export default function WordCount() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
                 </>
               )}
             </div>
@@ -565,7 +566,7 @@ export default function WordCount() {
 
                   <div>
                     <div className="font-semibold text-gray-700 mb-1 text-xs">IPs that used this account</div>
-                    <table className="text-xs w-full">
+                    <NumberedTable className="text-xs w-full">
                       <thead className="bg-gray-50"><tr>
                         <th className="text-left px-2 py-1">IP</th>
                         <th className="text-right px-2 py-1">Actions</th>
@@ -583,12 +584,12 @@ export default function WordCount() {
                         ))}
                         {(!verify.ips || verify.ips.length === 0) && <tr><td colSpan="4" className="text-center text-gray-400 py-3">No IP data recorded</td></tr>}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
 
                   <div>
                     <div className="font-semibold text-gray-700 mb-1 text-xs">Recent logins (last 30)</div>
-                    <table className="text-xs w-full">
+                    <NumberedTable className="text-xs w-full">
                       <thead className="bg-gray-50"><tr>
                         <th className="text-left px-2 py-1">When</th>
                         <th className="text-left px-2 py-1">Action</th>
@@ -606,7 +607,7 @@ export default function WordCount() {
                         ))}
                         {(!verify.logins || verify.logins.length === 0) && <tr><td colSpan="4" className="text-center text-gray-400 py-3">No login records yet</td></tr>}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                 </>
               )}

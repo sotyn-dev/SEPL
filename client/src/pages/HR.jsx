@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -613,7 +614,7 @@ export default function HR() {
           </div>
 
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full min-w-[800px]">
+            <NumberedTable start={(candPager.page - 1) * candPager.perPage + 1} className="text-sm w-full min-w-[800px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Candidate</th>
@@ -758,7 +759,7 @@ export default function HR() {
                   </td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <Pagination {...candPager} />
         </>);
@@ -770,7 +771,7 @@ export default function HR() {
             <h3 className="font-semibold">Sub-Contractors</h3>
             <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', specialization: '', rate: 0, rate_unit: 'per_day', notes: '' }); setModal('contractor'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Contractor</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head">
+          <div className="card p-0 overflow-x-auto"><NumberedTable className="freeze-head">
             <thead><tr><th>Name</th><th>Phone</th><th>Specialization</th><th>Rate</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {contractors.map(c => (
@@ -789,7 +790,7 @@ export default function HR() {
               ))}
               {contractors.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No contractors yet</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -1469,7 +1470,7 @@ export default function HR() {
             </span>
           </p>
           <div className="border border-gray-200 rounded-lg overflow-hidden">
-            <table className="text-[12px] w-full">
+            <NumberedTable className="text-[12px] w-full">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Existing Candidate</th>
@@ -1496,7 +1497,7 @@ export default function HR() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setDupWarning(null)} className="btn btn-secondary">Cancel</button>
@@ -1744,7 +1745,7 @@ function ManpowerTab() {
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="text-sm w-full">
+          <NumberedTable className="text-sm w-full">
             <thead>
               <tr className="bg-gradient-to-b from-gray-50 to-gray-100 border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-500">
                 <th className="px-4 py-3 text-left font-semibold">Project</th>
@@ -1849,7 +1850,7 @@ function ManpowerTab() {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
     </div>

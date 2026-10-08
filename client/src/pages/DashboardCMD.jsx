@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // CMD Dashboard — Stage 1 (Operating Console)
 // Mirrors mam's HTML spec SEPL_CMD_Single_Page_Dashboard_v2.html
 // section-by-section, wired to /api/dashboards/cmd-detail.
@@ -125,13 +126,13 @@ export default function DashboardCMD() {
           <KpiTile label="Bank balance" value={fmtINR(pulse.bank_balance)} accent="amber"
             sub={pulse.runway_days != null ? `Runway ${pulse.runway_days}d` : 'no burn data'} />
           <KpiTile label="Order book" value={fmtINR(pulse.order_book)} accent="red"
-            sub={`${pulse.order_book_count} PO · ${operations.active_sites} active sites`} />
+            sub={`${pulse.order_book_count} open client POs · ${operations.active_projects.count} active projects`} />
           <KpiTile label="Revenue MTD" value={fmtINR(pulse.revenue_mtd)} accent="blue"
             sub="vs MTD target — set in EmailSettings" />
           <KpiTile label="CCC days" value={pulse.ccc != null ? `${pulse.ccc}d` : '—'} accent="violet"
             sub={`DSO ${pulse.dso ?? '—'} + DIO ${pulse.dio ?? '—'} − DPO ${pulse.dpo ?? '—'}`} />
           <KpiTile label="DPR adherence" value={fmtPct(pulse.dpr_adherence_pct)} accent={pulse.dpr_adherence_pct >= 80 ? 'green' : 'red'}
-            sub={`${operations.active_sites - operations.dpr.on_time} sites missed today`} />
+            sub={`${operations.dpr.missed} active projects without a DPR today`} />
           <KpiTile label="Open snags" value={fmtNum(pulse.open_snags)} accent="amber"
             sub={pulse.oldest_snag_days ? `oldest ${pulse.oldest_snag_days}d` : 'none open'} />
           <KpiTile label="Free inventory" value={fmtINR(pulse.free_inventory)} accent="teal"
@@ -313,7 +314,7 @@ export default function DashboardCMD() {
               ))}
             </div>
           </Card>
-          <Card title="DPR adherence today" meta={`${operations.active_sites} sites live`}>
+          <Card title="Project DPR coverage today" meta={`${operations.active_projects.count} active projects`}>
             <div style={{ height: 180 }}>
               <ResponsiveContainer>
                 <PieChart>
@@ -420,7 +421,7 @@ export default function DashboardCMD() {
             </div>
           </Card>
           <Card title="Top 5 debtors" meta="overdue">
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Customer</th>
                 <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Outstanding</th>
@@ -437,7 +438,7 @@ export default function DashboardCMD() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </Card>
           <Card title="Statutory · AP · payroll" meta="next 30d">
             <TicksList items={cash.statutory_dues.map(d => ({
@@ -507,7 +508,7 @@ export default function DashboardCMD() {
           <>
             <SectionHead>Data quality · Junk POs in book</SectionHead>
             <Card title="Junk-PO list" meta={`total ${fmtINR(data_quality.junk_po_total)} affected`}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
                 <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                   <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Lead No</th>
                   <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Client</th>
@@ -522,7 +523,7 @@ export default function DashboardCMD() {
                     <td style={{ padding: '8px 5px', textAlign: 'right', fontWeight: 600 }}>{fmtINR(p.po_amount)}</td>
                   </tr>
                 ))}</tbody>
-              </table>
+              </NumberedTable>
             </Card>
           </>
         )}

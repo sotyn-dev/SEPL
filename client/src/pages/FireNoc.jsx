@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Fire NOC Renewal Module — main page (PR2+PR4 shell).
 //
 // Tabs:
@@ -393,7 +394,7 @@ export default function FireNoc() {
             <h4 className="font-bold text-blue-900">Next 7 days expiries</h4>
             <p className="text-[11px] text-gray-500">cycles whose NOC expires this week — call today</p>
           </div>
-          <table className="min-w-[650px]">
+          <NumberedTable className="min-w-[650px]">
             <thead><tr>
               <th>Building</th><th>State</th><th>Type</th><th>Customer</th>
               <th>Expiry</th><th>Days</th><th>Stage</th>
@@ -416,7 +417,7 @@ export default function FireNoc() {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </>)}
 
@@ -452,7 +453,7 @@ export default function FireNoc() {
         </div>
 
         <div className="card p-0 table-responsive">
-          <table className="min-w-[850px]">
+          <NumberedTable className="min-w-[850px]">
             <thead><tr>
               <th>Building</th><th>Customer</th><th>State</th><th>Type</th>
               <th>Expiry</th><th>Days</th><th>Stage</th><th>Status</th><th>Owner</th>
@@ -479,7 +480,7 @@ export default function FireNoc() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </>)}
 
@@ -490,7 +491,7 @@ export default function FireNoc() {
             <h4 className="font-semibold text-sm">State cycle-year rules</h4>
             <p className="text-[11px] text-gray-500">Regulatory — not editable from UI. Most-specific match wins; fallback is __DEFAULT__ 5 years.</p>
           </div>
-          <table className="min-w-[500px]">
+          <NumberedTable className="min-w-[500px]">
             <thead><tr><th>State</th><th>Building type filter</th><th>Cycle years</th></tr></thead>
             <tbody>
               {dashboard.state_rules.map((r, i) => (
@@ -501,7 +502,7 @@ export default function FireNoc() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 
@@ -724,7 +725,7 @@ export default function FireNoc() {
               <div>
                 <div className="text-xs font-semibold text-red-700 mb-1">Failed rows (first 50)</div>
                 <div className="overflow-x-auto border rounded">
-                  <table className="w-full text-xs">
+                  <NumberedTable className="w-full text-xs">
                     <thead className="bg-red-50 text-red-700">
                       <tr>
                         <th className="px-2 py-1.5 text-left">Excel Row</th>
@@ -739,7 +740,7 @@ export default function FireNoc() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}

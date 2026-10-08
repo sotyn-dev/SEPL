@@ -561,7 +561,13 @@ function advanceRegistration(db,id,input,user) {
     if(!fields)fail('Choose a valid registration stage action');
     for(const key of Object.keys(input))if(!['version','action',...fields].includes(key))fail(`Unknown stage field: ${key}`);
     if(action==='start_documents'||action==='submit_documents') {
-      return transitionEntity(db,'registrations',id,{version:before.version,status:action==='start_documents'?'started':'submitted'},user);
+      let current=before;
+      if(action==='submit_documents'&&before.status==='not_started') {
+        // Basic details are complete on save. Starting and submitting are one
+        // atomic action, so missing documents cannot leave a partial advance.
+        current=transitionEntity(db,'registrations',id,{version:before.version,status:'started'},user);
+      }
+      return transitionEntity(db,'registrations',id,{version:current.version,status:action==='start_documents'?'started':'submitted'},user);
     }
     if(action==='accept_portal') {
       if(before.status!=='submitted'||!before.submitted_at)fail('Submit the documents before recording portal acceptance',409,'DOCUMENTS_NOT_SUBMITTED');

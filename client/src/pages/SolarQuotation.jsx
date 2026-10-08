@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -361,7 +362,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
       {tab === 'saved' ? (
         <div className="card p-4">
           <div className="table-responsive">
-          <table className="w-full text-sm min-w-[700px]">
+          <NumberedTable className="w-full text-sm min-w-[700px]">
             <thead><tr className="bg-gray-50 text-left text-[10px] uppercase text-gray-500">
               <th className="p-2">Quote</th><th className="p-2">Client</th><th className="p-2">Type</th>
               <th className="p-2 text-right">kW</th><th className="p-2 text-right">Sell ₹</th><th className="p-2 text-right">Margin</th><th className="p-2">Updated</th><th></th></tr></thead>
@@ -379,7 +380,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                 </tr>))}
               {!saved.length && <tr><td colSpan={8} className="p-6 text-center text-gray-400">No saved solar quotations yet.</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
           </div>
         </div>
       ) : (

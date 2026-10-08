@@ -347,7 +347,7 @@ export default function PMSTasks() {
       {/* Mam wants PMS scoped to the logged-in user (like Delegations) —
           users land on their own queue, can expand to team-wide via
           'Followup'. Admin gets the full archive too. */}
-      <div className="flex gap-2 text-sm overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+      <div className="flex flex-wrap items-center gap-2 text-sm pb-1">
         {[
           { id: 'mine', label: 'My Tasks' },
           { id: 'given', label: 'Given by me' },
@@ -360,7 +360,7 @@ export default function PMSTasks() {
           </button>
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
-        <div className="w-[248px]">
+        <div className="w-[248px] max-w-full">
           <StatusMultiSelect
             options={[
               { id: 'pending', name: 'Pending' },

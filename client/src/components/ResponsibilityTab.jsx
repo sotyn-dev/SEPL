@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Reusable "Responsible" tab — drop <ResponsibilityTab module="crm_funnel" />
 // into any module page to get the per-record RACI + SLA time-tracking board
 // (mam 2026-06-27). Per step you pick Responsible / Accountable / Consulted /
@@ -165,7 +166,7 @@ export default function ResponsibilityTab({ module, title }) {
       ) : view === 'summary' ? (
         // ── By-person performance summary ──
         <div className="overflow-x-auto border rounded-lg bg-white">
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead className="bg-gray-50 text-gray-500 uppercase tracking-wide">
               <tr>
                 <th className="text-left p-2">Person</th>
@@ -192,7 +193,7 @@ export default function ResponsibilityTab({ module, title }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       ) : (
         // ── Per-record grid ──

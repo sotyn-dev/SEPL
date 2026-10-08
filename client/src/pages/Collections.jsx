@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, lazy, Suspense } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -261,7 +262,7 @@ export default function Collections() {
           </div>
           {targetSummary.by_bucket.length > 0 && (
             <div className="overflow-x-auto border-t">
-              <table className="text-sm w-full">
+              <NumberedTable className="text-sm w-full">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ageing Bucket</th>
@@ -288,7 +289,7 @@ export default function Collections() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           )}
         </div>
@@ -298,7 +299,7 @@ export default function Collections() {
       {/* Receivables Table */}
       <div className="card p-0">
         <div className="table-responsive">
-          <table className="freeze-head min-w-[900px]">
+          <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head min-w-[900px]">
             <thead>
               <tr>
                 <th>Site / Client</th>
@@ -371,7 +372,7 @@ export default function Collections() {
               ))}
               {receivables.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No receivables found</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination {...pager} />
       </div>
@@ -498,7 +499,7 @@ export default function Collections() {
             {editModal.payments && editModal.payments.length > 0 && (
               <div className="card p-3">
                 <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Payment History ({editModal.payments.length} installment{editModal.payments.length === 1 ? '' : 's'})</h5>
-                <table className="text-xs w-full">
+                <NumberedTable className="text-xs w-full">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="text-left px-2 py-1.5 text-gray-500">Date</th>
@@ -517,7 +518,7 @@ export default function Collections() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
                 <p className="text-[10px] text-gray-400 mt-1">Add new installment via the ₹ button on the row (closes this modal first).</p>
               </div>
             )}

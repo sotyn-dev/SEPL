@@ -131,8 +131,29 @@ export function DocumentsPanel({ kind, record, documents = [], options, canUploa
   const catalog = Array.isArray(options?.catalog) ? options.catalog : Object.values(options?.catalog || {}).flat();
   const docTypes = options?.document_types || catalog.filter(item => ['doc_type', 'document_type'].includes(item.kind) && item.active !== 0);
   const [uploading, setUploading] = useState(false); const [downloading, setDownloading] = useState(null);
-  const [form, setForm] = useState({ type_id: '', purpose: 'invoice', expiry_date: '', remarks: '' }); const [file, setFile] = useState(null); const [error, setError] = useState('');
+  const [form, setForm] = useState({ purpose: 'invoice', expiry_date: '', remarks: '' }); const [file, setFile] = useState(null); const [error, setError] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]); const [uploadTypeIds, setUploadTypeIds] = useState([]);
   const [review, setReview] = useState(null); const [reviewBusy, setReviewBusy] = useState(false); const [reviewError, setReviewError] = useState('');
+  const [today] = useState(() => new Date(Date.now() + 19800000).toISOString().slice(0, 10));
+  const typeId = document => String(document.type_id ?? document.document_type_id ?? '');
+  const statusOf = document => document.expiry_date && document.expiry_date < today && document.status !== 'rejected' ? 'expired' : document.status || 'uploaded';
+  const ready = document => ['uploaded', 'verified'].includes(statusOf(document));
+  const checklist = docTypes.map(type => {
+    const versions = documents.filter(document => typeId(document) === String(type.id)).sort((a, b) => Number(b.id) - Number(a.id));
+    // Submission accepts any unexpired uploaded/verified version. Match that
+    // rule rather than hiding a valid file behind a newer rejected upload.
+    return { ...type, required: !!Number(type.required), current: versions.find(ready) || versions[0] };
+  });
+  const requiredRows = checklist.filter(type => type.required);
+  const requiredReady = requiredRows.filter(type => type.current && ready(type.current)).length;
+  const selectedTypes = docTypes.filter(type => selectedIds.includes(String(type.id)));
+  const uploadTypes = docTypes.filter(type => uploadTypeIds.includes(String(type.id)));
+  const uploadTitle = uploadTypes.length === 1 ? `Upload ${uploadTypes[0].label}` : `Upload one file for ${uploadTypes.length} document types`;
+  const startUpload = types => {
+    setFile(null); setError(''); setForm({ purpose: 'invoice', expiry_date: '', remarks: '' });
+    setUploadTypeIds((Array.isArray(types) ? types : [types]).map(type => String(type.id)));
+  };
+  const closeUpload = () => { if (!uploading) { setFile(null); setError(''); setUploadTypeIds([]); } };
   const saveReview = async event => {
     event.preventDefault(); setReviewBusy(true); setReviewError('');
     try { await api.patch(`${BASE}/documents/${kind === 'invoices' ? 'invoice-' : ''}${review.id}`, { status: review.status, remarks: review.remarks, version: review.version }); toast.success('Document review saved'); setReview(null); onSaved(); }
@@ -144,34 +165,50 @@ export function DocumentsPanel({ kind, record, documents = [], options, canUploa
     catch (err) { toast.error(errorMessage(err)); } finally { setDownloading(null); }
   };
   const upload = async event => {
-    event.preventDefault(); if (!file || uploading) return;
+    event.preventDefault(); if (!file || uploading || (kind === 'registrations' && !uploadTypes.length)) return;
     const uploadForm = event.currentTarget;
     setUploading(true); setError('');
     const data = new FormData(); data.append('file', file);
     Object.entries(form).forEach(([key, value]) => { if (value !== '') data.append(key, value); });
+    if (kind === 'registrations') {
+      if (uploadTypes.length === 1) data.append('type_id', uploadTypes[0].id);
+      else data.append('type_ids', JSON.stringify(uploadTypes.map(type => type.id)));
+    }
     data.append('version', record.version ?? 0);
-    try { await api.post(`${BASE}/${kind}/${record.id}/documents`, data); toast.success('Document uploaded'); uploadForm.reset(); setFile(null); setForm({ type_id: '', purpose: 'invoice', expiry_date: '', remarks: '' }); onSaved(); }
+    try { await api.post(`${BASE}/${kind}/${record.id}/documents`, data); toast.success(uploadTypes.length > 1 ? `File uploaded for ${uploadTypes.length} document types` : 'Document uploaded'); uploadForm.reset(); setFile(null); setForm({ purpose: 'invoice', expiry_date: '', remarks: '' }); setSelectedIds(ids => ids.filter(id => !uploadTypeIds.includes(id))); setUploadTypeIds([]); onSaved(); }
     catch (err) { setError(errorMessage(err)); } finally { setUploading(false); }
   };
-  return <section className="space-y-3">
-    <h4 className="font-semibold text-slate-800">Documents & checklist</h4>
-    {kind === 'registrations' && docTypes.length > 0 && <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{docTypes.map(type => {
-      const found = documents.find(document => String(document.type_id || document.document_type_id) === String(type.id));
-      return <div key={type.id} className="border rounded-lg p-2.5 text-xs flex flex-wrap items-center gap-2"><span className="flex-1">{type.label}{type.required ? ' *' : ''}</span><StatusBadge value={found ? found.status || 'uploaded' : 'docs_pending'} /></div>;
-    })}</div>}
-    <div className="space-y-2">{documents.map(document => <div className="border rounded-xl p-3 text-sm" key={document.id}>
-      <div className="flex flex-wrap gap-2 items-center"><span className="font-semibold flex-1 break-words">{document.type_label || document.document_type || label(document.purpose) || document.filename}</span><StatusBadge value={document.status || 'uploaded'} /><button type="button" className="btn btn-secondary text-xs inline-flex items-center gap-1" disabled={downloading === document.id} onClick={() => download(document)}><FiDownload />{downloading === document.id ? 'Downloading…' : 'Download'}</button>{canReview && <button type="button" className="btn btn-secondary text-xs" onClick={() => { setReviewError(''); setReview({ ...document, status: document.status || 'uploaded', remarks: document.remarks || '' }); }}>Review</button>}</div>
-      <p className="text-xs text-slate-500 mt-2 break-all">{document.filename || document.file_name}</p><div className="grid grid-cols-2 gap-2 mt-2 text-xs"><div>Uploaded: <Value fieldKey="uploaded_at" value={document.uploaded_at || document.created_at} /></div><div>Expiry: <Value field={{ type: 'date' }} value={document.expiry_date} /></div></div>{document.remarks && <p className="text-xs mt-2">{document.remarks}</p>}
-    </div>)}</div>
-    {!documents.length && <p className="text-sm text-slate-500">No documents uploaded yet.</p>}
-    {canUpload && <form onSubmit={upload} className="bg-slate-50 border rounded-xl p-3 space-y-3">
+  const documentDetails = (document, showTitle = true) => <div className="rounded-lg bg-slate-50 p-3 text-sm" key={document.id}>
+    <div className="flex flex-wrap gap-2 items-center"><span className="font-medium flex-1 min-w-0 break-words">{showTitle ? document.type_label || document.document_type || label(document.purpose) || document.filename : document.filename || document.file_name}</span><StatusBadge value={statusOf(document)} /><button type="button" className="btn btn-secondary text-xs inline-flex items-center gap-1" disabled={downloading === document.id} onClick={() => download(document)}><FiDownload />{downloading === document.id ? 'Downloading…' : 'Download'}</button>{kind === 'registrations' && canUpload && docTypes.some(type => String(type.id) === typeId(document)) && <button type="button" className="btn btn-secondary text-xs" disabled={uploading} onClick={() => startUpload(docTypes.find(type => String(type.id) === typeId(document)))}>Upload new file</button>}{canReview && <button type="button" className="btn btn-secondary text-xs" onClick={() => { setReviewError(''); setReview({ ...document, status: document.status || 'uploaded', remarks: document.remarks || '' }); }}>Review</button>}</div>
+    {showTitle && <p className="text-xs text-slate-500 mt-2 break-all">{document.filename || document.file_name}</p>}<div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-xs text-slate-500"><div>Uploaded: <Value fieldKey="uploaded_at" value={document.uploaded_at || document.created_at} /></div>{document.expiry_date && <div>Expiry: <Value field={{ type: 'date' }} value={document.expiry_date} /></div>}</div>{document.remarks && <p className="text-xs mt-2 whitespace-pre-wrap break-words">{document.remarks}</p>}
+  </div>;
+  const uploadFields = () => <form key={uploadTypeIds.join(',') || 'invoice'} aria-label={kind === 'registrations' ? uploadTitle : 'Upload invoice document'} onSubmit={upload} className="bg-blue-50/50 border border-blue-100 rounded-xl p-3 space-y-3">
+      {kind === 'registrations' && <div className="space-y-2"><p className="text-sm text-slate-600">{record.company_name || 'This company'}</p><ul aria-label="Selected document types" className="flex flex-wrap gap-2">{uploadTypes.map(type => <li key={type.id} className="rounded-lg bg-blue-100 px-2 py-1 text-xs text-blue-900">{type.label}{Number(type.required) ? ' *' : ''}</li>)}</ul>{uploadTypes.length > 1 && <p className="text-xs text-slate-500">Upload a combined file containing these documents. The same file, expiry date and remarks will apply to every selected type.</p>}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {kind === 'registrations' ? <label><span className="label">Document type *</span><select className="select" required value={form.type_id} onChange={event => setForm(v => ({ ...v, type_id: event.target.value }))}><option value="">Select type…</option>{docTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label> : <label><span className="label">Purpose *</span><select className="select" required value={form.purpose} onChange={event => setForm(v => ({ ...v, purpose: event.target.value }))}><option value="invoice">Invoice PDF</option><option value="proof">Completion / delivery proof</option></select></label>}
-        <label><span className="label">Expiry date</span><input type="date" className="input" value={form.expiry_date} onChange={event => setForm(v => ({ ...v, expiry_date: event.target.value }))} /></label>
-        <label className="sm:col-span-2"><span className="label">File *</span><input type="file" required accept={kind === 'invoices' && form.purpose === 'invoice' ? '.pdf' : '.pdf,.jpg,.jpeg,.png'} className="input" onChange={event => setFile(event.target.files?.[0] || null)} /></label>
-        <label className="sm:col-span-2"><span className="label">Remarks</span><textarea className="input" value={form.remarks} onChange={event => setForm(v => ({ ...v, remarks: event.target.value }))} /></label>
-      </div>{error && <p role="alert" className="text-sm text-red-700">{error}</p>}<button type="submit" className="btn btn-primary inline-flex items-center gap-2" disabled={uploading || !file}><FiUpload />{uploading ? 'Uploading…' : 'Upload document'}</button>
-    </form>}
+        {kind === 'invoices' && <label><span className="label">Purpose *</span><select className="select" required disabled={uploading} value={form.purpose} onChange={event => setForm(v => ({ ...v, purpose: event.target.value }))}><option value="invoice">Invoice PDF</option><option value="proof">Completion / delivery proof</option></select></label>}
+        <label><span className="label">Expiry date (if applicable)</span><input type="date" className="input" disabled={uploading} value={form.expiry_date} onChange={event => setForm(v => ({ ...v, expiry_date: event.target.value }))} /></label>
+        <label className="sm:col-span-2"><span className="label">File *</span><input type="file" required disabled={uploading} accept={kind === 'invoices' && form.purpose === 'invoice' ? '.pdf' : '.pdf,.jpg,.jpeg,.png'} className="input" onChange={event => setFile(event.target.files?.[0] || null)} /><span className="text-xs text-slate-500 mt-1 block">{kind === 'invoices' && form.purpose === 'invoice' ? 'PDF' : 'PDF, JPG or PNG'} · up to 10 MB</span></label>
+        <label className="sm:col-span-2"><span className="label">Remarks (optional)</span><textarea className="input" disabled={uploading} rows={2} value={form.remarks} onChange={event => setForm(v => ({ ...v, remarks: event.target.value }))} /></label>
+      </div>{error && <p role="alert" className="text-sm text-red-700">{error}</p>}<div className="flex flex-wrap justify-end gap-2">{kind === 'registrations' && <button type="button" className="btn btn-secondary" disabled={uploading} onClick={closeUpload}>Cancel</button>}<button type="submit" className="btn btn-primary inline-flex items-center gap-2" disabled={uploading || !file}><FiUpload />{uploading ? 'Uploading…' : uploadTypes.length > 1 ? `Save for ${uploadTypes.length} document types` : uploadTypes.length ? `Save ${uploadTypes[0].label}` : 'Upload document'}</button></div>
+    </form>;
+  return <section className="space-y-3">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="font-semibold text-slate-800">Documents &amp; checklist</h4>{kind === 'registrations' && <p className="text-xs text-slate-500 mt-1">{canUpload ? 'Click Docs pending to upload that document. ' : ''}Items marked * are required.</p>}</div>{kind === 'registrations' && requiredRows.length > 0 && <span className={'rounded-lg px-3 py-2 text-xs font-semibold ' + (requiredReady === requiredRows.length ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800')}>{requiredReady} / {requiredRows.length} required documents ready</span>}</div>
+    {kind === 'registrations' ? <>
+      {canUpload && checklist.length > 0 && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-600">Select document types to upload one combined file.</p><div className="flex items-center gap-2">{selectedTypes.length > 0 && <button type="button" className="text-xs text-slate-500 hover:text-slate-800" disabled={uploading} onClick={() => setSelectedIds([])}>Clear selection</button>}<button type="button" className="btn btn-primary text-xs inline-flex items-center gap-1" disabled={uploading || !selectedTypes.length} onClick={() => startUpload(selectedTypes)}><FiUpload />Upload one file{selectedTypes.length ? ` (${selectedTypes.length})` : ''}</button></div></div>}
+      <ul aria-label="Company document checklist" className="grid grid-cols-1 sm:grid-cols-2 gap-2">{checklist.map(type => {
+        const status = type.current ? statusOf(type.current) : 'docs_pending';
+        const needsUpload = !type.current || !ready(type.current);
+        const checked = selectedIds.includes(String(type.id));
+        return <li key={type.id} className={'border rounded-lg p-2.5 text-xs flex items-center gap-2 ' + (checked ? 'border-blue-300 bg-blue-50' : '')}><label className="flex flex-1 min-w-0 items-center gap-2 break-words">{canUpload && <input type="checkbox" className="shrink-0 accent-blue-700" aria-label={`Select ${type.label}`} checked={checked} disabled={uploading} onChange={event => setSelectedIds(ids => event.target.checked ? [...ids, String(type.id)] : ids.filter(id => id !== String(type.id)))} />}<span>{type.label}{type.required ? ' *' : ''}</span></label>{canUpload && needsUpload ? <button type="button" aria-label={`Upload ${type.label} — ${label(status)}`} title={`Upload ${type.label}`} className="shrink-0 rounded-full hover:ring-2 hover:ring-amber-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" disabled={uploading} onClick={() => startUpload(type)}><StatusBadge value={status} /></button> : <StatusBadge value={status} />}</li>;
+      })}</ul>
+      {!checklist.length && <p className="text-sm text-slate-500">No document types are configured for this checklist.</p>}
+      <div className="space-y-2">{documents.map(document => documentDetails(document))}</div>
+      {canUpload && uploadTypes.length > 0 && <Modal isOpen title={uploadTitle} onClose={closeUpload}>{uploadFields()}</Modal>}
+    </> : <>
+      <div className="space-y-2">{documents.map(document => documentDetails(document))}</div>
+      {!documents.length && <p className="text-sm text-slate-500">No documents uploaded yet.</p>}
+      {canUpload && uploadFields()}
+    </>}
     {review && <Modal isOpen onClose={() => { if (!reviewBusy) setReview(null); }} title="Review document"><form onSubmit={saveReview} className="space-y-4"><p className="text-sm break-all">{review.filename || review.file_name}</p>{reviewError && <p role="alert" className="text-sm text-red-700">{reviewError}</p>}<label className="block"><span className="label">Status</span><select className="select" value={review.status} disabled={reviewBusy} onChange={event => setReview(v => ({ ...v, status: event.target.value }))}>{(options.document_statuses || ['uploaded', 'pending', 'verified', 'rejected', 'expired']).map(status => <option key={status} value={status}>{label(status)}</option>)}</select></label><label className="block"><span className="label">Remarks *</span><textarea className="input min-h-24" required value={review.remarks} disabled={reviewBusy} onChange={event => setReview(v => ({ ...v, remarks: event.target.value }))} /></label><div className="flex justify-end gap-2"><button type="button" disabled={reviewBusy} className="btn btn-secondary" onClick={() => setReview(null)}>Cancel</button><button className="btn btn-primary" disabled={reviewBusy}>{reviewBusy ? 'Saving…' : 'Save review'}</button></div></form></Modal>}
   </section>;
 }

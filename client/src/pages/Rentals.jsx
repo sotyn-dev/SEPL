@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Room Rental management — track rented properties (staff
 // accommodation), rooms within them, who's currently occupying which
 // room, and monthly rent payments to each landlord. Dashboard surfaces
@@ -270,7 +271,7 @@ export default function Rentals() {
           </div>
           <div className="card p-0 overflow-hidden">
             <div className="table-responsive">
-            <table className="freeze-head min-w-[850px]">
+            <NumberedTable className="freeze-head min-w-[850px]">
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
@@ -412,7 +413,7 @@ export default function Rentals() {
                   </tr>
                 );})}
               </tbody>
-            </table>
+            </NumberedTable>
             </div>
           </div>
         </>
@@ -503,7 +504,7 @@ export default function Rentals() {
       {tab === 'bookings' && (
         <div className="card p-0 overflow-hidden">
           <div className="table-responsive">
-          <table className="freeze-head min-w-[800px]">
+          <NumberedTable className="freeze-head min-w-[800px]">
             <thead><tr><th>Status</th><th>Occupant</th><th>Property / Room</th><th>City</th><th>Site</th><th>Check-in</th><th>Check-out</th><th>Rent Share</th><th>Actions</th></tr></thead>
             <tbody>
               {bookings.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bookings yet</td></tr>}
@@ -525,7 +526,7 @@ export default function Rentals() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
           </div>
         </div>
       )}
@@ -580,7 +581,7 @@ export default function Rentals() {
                     </div>
                   </div>
                   <div className="overflow-x-auto">
-                    <table>
+                    <NumberedTable>
                       <thead className="bg-gray-50">
                         <tr>
                           <th>Req No / Property</th>
@@ -616,7 +617,7 @@ export default function Rentals() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                 </div>
               );

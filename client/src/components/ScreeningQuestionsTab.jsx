@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Screening Questions Tab — manage the screening form and its auto-
 // rejection rules.
 //
@@ -181,7 +182,7 @@ export default function ScreeningQuestionsTab() {
 
       {/* List */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase w-[140px]">Scope / Type</th>
@@ -248,7 +249,7 @@ export default function ScreeningQuestionsTab() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* ─── CREATE / EDIT MODAL ─── */}

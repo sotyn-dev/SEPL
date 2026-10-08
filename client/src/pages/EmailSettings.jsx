@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -60,7 +61,7 @@ function MailAccounts() {
 
       {rows.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <NumberedTable className="w-full text-sm">
             <thead><tr className="text-gray-500 text-xs uppercase border-b"><th className="text-left py-1">Name</th><th className="text-left">From</th><th className="text-left">Login</th><th className="text-left">Password</th><th></th></tr></thead>
             <tbody>
               {rows.map(a => (
@@ -77,7 +78,7 @@ function MailAccounts() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
           <div className="flex gap-2 items-end mt-2">
             <div className="flex-1 max-w-xs"><label className="label">Test address</label><input className="input" type="email" value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="your@address.com" /></div>
             <p className="text-[11px] text-gray-400 pb-2">Type an address, then press “Send test” on a mailbox.</p>

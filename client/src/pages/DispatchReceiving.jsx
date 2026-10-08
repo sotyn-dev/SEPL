@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -120,7 +121,7 @@ export default function DispatchReceiving() {
     </div>
     <input className="input max-w-md" aria-label="Search receiving records" placeholder="Search site, indent, bill or status…" value={search} onChange={e => setSearch(e.target.value)} />
     <div className="card overflow-x-auto">
-      <table className="w-full text-sm"><thead><tr className="text-left border-b"><th className="p-3">Site Name</th><th className="p-3">Indent No.</th><th className="p-3">Bill Number</th><th className="p-3">Receiving</th><th className="p-3">Recorded By</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>
+      <NumberedTable start={(pagination.page - 1) * pagination.perPage + 1} className="w-full text-sm"><thead><tr className="text-left border-b"><th className="p-3">Site Name</th><th className="p-3">Indent No.</th><th className="p-3">Bill Number</th><th className="p-3">Receiving</th><th className="p-3">Recorded By</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>
         <tbody>{pagination.pageItems.map(r => <tr key={r.id} className="border-b align-top">
           <td className="p-3">{r.site_name}</td>
           <td className="p-3 whitespace-nowrap">{r.indent_number}</td>
@@ -140,7 +141,7 @@ export default function DispatchReceiving() {
             </div>
           </td>
         </tr>)}</tbody>
-      </table>
+      </NumberedTable>
       {!rows.length && <p className="p-6 text-center text-gray-500">{loading ? 'Loading…' : 'No receiving entries yet.'}</p>}
       {!!rows.length && !filtered.length && <p className="p-6 text-center text-gray-500">No matching receiving entries.</p>}
     </div>

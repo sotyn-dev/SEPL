@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -485,7 +486,7 @@ export default function BusinessBook() {
   };
 
   const renderLeadRow = (b, child = false) => (
-    <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
+    <tr key={b.id} data-serial-skip={child} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
       {/* Lead No + Type */}
       <td className={`px-3 py-1.5 align-top ${child ? 'pl-8' : ''}`}>
         <span className="font-bold text-blue-700 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
@@ -701,7 +702,7 @@ export default function BusinessBook() {
       {viewMode === 'list' && (
       <div className="card p-0">
         <div className="overflow-x-auto">
-          <table className="min-w-full freeze-head min-w-[850px]">
+          <NumberedTable className="min-w-full freeze-head min-w-[850px]">
             <thead><tr className="bg-gray-50/80 border-b border-gray-200">
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Lead No</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Client</th>
@@ -768,7 +769,7 @@ export default function BusinessBook() {
                     </tr>
                     {/* Sub-header for the expanded per-lead rows */}
                     {open && (
-                      <tr className="bg-gray-100/80 text-[10px] uppercase tracking-wide text-gray-500">
+                      <tr data-serial-skip className="bg-gray-100/80 text-[10px] uppercase tracking-wide text-gray-500">
                         <td className="px-3 py-1 pl-8">Lead No</td>
                         <td className="px-3 py-1">Client</td>
                         <td className="px-3 py-1">Project / Location</td>
@@ -785,7 +786,7 @@ export default function BusinessBook() {
               })}
               {entries.length === 0 && <tr><td colSpan="8" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
       )}
@@ -873,7 +874,7 @@ export default function BusinessBook() {
           {/* Merged client + site table */}
           <div className="card p-0">
           <div className="overflow-x-auto">
-            <table className="min-w-full freeze-head min-w-[850px]">
+            <NumberedTable className="min-w-full freeze-head min-w-[850px]">
               <thead><tr className="bg-gray-50">
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600 w-8"></th>
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
@@ -930,7 +931,7 @@ export default function BusinessBook() {
                         <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(g.balance)}</td>
                       </tr>
                       {open && multi && g.orders.map(o => (
-                        <tr key={o.id} className="bg-white hover:bg-gray-50 text-sm">
+                        <tr key={o.id} data-serial-skip className="bg-white hover:bg-gray-50 text-sm">
                           <td></td>
                           <td className="px-3 py-2 pl-6">
                             <span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(o)}>{o.lead_no}</span>
@@ -963,7 +964,7 @@ export default function BusinessBook() {
                   </tr>
                 </tfoot>
               )}
-            </table>
+            </NumberedTable>
           </div>
           </div>
         </div>

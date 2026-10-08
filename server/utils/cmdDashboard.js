@@ -11,7 +11,8 @@
 // ratio), the field returns `null` and the frontend renders an "—" with
 // a "needs capture" tooltip rather than fabricating a number.
 
-const TODAY = () => new Date().toISOString().slice(0, 10);
+const { getActiveProjectMetric, countActiveProjectsWithDpr } = require('../lib/activeProjects');
+const { istToday: TODAY } = require('../lib/istDate');
 const daysAgo = (n) => {
   const d = new Date(); d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
@@ -47,21 +48,8 @@ function computeCmdDetail(db, daysRaw) {
   `)?.c));
   const runwayDays = dailyBurn > 0 ? Math.round(cashOnHand / dailyBurn) : null;
 
-  // Active sites / order book / revenue MTD / open snags
-  // UNIQUE sites, not raw rows. Mam (2026-05-30): "pick unique sites from
-  // business book." The `sites` table carries legacy duplicates from PO
-  // re-uploads (same project, stray-quote name variants) that inflate the
-  // count (was 81). Dedupe by the linked business_book project; active
-  // sites with no BB link fall back to a normalized name.
-  const activeSites = num(safeGet(db, `
-    SELECT COUNT(*) c FROM (
-      SELECT DISTINCT CAST(business_book_id AS TEXT) k
-        FROM sites WHERE status='active' AND business_book_id IS NOT NULL
-      UNION
-      SELECT DISTINCT 'name:' || TRIM(LOWER(name)) k
-        FROM sites WHERE status='active' AND COALESCE(business_book_id,0)=0
-    )
-  `)?.c);
+  const activeProjects = getActiveProjectMetric(db);
+  const activeSites = activeProjects.count; // compatibility alias for older clients
   const orderBook = num(safeGet(db, `
     SELECT COALESCE(SUM(total_amount),0) c FROM purchase_orders WHERE status NOT IN ('completed','rejected')
   `)?.c);
@@ -81,7 +69,7 @@ function computeCmdDetail(db, daysRaw) {
   const oldestSnagDays = oldestSnag ? Math.round(oldestSnag.days) : null;
 
   // DPR adherence today = sites with DPR today / active sites
-  const dprToday = num(safeGet(db, `SELECT COUNT(DISTINCT site_id) c FROM dpr WHERE report_date=?`, today)?.c);
+  const dprToday = countActiveProjectsWithDpr(db, today);
   const dprAdherencePct = activeSites > 0 ? Math.round((dprToday / activeSites) * 100) : null;
 
   // CCC components
@@ -689,6 +677,7 @@ function computeCmdDetail(db, daysRaw) {
     },
 
     operations: {
+      active_projects: activeProjects,
       active_sites: activeSites,
       snags_by_priority: snagsByPriority,
       snag_aging: snagAging,

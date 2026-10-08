@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // QQTC Scorecard 2.0 — the War Room "Performance" tab.
 //
 // Replaces the old single-table PerformanceView with mam's full
@@ -243,7 +244,7 @@ function LiveScorecard({ m }) {
       <SecTitle sub="computed from this week's MIS">📋 Live QQTC scorecard</SecTitle>
       <Legend />
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
             {['#', 'Employee', 'Template', 'Done', 'Quantity', 'Quality', 'Time*', 'QQTC', 'ERP %'].map(h => <th key={h} style={th}>{h}</th>)}
           </tr></thead>
@@ -262,7 +263,7 @@ function LiveScorecard({ m }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8 }}>*Time = on-time % from RACI step completion where available, else “pending”. Cost is per-role and awaits weekly finance entry, so it is excluded from this week's composite.</div>
     </>
@@ -297,7 +298,7 @@ function TopPerformers({ m }) {
             ))}
           </div>
           <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{['#', 'Employee', 'Role', 'Quantity', 'Quality', 'QQTC', 'ERP %', 'Read'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
                 {ranked.map((r, i) => (
@@ -313,7 +314,7 @@ function TopPerformers({ m }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </>
       )}
@@ -328,7 +329,7 @@ function Ownership({ m, templates }) {
     <>
       <SecTitle sub={`${templates.length} templates · ${m.orphanTpls.length} with no live owner`}>👤 Role-template ownership</SecTitle>
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{['Role template', 'KPIs', 'Live owners', 'Status'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {sorted.map(t => {
@@ -343,7 +344,7 @@ function Ownership({ m, templates }) {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <SecTitle sub="found in the live ERP">🚩 Data-integrity flags</SecTitle>
@@ -379,7 +380,7 @@ function FixOwnership({ m }) {
       </div>
       <SecTitle sub="assign each a template by their ERP designation — apply in Performance → Assign Templates">🛠️ Unowned staff</SecTitle>
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{['#', 'Employee', 'ERP designation', 'Suggested family', 'Action'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {[...unowned].sort((a, b) => (b.department ? 1 : 0) - (a.department ? 1 : 0)).map((r, i) => {
@@ -395,7 +396,7 @@ function FixOwnership({ m }) {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </>
   );
@@ -512,7 +513,7 @@ function ModuleAudit({ cmd }) {
       <SecTitle sub="RACI · QQTC · Goldratt's 8 Rules of Flow">🗂️ Whole-ERP module audit</SecTitle>
       <div style={{ fontSize: 11.5, color: C.ink2, marginBottom: 10 }}>⭐ = touches the binding constraint (Bill → Cash). Ownership &amp; fix recommendations are the design; red-flag figures are illustrative until the live ops feed is confirmed.</div>
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{['Module', 'Owner', 'Backup', 'QQTC', 'Rules ✗', 'Red flags / fix'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {sorted.map(mod => (
@@ -526,7 +527,7 @@ function ModuleAudit({ cmd }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 10 }}><b>Rules:</b> {FLOW_RULES}</div>
     </>
@@ -637,7 +638,7 @@ function Gamification({ cmd }) {
       </div>
       <SecTitle sub="Lead → Handover · one throughput metric per stage">🎮 Pipeline scoreboard</SecTitle>
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <NumberedTable style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{['#', 'Stage', 'Throughput metric', 'Live', 'Red trigger', 'Owner', 'Mechanic'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {GAME.stages.map((s, i) => {
@@ -656,7 +657,7 @@ function Gamification({ cmd }) {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <div style={{ ...card, background: '#FFF8E6', borderColor: '#FDE68A', color: '#92400E', marginTop: 14, fontSize: 12.5, lineHeight: 1.6 }}>🛡️ {GAME.guardrail}</div>
     </>

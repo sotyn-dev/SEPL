@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Final-Round Question Bank — curated questions for the MD round.
 //
 // Mam (2026-05-22 Phase 1 Batch B, module #8):
@@ -197,7 +198,7 @@ export default function FinalRoundQuestionsTab() {
 
       {/* List */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase w-[140px]">Category / Diff</th>
@@ -245,7 +246,7 @@ export default function FinalRoundQuestionsTab() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* ─── CREATE / EDIT MODAL ─── */}

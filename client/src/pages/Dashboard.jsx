@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import ActiveProjectsMetric from '../components/ActiveProjectsMetric';
 import { Link } from 'react-router-dom';
 import api from '../api';
 import StatusBadge from '../components/StatusBadge';
@@ -71,6 +72,7 @@ export default function Dashboard() {
       {/* Daily SOTYN.AI-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
       <ErpMantraBanner />
+      <ActiveProjectsMetric />
 
       {/* Team Performance — LAST completed week, straight from the Champions
           engine (mam 2026-08-17: "gamification will do as per last week

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import EmployeePtRules from '../components/EmployeePtRules';
 import StaffTypeFilter from '../components/StaffTypeFilter';
 import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
@@ -622,7 +623,7 @@ export default function Payroll() {
             {/* dense-cols (mam 2026-08-19 "payroll column widths are wide") —
                 the Present/Sunday/CL/Holiday split added four columns, so the
                 row now needs the tight px-2 padding to fit without scrolling. */}
-            <table className="freeze-head freeze-col whitespace-nowrap dense-cols text-xs">
+            <NumberedTable className="freeze-head freeze-col whitespace-nowrap dense-cols text-xs">
               <thead>
                 <tr>
                   <th>Employee</th>
@@ -749,7 +750,7 @@ export default function Payroll() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
 
           {/* Mobile cards (mam 2026-06-02) — Payroll monthly slip list */}
@@ -953,7 +954,7 @@ export default function Payroll() {
 
           <div className="card p-0">
             <div className="table-responsive">
-              <table className="freeze-head min-w-[800px]">
+              <NumberedTable className="freeze-head min-w-[800px]">
               <thead>
                 <tr>
                   <th>Employee</th>
@@ -1009,7 +1010,7 @@ export default function Payroll() {
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
             </div>
           </div>
         </>
@@ -1079,7 +1080,7 @@ export default function Payroll() {
             <div>
               <h5 className="font-semibold text-sm mb-2">Day-by-Day Breakdown</h5>
               <div className="overflow-x-auto border rounded">
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="text-left p-2">Date</th>
@@ -1102,7 +1103,7 @@ export default function Payroll() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             </div>
 
@@ -1126,7 +1127,7 @@ export default function Payroll() {
           {holidays.length === 0 ? (
             <p className="text-sm text-gray-400 italic">No holidays declared for {month} yet.</p>
           ) : (
-            <table className="w-full text-sm">
+            <NumberedTable className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
                 <tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-left">Holiday</th><th className="px-2 py-1 text-right"></th></tr>
               </thead>
@@ -1144,7 +1145,7 @@ export default function Payroll() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           )}
           {isAdmin && (
             <form onSubmit={saveHoliday} className="flex flex-wrap items-end gap-2 pt-2 border-t">

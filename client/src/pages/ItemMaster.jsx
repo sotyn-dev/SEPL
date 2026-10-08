@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -468,7 +469,7 @@ export default function ItemMaster() {
 
       {/* Table */}
       <div className="card p-0">
-        <table className="min-w-full freeze-head">
+        <NumberedTable start={page * PAGE_SIZE + 1} className="min-w-full freeze-head">
           <thead><tr className="bg-gray-50">
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
@@ -570,7 +571,7 @@ export default function ItemMaster() {
             })}
             {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
         {/* Paginator — responsive mobile layout + desktop layout */}
         {total > PAGE_SIZE && (
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
@@ -756,7 +757,7 @@ export default function ItemMaster() {
               <p className="text-sm text-gray-400 italic text-center py-4">No history entries yet. Old prices land here automatically when Rate / Vendor / Source / Bill is changed.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead className="bg-gray-50"><tr><th className="px-2 py-1 text-left">Captured</th><th className="px-2 py-1 text-right">Rate</th><th className="px-2 py-1 text-left">Vendor</th><th className="px-2 py-1 text-left">Source</th><th className="px-2 py-1 text-left">Bill / PO</th><th className="px-2 py-1 text-left">By</th></tr></thead>
                   <tbody>
                     {historyModal.rows.map(h => (
@@ -770,7 +771,7 @@ export default function ItemMaster() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             )}
             <div className="flex justify-end"><button onClick={() => setHistoryModal(null)} className="btn btn-secondary">Close</button></div>
@@ -791,8 +792,8 @@ export default function ItemMaster() {
           <div><label className="label">Or Paste CSV</label><textarea className="input font-mono text-xs" rows="5" value={bulkData} onChange={e => { setBulkData(e.target.value); setBulkPreview(parseCSV(e.target.value)); }} placeholder="Item Code,Dept,Name,Spec,Size,UOM,GST,Type,Make,Rate,Vendor Name,Source,Bill/PO #,Bill/PO Date" /></div>
           {bulkPreview.length > 0 && (
             <div><p className="text-sm font-semibold mb-2">{bulkPreview.length} items to import</p>
-              <div className="max-h-48 overflow-y-auto border rounded text-xs"><table><thead><tr className="bg-gray-50"><th className="px-2 py-1">Code</th><th className="px-2 py-1">Dept</th><th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Vendor</th><th className="px-2 py-1">Source</th><th className="px-2 py-1">Bill/PO</th></tr></thead>
-                <tbody>{bulkPreview.map((i, idx) => <tr key={idx}><td className="px-2 py-1">{i.item_code}</td><td className="px-2 py-1">{i.department}</td><td className="px-2 py-1 font-medium">{i.item_name}</td><td className="px-2 py-1">{i.current_price}</td><td className="px-2 py-1">{i.vendor_name}</td><td className="px-2 py-1">{i.source_type}</td><td className="px-2 py-1">{i.bill_po_number}</td></tr>)}</tbody></table></div>
+              <div className="max-h-48 overflow-y-auto border rounded text-xs"><NumberedTable><thead><tr className="bg-gray-50"><th className="px-2 py-1">Code</th><th className="px-2 py-1">Dept</th><th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Vendor</th><th className="px-2 py-1">Source</th><th className="px-2 py-1">Bill/PO</th></tr></thead>
+                <tbody>{bulkPreview.map((i, idx) => <tr key={idx}><td className="px-2 py-1">{i.item_code}</td><td className="px-2 py-1">{i.department}</td><td className="px-2 py-1 font-medium">{i.item_name}</td><td className="px-2 py-1">{i.current_price}</td><td className="px-2 py-1">{i.vendor_name}</td><td className="px-2 py-1">{i.source_type}</td><td className="px-2 py-1">{i.bill_po_number}</td></tr>)}</tbody></NumberedTable></div>
             </div>
           )}
           <div className="flex justify-end gap-3"><button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button><button onClick={bulkImport} disabled={bulkPreview.length === 0} className="btn btn-primary disabled:opacity-50 flex items-center gap-1"><FiUpload size={14} /> Import {bulkPreview.length} Items</button></div>

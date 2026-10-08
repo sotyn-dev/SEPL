@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -143,7 +144,7 @@ export default function Customers() {
 
       <div className="card p-0 table-responsive">
         <div>
-          <table className="min-w-[1100px] text-xs w-full freeze-head">
+          <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="min-w-[1100px] text-xs w-full freeze-head">
             <thead>
               <tr className="bg-gray-50">
                 <th className="px-2 py-2 text-left">Customer Code</th>
@@ -181,7 +182,7 @@ export default function Customers() {
                 <tr><td colSpan="8" className="text-center py-8 text-gray-400">No customers found</td></tr>
               )}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
       <Pagination {...pager} />

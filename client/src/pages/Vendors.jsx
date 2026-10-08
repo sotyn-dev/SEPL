@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -278,7 +279,7 @@ export default function Vendors() {
             <span className="text-[11px] text-gray-400">across all {vendors.length} vendors · {cmpFieldsPer} key fields each</span>
           </div>
 
-          <div className="card p-0 overflow-x-auto"><table className="min-w-[1000px] text-xs freeze-head">
+          <div className="card p-0 overflow-x-auto"><NumberedTable start={safePage * PAGE_SIZE + 1} className="min-w-[1000px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
               <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor / Firm Name</th><th className="px-2 py-2">Category</th>
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>
@@ -317,7 +318,7 @@ export default function Vendors() {
                 </td>
               </tr>
             ))}{filtered.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
-          </table></div>
+          </NumberedTable></div>
 
           {/* Paginator — only when there's more than one page */}
           {pageCount > 1 && (
@@ -340,7 +341,7 @@ export default function Vendors() {
             <h3 className="font-semibold text-sm">3 Vendor Rate Comparison</h3>
             <button onClick={() => { setForm({ item_description: '', vendor1_id: '', vendor1_rate: 0, vendor2_id: '', vendor2_rate: 0, vendor3_id: '', vendor3_rate: 0, final_rate: 0, selected_vendor_id: '' }); setModal('rate'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Comparison</button>
           </div>
-          <div className="card p-0 table-responsive"><table className="text-xs freeze-head min-w-[950px]">
+          <div className="card p-0 table-responsive"><NumberedTable className="text-xs freeze-head min-w-[950px]">
             <thead><tr><th>Item</th><th>Vendor 1</th><th>Rate 1</th><th>Vendor 2</th><th>Rate 2</th><th>Vendor 3</th><th>Rate 3</th><th>Final</th><th>Selected</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{rates.map(r => (
               <tr key={r.id}>
@@ -366,7 +367,7 @@ export default function Vendors() {
                 </div></td>
               </tr>
             ))}{rates.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No comparisons yet</td></tr>}</tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -590,7 +591,7 @@ export default function Vendors() {
             <div>
               <p className="text-sm font-semibold mb-2">{bulkPreview.length} vendor{bulkPreview.length === 1 ? '' : 's'} ready to import</p>
               <div className="max-h-52 overflow-auto border rounded text-xs table-responsive">
-                <table className="w-full min-w-[500px]">
+                <NumberedTable className="w-full min-w-[500px]">
                   <thead><tr className="bg-gray-50">
                     <th className="px-2 py-1 text-left">Name</th><th className="px-2 py-1 text-left">Firm</th>
                     <th className="px-2 py-1">Category</th><th className="px-2 py-1">Phone</th>
@@ -606,7 +607,7 @@ export default function Vendors() {
                       <td className="px-2 py-1">{v.district}</td>
                     </tr>
                   ))}</tbody>
-                </table>
+                </NumberedTable>
               </div>
             </div>
           )}

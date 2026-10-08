@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Drawing Tracker — project drawings with a permanent revision history.
 //
 //   Dashboard  KPI cards, discipline breakdown, recent revision activity
@@ -106,7 +107,7 @@ function DashboardTab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="card p-0 overflow-x-auto">
           <h3 className="text-sm font-medium px-4 pt-4">Drawings by Discipline</h3>
-          <table className="min-w-full mt-2 text-sm">
+          <NumberedTable className="min-w-full mt-2 text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-left">Discipline</th>
               <th className="px-3 py-2 text-right">Drawings</th>
@@ -117,12 +118,12 @@ function DashboardTab() {
               ))}
               {data.by_discipline.length === 0 && <tr><td colSpan={2} className="text-center py-6 text-gray-400">No drawings yet</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
 
         <div className="card p-0 overflow-x-auto">
           <h3 className="text-sm font-medium px-4 pt-4">Recent Revision Activity</h3>
-          <table className="min-w-full mt-2 text-sm">
+          <NumberedTable className="min-w-full mt-2 text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-left">Drawing</th>
               <th className="px-3 py-2 text-center">Rev</th>
@@ -143,7 +144,7 @@ function DashboardTab() {
               ))}
               {data.recent.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-gray-400">Nothing yet</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
     </div>
@@ -1059,7 +1060,7 @@ function SitesTab() {
 
   return (
     <div className="card p-0 table-responsive">
-      <table className="min-w-[700px] w-full text-sm">
+      <NumberedTable className="min-w-[700px] w-full text-sm">
         <thead><tr className="bg-gray-50 text-xs text-gray-600">
           <th className="px-3 py-2 text-left">Site</th>
           <th className="px-3 py-2 text-right">Drawings</th>
@@ -1079,7 +1080,7 @@ function SitesTab() {
           ))}
           {rows.length === 0 && <tr><td colSpan={5} className="text-center py-8 text-gray-400">No drawings at any site yet</td></tr>}
         </tbody>
-      </table>
+      </NumberedTable>
     </div>
   );
 }
@@ -1113,7 +1114,7 @@ function SiteDetail({ siteId, onBack }) {
 
       {sub === 'drawings' && (
         <div className="card p-0 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <NumberedTable className="min-w-full text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-left">Drawing No</th>
               <th className="px-3 py-2 text-left">Title</th>
@@ -1139,7 +1140,7 @@ function SiteDetail({ siteId, onBack }) {
               ))}
               {data.drawings.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-gray-400">No drawings at this site</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 
@@ -1208,7 +1209,7 @@ function ReportsTab() {
       </div>
 
       <div className="card p-0 table-responsive">
-        <table className="min-w-[800px] w-full text-sm">
+        <NumberedTable className="min-w-[800px] w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             {def[2].map(h => <th key={h} className="px-3 py-2 text-left">{h}</th>)}
           </tr></thead>
@@ -1218,7 +1219,7 @@ function ReportsTab() {
             ))}
             {rows.length === 0 && <tr><td colSpan={def[2].length} className="text-center py-8 text-gray-400">Nothing to report yet</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );

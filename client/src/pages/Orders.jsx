@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
@@ -355,7 +356,7 @@ export default function Orders() {
   // One PO row — reused by the flat list and the grouped children so the
   // columns never drift between the two modes.
   const renderPoRow = (p, child = false) => (
-    <tr key={p.id} className={child ? 'bg-gray-50/60' : ''}>
+    <tr key={p.id} data-serial-skip={child} className={child ? 'bg-gray-50/60' : ''}>
       <td className={`font-medium ${child ? 'pl-8' : ''}`}>{p.po_number}</td>
       <td className="text-red-600 font-bold">{p.lead_no || '-'}</td>
       <td>{p.bb_client || p.company_name || '-'}</td>
@@ -442,7 +443,7 @@ export default function Orders() {
               {poGroups.length} project{poGroups.length !== 1 ? 's' : ''} ({pos.filter(p => poMatches(p, poFilter)).length} PO{pos.filter(p => poMatches(p, poFilter)).length !== 1 ? 's' : ''}{poMergedCount > 0 ? `, ${poMergedCount} merged` : ''}) · tap a project to expand
             </div>
           )}
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {/* Flat list, or merged-by-project when grouping is on. */}
@@ -476,7 +477,7 @@ export default function Orders() {
               })}
               {pos.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-gray-400">No orders yet</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 

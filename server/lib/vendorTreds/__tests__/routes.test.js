@@ -27,7 +27,7 @@ async function harness(){
   return {db,files,origin,request,close:async()=>{await new Promise(r=>server.close(r));db.close();Object.assign(storage,original);}};
 }
 const regData=(name='Client Alpha')=>({company_name:name,website_url:`https://${name.toLowerCase().replaceAll(' ','-')}.example.invalid`,owner_id:2,registration_date:'2026-10-07'});
-test('four stages keep one company through documents, portal acceptance and multiple enquiries',async()=>{
+test('four cumulative stages retain the company and expose the next action after its prerequisite',async()=>{
   const h=await harness();try{
     const today=require('../kpis').istToday();
     const call=async(url,options={},expected=200)=>{
@@ -37,15 +37,21 @@ test('four stages keep one company through documents, portal acceptance and mult
     let reg=await call('/registrations',{method:'POST',body:{company_name:'Four Stage Test Company',contact_person:'Test Contact',phone:'1234567890',owner_id:2,registration_date:today}},201);
     const originalId=reg.id,customerId=reg.customer_id;
     const stage=(action,extra={},expected=200)=>call(`/registrations/${reg.id}/stage`,{method:'POST',body:{version:reg.version,action,...extra}},expected);
-    const checkStage=async(number)=>{
-      const list=await call(`/registration-stages?workflow_stage=${number}`);
-      assert.equal(list.total,1);assert.equal(list.rows[0].id,originalId);assert.equal(list.rows[0].workflow_stage,number);
-      assert.deepEqual(list.counts,Object.fromEntries([1,2,3,4].map(n=>[n,n===number?1:0])));
+    const checkStage=async(number,available=Math.min(4,number+1))=>{
+      const counts=Object.fromEntries([1,2,3,4].map(n=>[n,n<=available?1:0]));
+      for(const tab of [1,2,3,4]) {
+        const list=await call(`/registration-stages?workflow_stage=${tab}`);
+        assert.equal(list.total,counts[tab],`Stage ${tab} retains reached work and includes its pending action`);
+        assert.deepEqual(list.counts,counts);
+        if(list.total){assert.equal(list.rows[0].id,originalId);assert.equal(list.rows[0].workflow_stage,number);assert.equal(list.rows[0].available_stage,available);}
+      }
+      const detail=(await call(`/registrations/${originalId}`)).record;
+      assert.equal(detail.available_stage,available,'Detail and list expose the same permitted steps');
     };
     await checkStage(1);
     assert.equal((await stage('accept_portal',{portal_url:'https://portal.example.invalid',approval_date:today},409)).code,'DOCUMENTS_NOT_SUBMITTED');
     assert.equal((await stage('record_enquiry',{enquiry_date:today,product_service:'Too early'},409)).code,'PORTAL_NOT_ACCEPTED');
-    reg=await stage('start_documents');await checkStage(2);
+    reg=await stage('start_documents');await checkStage(2,2);
     assert.equal((await stage('submit_documents',{},409)).code,'DOCUMENTS_PENDING');
     const types=(await call('/options')).catalog.filter(type=>type.kind==='doc_type'&&type.required);
     for(const type of types){
@@ -76,6 +82,9 @@ test('four stages keep one company through documents, portal acceptance and mult
     assert.equal(h.db.prepare('SELECT COUNT(*) n FROM customers').get().n,1);
     assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_registrations').get().n,1);
     assert.equal(h.db.prepare('SELECT COUNT(*) n FROM crm_funnel').get().n,2);
+    reg=await call(`/registrations/${reg.id}/status`,{method:'POST',body:{version:reg.version,status:'rejected',remarks:'Synthetic rework'}});
+    await checkStage(1,4);
+    assert.equal((await stage('record_enquiry',{enquiry_date:today,product_service:'Blocked while rejected'},409)).code,'PORTAL_NOT_ACCEPTED');
   }finally{await h.close();}
 });
 
@@ -84,7 +93,7 @@ test('four-stage counts and mutations respect ownership, filters, permissions an
     const today=require('../kpis').istToday();
     const create=async(name,owner_id)=>(await h.request('/registrations',{method:'POST',body:{company_name:name,owner_id,registration_date:today}})).data;
     const owned=await create('Owned Stage Company',2),other=await create('Other Stage Company',3);
-    const ownList=await h.request('/registration-stages?workflow_stage=1&limit=1',{user:2});assert.equal(ownList.status,200);assert.equal(ownList.data.total,1);assert.deepEqual(ownList.data.counts,{1:1,2:0,3:0,4:0});
+    const ownList=await h.request('/registration-stages?workflow_stage=1&limit=1',{user:2});assert.equal(ownList.status,200);assert.equal(ownList.data.total,1);assert.deepEqual(ownList.data.counts,{1:1,2:1,3:0,4:0});
     const adminList=await h.request('/registration-stages?workflow_stage=1&limit=1');assert.equal(adminList.data.total,2);assert.equal(adminList.data.rows.length,1);assert.equal(adminList.data.counts[1],2);
     assert.equal((await h.request('/registration-stages?workflow_stage=1&search=Owned')).data.total,1);
     assert.equal((await h.request('/registration-stages?workflow_stage=5')).status,400);
@@ -96,7 +105,7 @@ test('four-stage counts and mutations respect ownership, filters, permissions an
     assert.equal((await mutate(owned.id,'start_documents',2,{owner_id:3})).status,400);
     assert.equal((await mutate(owned.id,'start_documents')).status,200);
     assert.equal((await mutate(owned.id,'start_documents')).status,409);
-    const result=await h.request('/registration-stages?workflow_stage=2',{user:4});assert.equal(result.data.total,1);assert.deepEqual(result.data.counts,{1:0,2:1,3:0,4:0});
+    const result=await h.request('/registration-stages?workflow_stage=2',{user:4});assert.equal(result.data.total,1);assert.deepEqual(result.data.counts,{1:1,2:1,3:0,4:0});
     assert.equal((await h.request('/registration-stages?owner_id=3',{user:2})).data.total,0);
   }finally{await h.close();}
 });
@@ -135,6 +144,62 @@ test('document upload and preview enforce record ownership, file content and pro
     assert.equal(h.files.size,1);
   }finally{await h.close();}
 });
+test('one combined registration file covers selected types with separate reviews and private downloads',async()=>{
+  const h=await harness();try{
+    let reg=(await h.request('/registrations',{method:'POST',body:regData()})).data;
+    const premature=await h.request(`/registrations/${reg.id}/stage`,{user:2,method:'POST',body:{version:reg.version,action:'submit_documents'}});
+    assert.equal(premature.status,409);assert.equal(premature.data.code,'DOCUMENTS_PENDING');
+    const unchanged=(await h.request(`/registrations/${reg.id}`)).data.record;
+    assert.equal(unchanged.version,reg.version);assert.equal(unchanged.status,'not_started','Failed direct submission rolls back its implicit start');
+    const ids=['pan','gst'].map(code=>h.db.prepare('SELECT id FROM vt_catalog WHERE code=?').get(code).id);
+    const form=()=>{const f=new FormData();f.append('file',new Blob(['%PDF-1.4\nCombined synthetic PAN and GST'],{type:'application/pdf'}),'combined.pdf');f.append('type_ids',JSON.stringify([...ids,ids[0]]));f.append('expiry_date','2099-12-31');f.append('remarks','Combined registration pack');return f;};
+    const other=(await h.request('/registrations',{method:'POST',body:{...regData('Other Company'),owner_id:3}})).data;
+    assert.equal((await h.request(`/registrations/${other.id}/documents`,{user:2,method:'POST',form:form()})).status,404);
+    assert.equal(h.files.size,0);
+    const upload=await h.request(`/registrations/${reg.id}/documents`,{user:2,method:'POST',form:form()});
+    assert.equal(upload.status,201,JSON.stringify(upload.data));assert.equal(upload.data.documents.length,2);
+    assert.deepEqual(upload.data.documents.map(d=>d.type_id),ids,'Duplicate selections create only one entry per type');
+    assert.equal(h.files.size,1,'Only one physical file is stored');
+    assert.equal(h.db.prepare('SELECT COUNT(DISTINCT storage_key) n FROM vt_documents').get().n,1);
+    for(const document of upload.data.documents){
+      assert.equal(document.registration_id,reg.id);assert.equal(document.expiry_date,'2099-12-31');assert.equal(document.remarks,'Combined registration pack');assert(!document.storage_key);
+      const download=await h.request(document.download_url.replace('/vendor-treds',''),{user:2});assert.equal(download.status,200);assert.equal(download.buffer.toString(),'%PDF-1.4\nCombined synthetic PAN and GST');
+      assert.equal((await h.request(document.download_url.replace('/vendor-treds',''),{user:0})).status,401);
+    }
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM vt_history WHERE event='document_uploaded'").get().n,2);
+    const submitted=await h.request(`/registrations/${reg.id}/stage`,{user:2,method:'POST',body:{version:reg.version,action:'submit_documents'}});
+    assert.equal(submitted.status,200,JSON.stringify(submitted.data));
+    assert.equal(submitted.data.status,'submitted','Documents can be submitted directly after saving basic details');
+    const pan=upload.data.documents[0],gst=upload.data.documents[1];
+    assert.equal((await h.request(`/documents/${pan.id}`,{method:'PATCH',body:{version:pan.version,status:'rejected',remarks:'PAN page needs replacement'}})).status,200);
+    const detail=await h.request(`/registrations/${reg.id}`);
+    assert.equal(detail.data.documents.find(d=>d.id===pan.id).status,'rejected');
+    assert.equal(detail.data.documents.find(d=>d.id===gst.id).status,'uploaded','Reviewing PAN leaves GST unchanged');
+  }finally{await h.close();}
+});
+
+test('combined uploads reject invalid selections before storage and roll back every link on failure',async()=>{
+  const h=await harness();try{
+    const reg=(await h.request('/registrations',{method:'POST',body:regData()})).data;
+    const ids=['pan','gst'].map(code=>h.db.prepare('SELECT id FROM vt_catalog WHERE code=?').get(code).id);
+    const form=(types,extra={})=>{const f=new FormData();f.append('file',new Blob(['%PDF-1.4\nSynthetic batch'],{type:'application/pdf'}),'combined.pdf');f.append('type_ids',typeof types==='string'?types:JSON.stringify(types));for(const [key,value] of Object.entries(extra))f.append(key,value);return f;};
+    const send=f=>h.request(`/registrations/${reg.id}/documents`,{user:2,method:'POST',form:f});
+    for(const invalid of [[],[ids[0],999999],[ids[0],true],'{invalid',String(ids[0]),Array(101).fill(ids[0])]){
+      const result=await send(form(invalid));assert.equal(result.status,400,JSON.stringify(result.data));
+    }
+    assert.equal((await send(form(ids,{type_id:String(ids[0])}))).status,400);
+    h.db.prepare('UPDATE vt_catalog SET active=0 WHERE id=?').run(ids[1]);
+    assert.equal((await send(form(ids))).status,400);assert.equal(h.files.size,0);
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_documents').get().n,0);
+    h.db.prepare('UPDATE vt_catalog SET active=1 WHERE id=?').run(ids[1]);
+    h.db.exec(`CREATE TRIGGER fail_second_document BEFORE INSERT ON vt_documents WHEN NEW.type_id=${ids[1]} BEGIN SELECT RAISE(ABORT,'Synthetic insert failure'); END;`);
+    assert.equal((await send(form(ids))).status,500);
+    assert.equal(h.files.size,0,'Failed transaction removes the unreferenced file');
+    assert.equal(h.db.prepare('SELECT COUNT(*) n FROM vt_documents').get().n,0,'No partial checklist entries');
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM vt_history WHERE event='document_uploaded'").get().n,0);
+  }finally{await h.close();}
+});
+
 test('task adapter reuses PMS without fabricating a schedule and reminders persist once',async()=>{
   const h=await harness();try{
     const create=await h.request('/tasks',{method:'POST',body:{title:'Review vendor documents',owner_id:2,due_date:'2026-10-07',reminder_at:'2026-10-07T09:00:00',priority:'high'}});

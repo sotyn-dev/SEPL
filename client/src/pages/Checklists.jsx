@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -470,7 +471,7 @@ export default function Checklists() {
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
       {view === 'by-date' && (<>
         <div className="card p-0 table-responsive">
-          <table className="freeze-head w-full text-xs min-w-[800px]">
+          <NumberedTable start={(historyPager.page - 1) * historyPager.perPage + 1} className="freeze-head w-full text-xs min-w-[800px]">
             <thead className="whitespace-nowrap">
               <tr>
                 <th>Person</th>
@@ -570,7 +571,7 @@ export default function Checklists() {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination {...historyPager} />
       </>)}
@@ -696,7 +697,7 @@ export default function Checklists() {
             };
             return (<>
               <div className="card p-0 table-responsive">
-                <table className="w-full text-xs min-w-[780px]">
+                <NumberedTable start={(followupPager.page - 1) * followupPager.perPage + 1} className="w-full text-xs min-w-[780px]">
                   <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase whitespace-nowrap">
                     <tr>
                       <th className="px-2 py-2 text-left">Name</th>
@@ -755,7 +756,7 @@ export default function Checklists() {
                       <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
                     )}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
               <Pagination {...followupPager} />
             </>);
@@ -821,7 +822,7 @@ export default function Checklists() {
               <span className="text-xs font-normal text-gray-400">({byPerson[personName].length})</span>
             </h4>
           </div>
-          <table className="freeze-head w-full text-xs min-w-[720px]">
+          <NumberedTable className="freeze-head w-full text-xs min-w-[720px]">
             <thead className="whitespace-nowrap"><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (
@@ -884,7 +885,7 @@ export default function Checklists() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       ))}
 
@@ -1144,7 +1145,7 @@ Send WhatsApp report                                  ← uses shared settings b
                   </p>
                   <details className="text-gray-500">
                     <summary className="cursor-pointer hover:text-gray-700">Show parsed preview</summary>
-                    <table className="mt-1 text-[10px] w-full border border-gray-200 rounded">
+                    <NumberedTable className="mt-1 text-[10px] w-full border border-gray-200 rounded">
                       <thead className="bg-gray-50"><tr><th className="text-left px-2 py-1">Task</th><th className="text-left px-2 py-1">Proof Name</th><th className="text-left px-2 py-1">Type</th><th className="text-left px-2 py-1">Time</th></tr></thead>
                       <tbody>
                         {parsed.map((p, i) => (
@@ -1156,7 +1157,7 @@ Send WhatsApp report                                  ← uses shared settings b
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </details>
                 </div>
               );

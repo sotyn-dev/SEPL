@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // HR System — Phase 1 (MVP).
 //
 // Mam (2026-05-22) shared a 15-module HR-operating-system spec.
@@ -228,7 +229,7 @@ function HiringRequestsTab({ user, isAdmin, canCreate, canEdit, canDelete, canAp
       </div>
 
       <div className="card p-0 overflow-auto">
-        <table className="w-full text-xs">
+        <NumberedTable className="w-full text-xs">
           <thead className="bg-gray-50 text-gray-600 uppercase text-[10px]">
             <tr>
               <th className="px-2 py-2 text-left">Req #</th>
@@ -282,7 +283,7 @@ function HiringRequestsTab({ user, isAdmin, canCreate, canEdit, canDelete, canAp
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editingId ? 'Edit Hiring Request' : 'Raise Hiring Request'} wide>
@@ -404,7 +405,7 @@ function CandidatesTab({ user, isAdmin, canCreate, canEdit, canDelete }) {
       </div>
 
       <div className="card p-0 overflow-auto">
-        <table className="w-full text-xs">
+        <NumberedTable className="w-full text-xs">
           <thead className="bg-gray-50 text-gray-600 uppercase text-[10px]">
             <tr>
               <th className="px-2 py-2 text-left">Cand #</th>
@@ -458,7 +459,7 @@ function CandidatesTab({ user, isAdmin, canCreate, canEdit, canDelete }) {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* Add / Edit Candidate */}
@@ -603,7 +604,7 @@ function InterviewsTab({ user, canCreate, canEdit }) {
       </div>
 
       <div className="card p-0 overflow-auto">
-        <table className="w-full text-xs">
+        <NumberedTable className="w-full text-xs">
           <thead className="bg-gray-50 text-gray-600 uppercase text-[10px]">
             <tr>
               <th className="px-2 py-2 text-left">When</th>
@@ -643,7 +644,7 @@ function InterviewsTab({ user, canCreate, canEdit }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* Schedule modal */}
@@ -765,7 +766,7 @@ function OffersTab({ user, canCreate, canEdit }) {
       </div>
 
       <div className="card p-0 overflow-auto">
-        <table className="w-full text-xs">
+        <NumberedTable className="w-full text-xs">
           <thead className="bg-gray-50 text-gray-600 uppercase text-[10px]">
             <tr>
               <th className="px-2 py-2 text-left">Candidate</th>
@@ -811,7 +812,7 @@ function OffersTab({ user, canCreate, canEdit }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title="Draft Offer" wide>

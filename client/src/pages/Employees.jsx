@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 import EmployeeMaster from '../components/employee/EmployeeMaster';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
@@ -257,7 +259,7 @@ export default function Employees() {
           </div>
 
           {/* Table */}
-          <div className="card p-0 hidden md:block table-responsive"><table className="freeze-head w-full min-w-[900px]">
+          <div className="card p-0 hidden md:block table-responsive"><NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head w-full min-w-[900px]">
             <thead><tr>
               <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
               <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
@@ -290,15 +292,15 @@ export default function Employees() {
               ))}
               {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
 
           {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
           <div className="md:hidden space-y-3">
             {filtered.length === 0 && (
               <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
             )}
-            {pager.pageItems.map(e => (
-              <div key={e.id} className="card p-3 space-y-2">
+            {pager.pageItems.map((e, serialIndex) => (
+              <div key={e.id} className="card p-3 space-y-2"><SerialNumber value={(pager.page - 1) * pager.perPage + serialIndex + 1} />
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
@@ -379,7 +381,7 @@ export default function Employees() {
                 <h4 className="font-bold text-red-700 text-sm">Terminated / inactive — login still active ({rosterAudit.backlog.length})</h4>
                 <p className="text-[11px] text-red-700/80 italic mt-0.5">Past employees still counted in attendance. Deactivate their login in User Management to clear them. Nothing here is changed automatically.</p>
               </div>
-              <table className="text-sm w-full min-w-[600px]">
+              <NumberedTable className="text-sm w-full min-w-[600px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Employee status</th></tr></thead>
                 <tbody>
                   {rosterAudit.backlog.map(u => (
@@ -391,7 +393,7 @@ export default function Employees() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           )}
 
@@ -402,7 +404,7 @@ export default function Employees() {
                 <h4 className="font-bold text-amber-700 text-sm">Active logins not on the employee roster ({rosterAudit.guests.length})</h4>
                 <p className="text-[11px] text-amber-700/80 italic mt-0.5">Guest / never-onboarded accounts. Onboard them via “Add Employee” if they belong, or leave as-is. Not changed automatically.</p>
               </div>
-              <table className="text-sm w-full min-w-[500px]">
+              <NumberedTable className="text-sm w-full min-w-[500px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th></tr></thead>
                 <tbody>
                   {rosterAudit.guests.map(u => (
@@ -413,7 +415,7 @@ export default function Employees() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           )}
         </div>
@@ -456,7 +458,7 @@ export default function Employees() {
             <div>
               <p className="text-sm font-semibold text-gray-700 mb-2">Preview: {bulkPreview.length} employees to import</p>
               <div className="max-h-60 overflow-y-auto border rounded-lg table-responsive">
-                <table className="min-w-full text-xs min-w-[550px]">
+                <NumberedTable className="min-w-full text-xs min-w-[550px]">
                   <thead><tr className="bg-gray-50"><th className="px-2 py-1.5">Name</th><th className="px-2 py-1.5">Phone</th><th className="px-2 py-1.5">Email</th><th className="px-2 py-1.5">Designation</th><th className="px-2 py-1.5">Department</th><th className="px-2 py-1.5">Join Date</th><th className="px-2 py-1.5">Salary</th></tr></thead>
                   <tbody>
                     {bulkPreview.map((e, i) => (
@@ -468,7 +470,7 @@ export default function Employees() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             </div>
           )}

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Indent Labour Payment — full project execution + billing pipeline.
 // Mam (2026-06-01, amended 2026-06-02): Projects are manually entered
 // with a unique name.  Each project owns three labour spend streams:
@@ -163,7 +164,7 @@ function ProjectsTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
+        <NumberedTable className="freeze-head w-full text-sm">
           <thead>
             <tr>
               <th className="text-left">Project</th>
@@ -204,7 +205,7 @@ function ProjectsTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {createOpen && (
@@ -466,7 +467,7 @@ function L1Salary({ projectId, onChange }) {
       </div>
 
       <div className="overflow-x-auto border rounded">
-        <table className="w-full text-sm">
+        <NumberedTable className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-2 py-1.5">Kind</th>
@@ -496,7 +497,7 @@ function L1Salary({ projectId, onChange }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {adding && (
@@ -597,7 +598,7 @@ function L2DailyWages({ projectId, onChange }) {
       </div>
 
       <div className="overflow-x-auto border rounded">
-        <table className="w-full text-sm">
+        <NumberedTable className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-2 py-1.5">Kind</th>
@@ -629,7 +630,7 @@ function L2DailyWages({ projectId, onChange }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {adding && (
@@ -773,7 +774,7 @@ function L3WorkOrders({ projectId, onChange }) {
       </div>
 
       <div className="overflow-x-auto border rounded">
-        <table className="w-full text-sm">
+        <NumberedTable className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-2 py-1.5">WO #</th>
@@ -857,7 +858,7 @@ function L3WorkOrders({ projectId, onChange }) {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {editing && (
@@ -904,7 +905,7 @@ function DprLinksModal({ data, onClose }) {
         )}
         {items && items.length > 0 && (
           <div className="overflow-x-auto border rounded">
-            <table className="w-full text-xs">
+            <NumberedTable className="w-full text-xs">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="text-left px-2 py-1.5">Date</th>
@@ -942,7 +943,7 @@ function DprLinksModal({ data, onClose }) {
                   <td></td>
                 </tr>
               </tfoot>
-            </table>
+            </NumberedTable>
           </div>
         )}
         <div className="flex justify-end pt-2 border-t">
@@ -1156,7 +1157,7 @@ function AddOrEditWorkOrder({ wo, projectId, onClose, onSaved }) {
           ) : (
             <>
               <div className="overflow-x-auto border rounded">
-                <table className="w-full text-sm">
+                <NumberedTable className="w-full text-sm">
                   <thead className="bg-gray-50"><tr>
                     <th className="text-left px-2 py-1.5">Category</th>
                     <th className="text-left px-2 py-1.5">Trade</th>
@@ -1194,7 +1195,7 @@ function AddOrEditWorkOrder({ wo, projectId, onClose, onSaved }) {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -1312,7 +1313,7 @@ function WorkOrdersTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
+        <NumberedTable className="freeze-head w-full text-sm">
           <thead>
             <tr>
               <th className="text-left">WO No</th>
@@ -1377,7 +1378,7 @@ function WorkOrdersTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {newOpen && (
@@ -1606,7 +1607,7 @@ function MbTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
+        <NumberedTable className="freeze-head w-full text-sm">
           <thead>
             <tr>
               <th className="text-left">MB No</th>
@@ -1648,7 +1649,7 @@ function MbTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {newOpen && <NewMbModal projectId={pid} onClose={() => setNewOpen(false)} onCreated={() => { setNewOpen(false); load(); }} />}
@@ -1845,7 +1846,7 @@ function RaBillsTab() {
       )}
 
       <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
+        <NumberedTable className="freeze-head w-full text-sm">
           <thead>
             <tr>
               <th className="text-left">RA No</th>
@@ -1878,7 +1879,7 @@ function RaBillsTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );
@@ -1936,7 +1937,7 @@ function ProjectsDashboardTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
+        <NumberedTable className="freeze-head w-full text-sm">
           <thead>
             <tr>
               <th className="text-left">Project</th>
@@ -1978,7 +1979,7 @@ function ProjectsDashboardTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );

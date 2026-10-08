@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // One drawing — its identity, its full revision timeline, and every revision
 // still openable no matter how many newer ones exist.
 //
@@ -448,7 +449,7 @@ export default function DrawingDetail() {
         {/* History table */}
         <div className="card p-0 overflow-x-auto">
           <h3 className="text-sm font-semibold px-4 pt-4">Revision History</h3>
-          <table className="min-w-full mt-2 text-sm">
+          <NumberedTable className="min-w-full mt-2 text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-center">Rev</th>
               <th className="px-3 py-2 text-left">Date</th>
@@ -484,7 +485,7 @@ export default function DrawingDetail() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
 

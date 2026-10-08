@@ -1,3 +1,5 @@
+import NumberedTable from '../components/NumberedTable';
+import ActiveProjectsMetric from '../components/ActiveProjectsMetric';
 // Director's War Room — CMD + COO + DO-NOT-SHOW dashboard.
 // Mirrors mam's HTML spec SEPL_CMD_COO_Dashboard_v1.html exactly:
 //   - Light theme (cream #F5F4F0 background, white cards)
@@ -53,7 +55,7 @@ function trafficLights(data) {
   // DELIVERY — based on DPR adherence today
   const dprPct = pulse.dpr_adherence_pct;
   const delivLight = dprPct == null ? 'amber' : dprPct >= 80 ? 'green' : dprPct >= 50 ? 'amber' : 'red';
-  const delivEv = `${operations.active_sites} active sites · ${operations.dpr.on_time} DPRs today`;
+  const delivEv = `${operations.active_projects.count} active projects · ${operations.dpr.on_time} with DPR today`;
 
   // PEOPLE — based on attendance + KPI distribution
   const att = people.attendance_today;
@@ -114,7 +116,7 @@ function bottlenecks(data) {
   if (wipUnbilled > wipLocked * 0.4 || sales.funnel.collected === 0) {
     out.push({
       rank: out.length + 1,
-      title: `${operations.active_sites} active sites · ${fmtINR(wipUnbilled)} WIP unbilled`,
+      title: `${operations.active_projects.count} active projects · ${fmtINR(wipUnbilled)} WIP unbilled`,
       who: 'COO + Installation Head',
       why: 'WIP is locked in execution — sales bills not catching up to PO book. Cash conversion blocked downstream of order receipt.',
       evidence: 'Active POs · Installation module · Sales bills',
@@ -383,6 +385,7 @@ export default function DashboardWarRoom() {
           </select>
         </div>
       </header>
+      <ActiveProjectsMetric className="m-3" />
 
       <div style={tabBarStyle} className="table-responsive">
         <div onClick={() => setTab('cmd')} style={tabStyle(tab === 'cmd')}>CMD VIEW <span className="hidden sm:inline">(Director)</span></div>
@@ -535,7 +538,7 @@ export default function DashboardWarRoom() {
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Delivery health</h2>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <tbody>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Active orders</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{pulse.order_book_count}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Open client purchase orders</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{pulse.order_book_count}</strong></td></tr>
                   <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Order value</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{fmtINR(pulse.order_book)}</strong></td></tr>
                   <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Installations done (MTD)</td><td style={{ padding: '10px 6px', textAlign: 'right', color: sales.funnel.collected > 0 ? C.ink : C.red }}><strong>{sales.funnel.collected}</strong></td></tr>
                   <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>DPR adherence (today)</td><td style={{ padding: '10px 6px', textAlign: 'right', color: (pulse.dpr_adherence_pct ?? 0) >= 80 ? C.green : C.red }}><strong>{pulse.dpr_adherence_pct ?? '—'}%</strong></td></tr>
@@ -670,7 +673,7 @@ export default function DashboardWarRoom() {
           <div style={sectionTitle}>Section 7 · IT Head Watchlist (this week)</div>
           <div style={cardStyle} className="p-0 overflow-hidden">
             <div className="table-responsive">
-              <table style={{ width: '100%', minWidth: 520, borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <NumberedTable style={{ width: '100%', minWidth: 520, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase' }}>P</th>
                 <th style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase' }}>Item</th>
@@ -686,7 +689,7 @@ export default function DashboardWarRoom() {
                 <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}><span style={badge('amber')}>P1</span></td><td style={{ padding: '11px 8px' }}>RBAC for 5 roles (CMD / COO / CFO / HR / Site Eng)</td><td style={{ padding: '11px 8px' }}>Day 14</td><td style={{ padding: '11px 8px', color: C.ink2 }}>Spec in this view ↓</td></tr>
                 <tr><td style={{ padding: '11px 8px' }}><span style={badge('amber')}>P1</span></td><td style={{ padding: '11px 8px' }}>Scorecard MIS: wire KPI feeds for top-10 roles</td><td style={{ padding: '11px 8px' }}>Day 14</td><td style={{ padding: '11px 8px', color: C.ink2 }}>Schema ready · KPI list needed</td></tr>
               </tbody>
-            </table>
+            </NumberedTable>
             </div>
           </div>
 
@@ -724,7 +727,7 @@ export default function DashboardWarRoom() {
               </div>
               <div style={cardStyle} className="p-0 overflow-hidden">
                 <div className="table-responsive">
-                  <table style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <NumberedTable style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 12.5 }}>
                     <thead><tr style={{ borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>
                     {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Throughput', 'Cash +%', 'PDF', 'Status'].map((h, hi) =>
                       <th key={h} style={{ textAlign: hi >= 3 && hi <= 6 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -762,7 +765,7 @@ export default function DashboardWarRoom() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
                 </div>
               </div>
             </>);
@@ -774,9 +777,9 @@ export default function DashboardWarRoom() {
           <div style={{ ...sectionTitle, marginTop: 0 }}>COO Daily Operating Screen — execution-only, no narrative</div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-4 mb-5">
             {[
-              { lbl: 'DPR Adherence', val: pulse.dpr_adherence_pct != null ? `${pulse.dpr_adherence_pct}%` : '—', delta: `target 90% · ${operations.dpr.missed} sites missed`, bad: (pulse.dpr_adherence_pct ?? 0) < 80 },
+              { lbl: 'Project DPR Coverage', val: pulse.dpr_adherence_pct != null ? `${pulse.dpr_adherence_pct}%` : '—', delta: `target 90% · ${operations.dpr.missed} projects without DPR`, bad: (pulse.dpr_adherence_pct ?? 0) < 80 },
               { lbl: 'Snags Open',    val: pulse.open_snags, delta: pulse.oldest_snag_days ? `oldest ${pulse.oldest_snag_days}d` : '—', bad: pulse.open_snags > 10 },
-              { lbl: 'Sites Live',    val: operations.active_sites, delta: `of ${pulse.order_book_count} active POs`, bad: false },
+              { lbl: 'Active Projects', val: operations.active_projects.count, delta: 'Company-wide · at least one Active site', bad: false },
               { lbl: 'Manpower Today', val: `${people.attendance_today.present}/${people.attendance_today.total}`, delta: `${people.attendance_today.absent} absent · ${people.attendance_today.late} late`, bad: people.attendance_today.absent > 2 },
               { lbl: 'Material in Transit', val: operations.materials_in_transit ?? 0, delta: 'indents po_sent / dispatched', bad: (operations.materials_in_transit ?? 0) > 10 },
               { lbl: 'Tools Out', val: operations.tools_out ?? 0, delta: 'tools.status=in_use', bad: false },
@@ -793,7 +796,7 @@ export default function DashboardWarRoom() {
           <div style={sectionTitle}>Today's Site Map (DPR + Snag + Risk)</div>
           <div style={cardStyle} className="p-0 overflow-hidden">
             <div className="table-responsive">
-              <table style={{ width: '100%', minWidth: 500, borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <NumberedTable style={{ width: '100%', minWidth: 500, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {['Project', 'Client', 'Slip days', 'Locked ₹', 'Risk'].map(h =>
                   <th key={h} style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -816,7 +819,7 @@ export default function DashboardWarRoom() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
             </div>
           </div>
 
@@ -902,7 +905,7 @@ export default function DashboardWarRoom() {
           <div style={sectionTitle}>Customer voice — Complaints &amp; Tickets</div>
           <div style={cardStyle} className="p-0 overflow-hidden">
             <div className="table-responsive">
-              <table style={{ width: '100%', minWidth: 300, borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <NumberedTable style={{ width: '100%', minWidth: 300, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {['Priority', 'Open count'].map(h =>
                   <th key={h} style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -922,7 +925,7 @@ export default function DashboardWarRoom() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
             </div>
           </div>
 
@@ -1235,7 +1238,7 @@ function HierarchyView() {
       <div style={cardStyle}>
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Build hierarchy — set each user's manager</h2>
         <div style={{ maxHeight: 520, overflowY: 'auto', marginTop: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
               <th style={{ textAlign: 'left', fontSize: 11, padding: '8px', color: C.ink2, textTransform: 'uppercase' }}>User</th>
               <th style={{ textAlign: 'left', fontSize: 11, padding: '8px', color: C.ink2, textTransform: 'uppercase' }}>Reports to</th>
@@ -1255,7 +1258,7 @@ function HierarchyView() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Snag List — site defects raised by management.
 //
 // Workflow (mam: 'assign employee will upload proof and after approval
@@ -736,7 +737,7 @@ export default function Snags() {
             keeps the Snag-No column fixed during horizontal scroll.
             mam (2026-07-28): "freeze like excel". */}
         <div ref={scrollBoxRef} className="overflow-auto max-h-[70vh]">
-          <table className="freeze-head freeze-col min-w-[850px]">
+          <NumberedTable start={pg.from + 1} className="freeze-head freeze-col min-w-[850px]">
             <thead>
               <tr>
                 <th>Snag No</th><th>Raised</th><th>Aging</th><th>Site / Location</th><th>Description</th>
@@ -841,7 +842,7 @@ export default function Snags() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
 
@@ -1296,7 +1297,7 @@ export default function Snags() {
               </div>
             ) : (
               <div className="overflow-x-auto max-h-96 border rounded-lg">
-                <table className="w-full text-left">
+                <NumberedTable className="w-full text-left">
                   <thead className="bg-gray-100 text-gray-600 uppercase text-[10px] font-bold sticky top-0">
                     <tr>
                       <th className="p-2.5">Snag #</th>
@@ -1329,7 +1330,7 @@ export default function Snags() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             )}
 

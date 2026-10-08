@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Engineer Performance — extracted from DPR.jsx (mam 2026-05-30:
 // "Performance is in under HRMS").  Same component the old
 // "Engineer Compliance" tab used, now mounted from HRSystem.jsx
@@ -365,7 +366,7 @@ function SiteDprHistoryModal({ siteId, siteName, engineerId, engineerName, dateF
           Showing DPRs <strong>filed by {engineerName || '—'}</strong> at this site · Window: <strong>{dateFrom}</strong> → <strong>{dateTo}</strong>
         </div>
         <div className="overflow-x-auto border rounded-lg">
-          <table className="w-full text-sm">
+          <NumberedTable className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left px-3 py-2">Date</th>
@@ -407,7 +408,7 @@ function SiteDprHistoryModal({ siteId, siteName, engineerId, engineerName, dateF
                 </tr>
               </tfoot>
             )}
-          </table>
+          </NumberedTable>
         </div>
         <div className="flex justify-end">
           <button onClick={onClose} className="btn btn-secondary">Close</button>

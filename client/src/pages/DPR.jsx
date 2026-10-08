@@ -1,3 +1,5 @@
+import NumberedTable from '../components/NumberedTable';
+import ActiveProjectsMetric from '../components/ActiveProjectsMetric';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -856,7 +858,7 @@ export default function DPR() {
               <p className="text-xs text-gray-400 py-2">No BOQ items linked to this site yet</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead>
                     <tr className="text-gray-500 border-b">
                       <th className="px-2 py-1.5 text-left">BOQ Item</th>
@@ -888,7 +890,7 @@ export default function DPR() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             )}
           </div>
@@ -1207,11 +1209,7 @@ export default function DPR() {
               padding/font through md so 4 tiles don't feel oversized below
               desktop; full size returns at lg (mam 2026-08-01). */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 lg:gap-4">
-            <button type="button" onClick={() => { setReportFilter(''); setTab('sites'); }}
-              className="card text-center border-l-4 border-red-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
-              <div className="text-xl lg:text-3xl font-bold text-red-600">{summary ? summary.activeSites : '—'}</div>
-              <div className="text-xs lg:text-sm text-gray-500">Active Sites <span className="text-[10px] text-red-600 font-semibold">→ view</span></div>
-            </button>
+            <ActiveProjectsMetric />
             <button type="button" onClick={() => { setFilterDate(new Date().toISOString().split('T')[0]); setDateTouched(true); setReportFilter(''); setTab('reports'); }}
               className="card text-center border-l-4 border-emerald-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
               <div className="text-xl lg:text-3xl font-bold text-emerald-600">{summary ? summary.todaySubmissions : '—'}</div>
@@ -1237,7 +1235,7 @@ export default function DPR() {
             </div>
           )}
           {summary && summary.missingSites.length === 0 && summary.activeSites > 0 && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3"><FiCheck className="text-emerald-600" size={24} /><h4 className="font-bold text-emerald-700">All sites submitted DPR today!</h4></div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3"><FiCheck className="text-emerald-600" size={24} /><h4 className="font-bold text-emerald-700">No missing DPRs in your site view today.</h4></div>
           )}
           {!summary && (
             <div className="text-center py-4 text-gray-400 text-sm">Loading dashboard summary…</div>
@@ -1477,7 +1475,7 @@ export default function DPR() {
           </div>
 
           {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
-          <div className="hidden md:block card p-0"><table className="freeze-head">
+          <div className="hidden md:block card p-0"><NumberedTable className="freeze-head">
             <thead><tr>
               <th>Site</th><th>Date</th><th>By</th><th>Status</th>
               <th>Plan Cost<div className="text-[10px] font-normal text-gray-400">(B-plan)</div></th>
@@ -1572,7 +1570,7 @@ export default function DPR() {
                 })}
               {dprs.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No DPR for this date</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -1581,7 +1579,7 @@ export default function DPR() {
           <div className="flex justify-between items-center"><h4 className="font-semibold">Project Sites</h4>
             <button onClick={() => { setForm({ name: '', address: '', client_name: '', site_engineer_id: '', supervisor: '' }); setSiteModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Site</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Engineer</th><th>Supervisor</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{sites.map(s => (
               <tr key={s.id}>
@@ -1629,7 +1627,7 @@ export default function DPR() {
               </tr>
             ))}
               {sites.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No sites</td></tr>}</tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -2117,7 +2115,7 @@ export default function DPR() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead>
                     <tr className="text-gray-500 border-b">
                       <th className="text-left py-1 pr-2">Material</th>
@@ -2150,7 +2148,7 @@ export default function DPR() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
                 <p className="text-[10px] text-gray-500 mt-1">
                   Items with Issue/Return slips are <b>auto-computed</b> (issued − returned) and locked — use <b>Store Issue/Return</b> to correct them.
                   Items without slips can be typed directly and auto-reduce store stock on submit. SPOS: zero manual stock calculations.
@@ -2290,9 +2288,9 @@ export default function DPR() {
             {selectedDpr.work_items?.length > 0 && (
               <div className="border-2 border-red-300 rounded-lg p-3">
                 <h5 className="font-bold text-red-800 mb-2">TABLE A: Installation Work</h5>
-                <table className="text-xs"><thead><tr><th>BOQ Item</th><th>Qty</th><th>Location</th><th>Rate</th><th>Amount</th></tr></thead>
+                <NumberedTable className="text-xs"><thead><tr><th>BOQ Item</th><th>Qty</th><th>Location</th><th>Rate</th><th>Amount</th></tr></thead>
                   <tbody>{selectedDpr.work_items.map(w => (<tr key={w.id}><td>{w.shift === 'evening' ? '🌆 ' : w.shift === 'night' ? '🌙 ' : ''}{w.description}</td><td className="font-bold">{w.actual_qty || w.planned_qty}</td><td>{w.floor_zone || '-'}</td><td>Rs {(w.rate || 0).toLocaleString()}</td><td className="font-bold text-emerald-600">Rs {(w.amount || 0).toLocaleString()}</td></tr>))}</tbody>
-                </table>
+                </NumberedTable>
                 <div className="text-right font-bold text-red-800 mt-2">Grand Total (A): Rs {selectedDpr.work_items.reduce((s, w) => s + (w.amount || 0), 0).toLocaleString()}</div>
               </div>
             )}
@@ -2308,7 +2306,7 @@ export default function DPR() {
               return (
                 <div className="border-2 border-red-300 rounded-lg p-3">
                   <h5 className="font-bold text-red-800 mb-2">TABLE B: Costs</h5>
-                  <table className="text-xs"><thead><tr><th>Type</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+                  <NumberedTable className="text-xs"><thead><tr><th>Type</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
                     <tbody>
                       {/* Non-staff rows as saved. Staff Cost is replaced by the by-name,
                           attendance-filtered breakdown when available (mam 2026-06-30). */}
@@ -2319,7 +2317,7 @@ export default function DPR() {
                         <tr key={'st' + s.user_id}><td>Staff: {s.name}</td><td>1</td><td>Rs {(s.per_day || 0).toLocaleString()}</td><td className="font-bold text-red-600">Rs {(s.per_day || 0).toLocaleString()}</td></tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                   {hasBreakdown && excluded.length > 0 && (
                     <div className="text-[11px] text-gray-400 mt-1">Excluded (no attendance / absent on {selectedDpr.report_date}): {excluded.map(s => s.name).join(', ')}</div>
                   )}
@@ -2350,8 +2348,8 @@ export default function DPR() {
             })()}
 
             {selectedDpr.machinery?.length > 0 && (
-              <div><h5 className="font-semibold text-sm mb-2">Machinery/Tools</h5><table className="text-xs"><thead><tr><th>Equipment</th><th>Qty</th><th>Hours</th><th>Condition</th></tr></thead>
-                <tbody>{selectedDpr.machinery.map(m => (<tr key={m.id}><td>{m.equipment}</td><td>{m.quantity}</td><td>{m.hours_used}h</td><td>{m.condition}</td></tr>))}</tbody></table></div>
+              <div><h5 className="font-semibold text-sm mb-2">Machinery/Tools</h5><NumberedTable className="text-xs"><thead><tr><th>Equipment</th><th>Qty</th><th>Hours</th><th>Condition</th></tr></thead>
+                <tbody>{selectedDpr.machinery.map(m => (<tr key={m.id}><td>{m.equipment}</td><td>{m.quantity}</td><td>{m.hours_used}h</td><td>{m.condition}</td></tr>))}</tbody></NumberedTable></div>
             )}
 
             {/* SPOS (mam 2026-07-31): the report shows the day's site-store
@@ -2378,7 +2376,7 @@ export default function DPR() {
                 <div>
                   <h5 className="font-semibold text-sm mb-2">Material — Site Store (item-wise)</h5>
                   <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
+                    <NumberedTable className="w-full text-xs">
                       <thead><tr className="text-gray-500 border-b text-left">
                         <th className="py-1 pr-2">Material</th>
                         <th className="py-1 px-2 text-right">Issued</th>
@@ -2397,7 +2395,7 @@ export default function DPR() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                     <p className="text-[10px] text-gray-400 mt-1">Issued/Returned come from the jr. engineer's GRN slips (ISU/RTN); Consumed = issued − returned (or typed when no slips).</p>
                   </div>
                 </div>
@@ -2527,7 +2525,7 @@ export default function DPR() {
             <p className="text-sm text-gray-400 text-center py-8">No attendance records found.</p>
           ) : (
             <div className="overflow-x-auto max-h-[58vh] border rounded-lg">
-              <table className="min-w-full text-sm">
+              <NumberedTable className="min-w-full text-sm">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
                     <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Date</th>
@@ -2563,7 +2561,7 @@ export default function DPR() {
                     <td colSpan="2"></td>
                   </tr>
                 </tfoot>
-              </table>
+              </NumberedTable>
             </div>
           )}
 
@@ -2668,7 +2666,7 @@ export default function DPR() {
                   <div className="text-[11px] text-gray-600">No BOQ items with planned quantities in this week — approving will not raise any indent.</div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full min-w-[480px] text-[11px]">
+                    <NumberedTable className="w-full min-w-[480px] text-[11px]">
                       <thead>
                         <tr className="text-gray-500 border-b">
                           <th className="text-left py-1 pr-2">BOQ Item</th>
@@ -2694,7 +2692,7 @@ export default function DPR() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                     {!planShortfall.has_store && (
                       <div className="text-[10px] text-amber-700 mt-1">No site store found for this site — stock counted as 0. Create one in Inventory → Warehouses for real stock checks.</div>
                     )}
@@ -2778,7 +2776,7 @@ export default function DPR() {
                     )}
                     {planBoqItems.length > 0 && (
                       <>
-                        <table className="w-full text-xs">
+                        <NumberedTable className="w-full text-xs">
                           <thead>
                             <tr className="text-gray-500">
                               <th className="text-left py-1">BOQ Item</th>
@@ -2819,7 +2817,7 @@ export default function DPR() {
                               );
                             })}
                           </tbody>
-                        </table>
+                        </NumberedTable>
                         <button type="button" onClick={() => addPlanItem(i)}
                           className="text-[11px] text-red-600 hover:text-red-800 underline mt-1">
                           + Add BOQ item to this day
@@ -3007,7 +3005,7 @@ export default function DPR() {
           )}
           {slipRows.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <NumberedTable className="w-full text-xs">
                 <thead>
                   <tr className="text-gray-500 border-b">
                     <th className="text-left py-1 pr-2">Material</th>
@@ -3039,7 +3037,7 @@ export default function DPR() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           )}
 
@@ -3143,7 +3141,7 @@ function AgeingWidget() {
       </div>
       {flagged.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead><tr className="text-gray-500 border-b text-left">
               <th className="py-1 pr-2">Site</th>
               <th className="py-1 px-2">Sr. Engineer (responsible)</th>
@@ -3166,7 +3164,7 @@ function AgeingWidget() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
           <p className="text-[10px] text-gray-500 mt-1">Kya karna hai: use karo (DPR consumption) · doosri site bhejo · office wapas bhejo (transfer). 30+ din wale items roz shaam 6:30 ki Exception Report mein management ko jate hain.</p>
         </div>
       )}
@@ -3355,7 +3353,7 @@ function AajKaUpdate() {
               <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">Aaj ke liye plan mein koi activity nahi hai. Sr. Engineer se weekly plan approve karwao.</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <NumberedTable className="w-full text-sm">
                   <thead><tr className="text-gray-500 text-xs border-b text-left">
                     <th className="py-1 pr-2">Kaam</th><th className="py-1 px-2 text-right">Target</th>
                     <th className="py-1 pl-2 text-right w-28">Kitna Hua?</th>
@@ -3385,7 +3383,7 @@ function AajKaUpdate() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             )}
           </div>
@@ -3395,7 +3393,7 @@ function AajKaUpdate() {
             {mats.length === 0
               ? <div className="text-xs text-gray-500">Aaj koi material issue nahi hua. Store se material lena ho to <b>Daily Reports → Store Issue/Return</b> se slip banao.</div>
               : (
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead><tr className="text-gray-500 border-b text-left"><th className="py-1 pr-2">Material</th><th className="py-1 px-2 text-right">Issue</th><th className="py-1 px-2 text-right">Wapas</th><th className="py-1 pl-2 text-right">Laga (auto)</th></tr></thead>
                   <tbody>{mats.map((m, i) => (
                     <tr key={i} className="border-b">
@@ -3405,7 +3403,7 @@ function AajKaUpdate() {
                       <td className="py-1 pl-2 text-right tabular-nums font-bold text-indigo-700">{m.net_consumed}</td>
                     </tr>
                   ))}</tbody>
-                </table>
+                </NumberedTable>
               )}
           </div>
 
@@ -3635,7 +3633,7 @@ function SposComplianceGrid() {
                 </div>
                 {/* ─── DESKTOP TABLE (md+) ─── */}
                 <div className="hidden md:block overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <NumberedTable className="w-full text-xs">
                     <thead>
                       <tr className="text-gray-500 border-b text-left">
                         <th className="py-1.5 pr-2">Engineer</th>
@@ -3659,7 +3657,7 @@ function SposComplianceGrid() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </>
             )}
@@ -3788,7 +3786,7 @@ function LossReasonsTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table>
+        <NumberedTable>
           <thead>
             <tr>
               <th>Site</th><th>Date</th><th>Loss (P/L)</th><th>Hindrance</th>
@@ -3851,7 +3849,7 @@ function LossReasonsTab() {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* Proof-of-resolution modal */}
