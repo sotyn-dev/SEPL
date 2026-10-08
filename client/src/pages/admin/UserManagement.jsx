@@ -1,3 +1,5 @@
+import SerialNumber from '../../components/SerialNumber';
+import NumberedTable from '../../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../../api';
 import { useAuth } from '../../context/AuthContext';
@@ -340,8 +342,8 @@ export default function UserManagement() {
 
         {/* Mobile cards view (< md) */}
         <div className="md:hidden divide-y divide-gray-100">
-          {pg.rows.map(u => (
-            <div key={u.id} className="p-3 space-y-2">
+          {pg.rows.map((u, serialIndex) => (
+            <div key={u.id} className="p-3 space-y-2"><SerialNumber value={pg.from + serialIndex + 1} />
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   {u.avatar_url
@@ -431,7 +433,7 @@ export default function UserManagement() {
 
         {/* Desktop Table (md+) */}
         <div className="hidden md:block overflow-x-auto">
-          <table>
+          <NumberedTable start={pg.from + 1}>
             <thead>
               <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Staff Type</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th title="Future password changes only. Passwords are securely hashed and cannot be viewed.">Password changed</th><th>Actions</th></tr>
             </thead>
@@ -513,7 +515,7 @@ export default function UserManagement() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination pg={pg} setPerPage={setPerPage} className="border-t border-gray-100" />
       </div>
@@ -740,8 +742,8 @@ export default function UserManagement() {
           </div>
           {bulkPreview.length > 0 && (
             <div><p className="text-sm font-semibold mb-2">{bulkPreview.length} users to import</p>
-              <div className="max-h-48 overflow-y-auto border rounded text-xs"><table><thead><tr className="bg-gray-50"><th className="px-2 py-1">Name</th><th className="px-2 py-1">Email</th><th className="px-2 py-1">Phone</th><th className="px-2 py-1">Dept</th><th className="px-2 py-1">Role</th></tr></thead>
-                <tbody>{bulkPreview.map((u, i) => <tr key={i}><td className="px-2 py-1 font-medium">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.phone}</td><td className="px-2 py-1">{u.department}</td><td className="px-2 py-1">{u.role_name}</td></tr>)}</tbody></table></div>
+              <div className="max-h-48 overflow-y-auto border rounded text-xs"><NumberedTable><thead><tr className="bg-gray-50"><th className="px-2 py-1">Name</th><th className="px-2 py-1">Email</th><th className="px-2 py-1">Phone</th><th className="px-2 py-1">Dept</th><th className="px-2 py-1">Role</th></tr></thead>
+                <tbody>{bulkPreview.map((u, i) => <tr key={i}><td className="px-2 py-1 font-medium">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.phone}</td><td className="px-2 py-1">{u.department}</td><td className="px-2 py-1">{u.role_name}</td></tr>)}</tbody></NumberedTable></div>
             </div>
           )}
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3">

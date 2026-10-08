@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Job Descriptions Tab — manages JDs (with templates) for open positions.
 //
 // Mam (2026-05-22 Phase 1 Batch B, module #3):
@@ -241,7 +242,7 @@ export default function JobDescriptionsTab() {
 
       {/* List */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Title / Hiring Request</th>
@@ -315,7 +316,7 @@ export default function JobDescriptionsTab() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* ─── CREATE / EDIT JD MODAL ─── */}
@@ -456,7 +457,7 @@ export default function JobDescriptionsTab() {
             <button onClick={() => openTemplateEditor(null)} className="btn btn-primary text-[12px] py-1 px-2 flex items-center gap-1"><FiPlus size={12}/> New Template</button>
           </div>
           <div className="border border-gray-200 rounded-lg overflow-hidden">
-            <table className="text-[12px] w-full">
+            <NumberedTable className="text-[12px] w-full">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Name</th>
@@ -481,7 +482,7 @@ export default function JobDescriptionsTab() {
                   <tr><td colSpan="4" className="text-center py-6 text-gray-400">No templates yet</td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <div className="flex justify-end pt-2">
             <button onClick={() => setModal(false)} className="btn btn-secondary">Close</button>

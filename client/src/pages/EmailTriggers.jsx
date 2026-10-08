@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -149,7 +150,7 @@ export default function EmailTriggers() {
   // that don't apply to a recipient list (Event, Last fired).
   const rulesTable = (rows, listOnly) => (
     <div className="bg-white border rounded-lg overflow-hidden">
-      <table className="w-full text-sm">
+      <NumberedTable className="w-full text-sm">
         <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
             <th className="text-left px-3 py-2">Rule</th>
@@ -196,7 +197,7 @@ export default function EmailTriggers() {
             );
           })}
         </tbody>
-      </table>
+      </NumberedTable>
     </div>
   );
 

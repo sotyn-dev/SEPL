@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test:serial": "node scripts/test-numbered-tables.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

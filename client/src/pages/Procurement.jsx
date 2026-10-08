@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import { useSearchParams } from 'react-router-dom';
@@ -2876,7 +2878,7 @@ export default function Procurement() {
 
             {/* Desktop */}
             <div className="card p-0 overflow-auto hidden md:block">
-              <table className="table text-sm">
+              <NumberedTable start={pg.from + 1} className="table text-sm">
                 <thead><tr><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th className="text-right">Delivery Bill</th><th>Bill PDF</th><th>Tally Bill</th><th>Status</th></tr></thead>
                 <tbody>
                   {pg.rows.map(i => (
@@ -2916,13 +2918,13 @@ export default function Procurement() {
                     </td></tr>
                   )}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile */}
             <div className="md:hidden space-y-2">
-              {pg.rows.map(i => (
-                <div key={i.id} className="card p-3 space-y-2">
+              {pg.rows.map((i, serialIndex) => (
+                <div key={i.id} className="card p-3 space-y-2"><SerialNumber value={pg.from + serialIndex + 1} />
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-bold text-gray-900">{i.indent_number}</div>
@@ -3233,7 +3235,7 @@ export default function Procurement() {
                   : 'No indents yet'}
               </div>
             )}
-            {indPg.rows.map(i => {
+            {indPg.rows.map((i, serialIndex) => {
               const items = i.items || [];
               const expanded = expandedIndents.has(i.id);
               const visibleItems = expanded ? items : items.slice(0, 3);
@@ -3372,7 +3374,7 @@ export default function Procurement() {
                 };
 
                 return (
-                  <div key={i.id} className="card p-3 space-y-2">
+                  <div key={i.id} className="card p-3 space-y-2"><SerialNumber value={indPg.from + serialIndex + 1} />
                     {/* Header: indent # · date · status */}
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
@@ -3568,7 +3570,7 @@ export default function Procurement() {
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
               to scroll-end-then-back to read row labels).  Hidden on phones
               in favour of the card list above. */}
-            <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col dense-cols">
+            <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><NumberedTable start={indPg.from + 1} className="freeze-head freeze-col dense-cols">
               <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th className="text-right">Delivery Bill<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(billable × del. %)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
               <tbody>
                 {indPg.rows.map(i => {
@@ -4072,7 +4074,7 @@ export default function Procurement() {
                   : 'No indents yet'}
               </td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
           </div>
           {/* Pager OUTSIDE the 70vh scroll box — inside it, Prev/Next only
               appeared after scrolling the box to its very bottom, so users
@@ -4315,7 +4317,7 @@ export default function Procurement() {
                   </div>
                   <p className="text-[11px] text-amber-700">Check each rate against the quotation. Only ticked rows with a rate are saved; you can correct any rate first.</p>
                   <div className="overflow-x-auto border rounded">
-                    <table className="w-full text-xs">
+                    <NumberedTable className="w-full text-xs">
                       <thead>
                         <tr className="bg-gray-50 text-left">
                           <th className="p-2 w-8"></th><th className="p-2">Item</th><th className="p-2">Qty</th>
@@ -4351,7 +4353,7 @@ export default function Procurement() {
                           );
                         })}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                   <div className="flex justify-end gap-2">
                     <button type="button" className="btn btn-secondary text-xs" disabled={bulkApplying} onClick={() => setQuoteReview(null)}>Cancel</button>
@@ -4371,7 +4373,7 @@ export default function Procurement() {
             {/* freeze-2col + explicit --freeze-col-1-w pins Indent + Sub-Item
               while scrolling rate columns horizontally (mam 2026-05-25). */}
             <div className="card p-0 overflow-x-auto hidden lg:block" style={{ '--freeze-col-1-w': '150px' }}>
-              <table className="text-xs freeze-2col" style={{ minWidth: '1400px' }}>
+              <NumberedTable start={ratesPg.from + 1} className="text-xs freeze-2col" style={{ minWidth: '1400px' }}>
                 <thead>
                   <tr className="bg-gray-50">
                     {/* width matches --freeze-col-1-w so the 2nd sticky column
@@ -4533,19 +4535,19 @@ export default function Procurement() {
                   })}
                   {mergedRates.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile card layout — uses the same merged-by-(indent · sub-item)
               data so the same item across multiple BOQs collapses to ONE
               card with the combined qty. */}
             <div className="lg:hidden space-y-2">
-              {ratesPg.rows.map(r => {
+              {ratesPg.rows.map((r, serialIndex) => {
                 const stat = r.rate_status || 'pending';
                 // All 3 vendor quotes (name + rate) required before Finalize (mam 2026-07-21).
                 const threeFilled = [1, 2, 3].every(n => Number(r[`vendor${n}_rate`]) > 0 && String(r[`vendor${n}_name`] || '').trim());
                 return (
-                  <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}>
+                  <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}><SerialNumber value={ratesPg.from + serialIndex + 1} />
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex items-start gap-2">
                         <input type="checkbox" className="mt-1" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} title="Tick for bulk fill" />
@@ -4701,7 +4703,7 @@ export default function Procurement() {
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
-                <table className="text-xs freeze-head">
+                <NumberedTable start={pendingPg.from + 1} className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">Indent</th>
                     <th className="px-2 py-1 text-left">Item</th>
@@ -4747,7 +4749,7 @@ export default function Procurement() {
                       <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
                     )}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
 
               {/* Mobile cards — mam (2026-06-02): "i want mobile view
@@ -4762,11 +4764,11 @@ export default function Procurement() {
                     <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
                   </div>
                 )}
-                {!vpoPendingLoading && pendingPg.rows.map(p => {
+                {!vpoPendingLoading && pendingPg.rows.map((p, serialIndex) => {
                   const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
                   const stat = p.rate_status || 'pending';
                   return (
-                    <div key={p.indent_item_id} className="card p-3 space-y-2">
+                    <div key={p.indent_item_id} className="card p-3 space-y-2"><SerialNumber value={pendingPg.from + serialIndex + 1} />
                       {/* Header: indent # · status */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
@@ -4870,7 +4872,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><NumberedTable start={listPg.from + 1} className="freeze-head freeze-col">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {listPg.rows.map(v => (
@@ -4999,14 +5001,14 @@ export default function Procurement() {
                 {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}
               </td></tr>}
             </tbody>
-            </table></div>
+            </NumberedTable></div>
           {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
           <div className="hidden md:block card p-0"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></div>
 
           {/* Mobile cards — polished pattern matching Indents card. */}
           <div className="md:hidden space-y-3">
-            {listPg.rows.map(v => (
-              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}>
+            {listPg.rows.map((v, serialIndex) => (
+              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}><SerialNumber value={listPg.from + serialIndex + 1} />
                 {/* Header: PO # · status */}
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
@@ -5249,7 +5251,7 @@ export default function Procurement() {
 
             {/* Desktop table (mobile gets card list below — mam 2026-06-02) */}
             <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block">
-              <table className="text-xs freeze-head">
+              <NumberedTable className="text-xs freeze-head">
                 <thead><tr className="bg-gray-50">
                   <th className="px-3 py-2 text-left">PO Number</th>
                   <th className="px-3 py-2 text-left">Indent / Site</th>
@@ -5338,7 +5340,7 @@ export default function Procurement() {
                     </td></tr>
                   )}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile cards — same polished pattern as Indents (mam). */}
@@ -5562,7 +5564,7 @@ export default function Procurement() {
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
-                <table className="text-xs freeze-head">
+                <NumberedTable start={fuPg.from + 1} className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
                     <th className="px-2 py-1 text-left">Indent</th>
@@ -5623,7 +5625,7 @@ export default function Procurement() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
 
               {/* Mobile cards — polished pattern matching Indents (mam). */}
@@ -5633,7 +5635,7 @@ export default function Procurement() {
                     <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
                   </div>
                 )}
-                {!billsFuLoading && fuPg.rows.map(po => {
+                {!billsFuLoading && fuPg.rows.map((po, serialIndex) => {
                   const d = daysDiff(po.expected_receipt_date);
                   let chip;
                   if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
@@ -5642,7 +5644,7 @@ export default function Procurement() {
                   else if (d <= 3)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-orange-300 bg-orange-50 text-orange-700 uppercase">In {d}d</span>;
                   else              chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50 text-gray-600 uppercase">In {d}d</span>;
                   return (
-                    <div key={po.id} className="card p-3 space-y-2">
+                    <div key={po.id} className="card p-3 space-y-2"><SerialNumber value={fuPg.from + serialIndex + 1} />
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
@@ -5726,7 +5728,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{billsListTotal > 0 ? `${billsListPg.from + 1}–${billsListPg.to}` : 0}</span> of {billsListTotal}
                 </div>
               </div>
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><NumberedTable start={billsListPg.from + 1} className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Freight</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListLoading && <tr><td colSpan="11" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
@@ -5767,15 +5769,15 @@ export default function Procurement() {
                 </td></tr>
               )}
             </tbody>
-            </table></div>
+            </NumberedTable></div>
           {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
           <div className="hidden md:block card p-0"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></div>
 
           {/* Mobile cards — polished pattern matching Indents (mam). */}
           <div className="md:hidden space-y-3">
             {billsListLoading && <div className="card p-6 text-center text-gray-500 text-sm"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...</div>}
-            {!billsListLoading && billsListPg.rows.map(b => (
-              <div key={b.id} className="card p-3 space-y-2">
+            {!billsListLoading && billsListPg.rows.map((b, serialIndex) => (
+              <div key={b.id} className="card p-3 space-y-2"><SerialNumber value={billsListPg.from + serialIndex + 1} />
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Bill No</div>
@@ -5937,7 +5939,7 @@ export default function Procurement() {
             <button onClick={openDnModal} className="btn btn-secondary flex items-center gap-2" title="Most debits are raised automatically on variance — use this only for a manual one"><FiPlus /> Manual Debit Note</button>
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full freeze-head">
+            <NumberedTable className="text-sm w-full freeze-head">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">No.</th>
@@ -5970,7 +5972,7 @@ export default function Procurement() {
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       )}
@@ -7071,7 +7073,7 @@ export default function Procurement() {
                 <div className="p-4 text-center text-sm text-gray-400">Loading items…</div>
               ) : (
                 <div className="overflow-x-auto max-h-[360px]">
-                  <table className="text-xs">
+                  <NumberedTable className="text-xs">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="px-2 py-1.5"></th>
@@ -7148,7 +7150,7 @@ export default function Procurement() {
                       <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
-                  </table>
+                  </NumberedTable>
                 </div>
               )}
             </div>
@@ -7262,7 +7264,7 @@ export default function Procurement() {
                   {!billItems.any_receipt && <span className="text-[10px] text-amber-600 normal-case">No receipt recorded — edit received below</span>}
                 </div>
                 <div className="overflow-x-auto max-h-52">
-                  <table className="text-[11px] w-full">
+                  <NumberedTable className="text-[11px] w-full">
                     <thead className="bg-gray-50 sticky top-0"><tr>
                       <th className="px-2 py-1 text-left">Item</th>
                       <th className="px-2 py-1 text-right">PO Qty</th>
@@ -7289,7 +7291,7 @@ export default function Procurement() {
                         );
                       })}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
                 {shortLines.length > 0 && (
                   <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
@@ -7370,7 +7372,7 @@ export default function Procurement() {
             <p className="text-[11px] text-gray-500">Edit how much was actually received per line. Saving updates the Delivery Challan’s quantity.</p>
             <div className="border rounded-lg overflow-hidden">
               <div className="overflow-x-auto max-h-72">
-                <table className="text-[11px] w-full">
+                <NumberedTable className="text-[11px] w-full">
                   <thead className="bg-gray-50 sticky top-0"><tr>
                     <th className="px-2 py-1 text-left">Item</th>
                     <th className="px-2 py-1 text-right">PO Qty</th>
@@ -7395,7 +7397,7 @@ export default function Procurement() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             </div>
             <div className="flex justify-end gap-3">
@@ -7734,7 +7736,7 @@ export default function Procurement() {
                   );
                 })()}
                 <div className="max-h-56 overflow-y-auto border rounded">
-                  <table className="w-full text-[11px]">
+                  <NumberedTable className="w-full text-[11px]">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr className="text-left text-gray-500">
                         <th className="px-2 py-1 w-8"></th>
@@ -7776,7 +7778,7 @@ export default function Procurement() {
                         </td>
                       </tr>
                     </tfoot>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}

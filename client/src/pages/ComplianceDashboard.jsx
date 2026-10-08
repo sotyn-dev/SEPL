@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -577,7 +578,7 @@ export default function ComplianceDashboard() {
             </div>
           )}
 
-          <table className="w-full text-left text-xs border-collapse">
+          <NumberedTable start={(page - 1) * pageSize + 1} className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100/70 text-gray-600 uppercase text-[10px] tracking-wider border-b border-gray-200">
                 <th className="p-3.5 font-semibold">Case #</th>
@@ -686,7 +687,7 @@ export default function ComplianceDashboard() {
                 })
               )}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
 
         {/* Enhanced Pagination Controls */}

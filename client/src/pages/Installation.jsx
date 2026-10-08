@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -44,7 +45,7 @@ export default function Installation() {
           <button onClick={() => { setEditing(null); setForm({ po_id: '', site_address: '', start_date: '', end_date: '', assigned_to: '', notes: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Installation</button>
         </div>
       </div>
-      <div className="card p-0"><table className="freeze-head">
+      <div className="card p-0"><NumberedTable className="freeze-head">
         <thead><tr><th>PO</th><th>Site Address</th><th>Start</th><th>End</th><th>Assigned To</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {installations.map(i => (
@@ -63,7 +64,7 @@ export default function Installation() {
           ))}
           {installations.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No installations yet</td></tr>}
         </tbody>
-      </table></div>
+      </NumberedTable></div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Installation' : 'Add Installation'}>
         <form onSubmit={save} className="space-y-4">

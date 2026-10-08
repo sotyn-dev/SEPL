@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FiSun, FiPlus, FiSave, FiTrash2 } from 'react-icons/fi';
@@ -34,7 +35,7 @@ export default function SolarLabourMaster() {
         <p className="text-xs text-gray-500">Solar installation / civil / transport / O&amp;M labour rates that feed the quotation engine. Owned by the Solar Sales module.</p>
       </div>
       <div className="card p-4 overflow-x-auto">
-        <table className="w-full text-xs">
+        <NumberedTable className="w-full text-xs">
           <thead><tr className="bg-gray-50 text-left text-gray-500 uppercase text-[10px]">
             {COLS.map((c) => <th key={c.k} className="p-2">{c.l}</th>)}<th></th></tr></thead>
           <tbody>
@@ -50,7 +51,7 @@ export default function SolarLabourMaster() {
               </tr>))}
             {!rows.length && <tr><td colSpan={COLS.length + 1} className="p-4 text-center text-gray-300">No rows.</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
         <button onClick={() => setRows((rs) => [...rs, { _dirty: true, active: 1 }])} className="btn btn-secondary text-xs mt-3 flex items-center gap-1"><FiPlus size={13} /> Add row</button>
       </div>
     </div>);

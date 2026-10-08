@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import MultiUserSelect from '../components/MultiUserSelect';
@@ -608,7 +610,7 @@ export default function PaymentRequired() {
           {stats.pendingApprovals?.length > 0 && (
             <div className="card p-0 overflow-x-auto">
               <div className="p-4 border-b bg-amber-50"><h4 className="font-semibold text-amber-800">Pending Approvals</h4></div>
-              <table><thead><tr><th>Req No</th><th>Employee</th><th>Category</th><th>Amount</th><th>Step</th><th>Actions</th></tr></thead>
+              <NumberedTable><thead><tr><th>Req No</th><th>Employee</th><th>Category</th><th>Amount</th><th>Step</th><th>Actions</th></tr></thead>
                 <tbody>{stats.pendingApprovals.map(r => (
                   <tr key={r.id}>
                     <td className="font-bold text-red-600 cursor-pointer" onClick={() => viewRequest(r.id)}>{r.request_no}</td>
@@ -635,7 +637,7 @@ export default function PaymentRequired() {
                     </div></td>
                   </tr>
                 ))}</tbody>
-              </table>
+              </NumberedTable>
             </div>
           )}
         </>
@@ -808,10 +810,10 @@ export default function PaymentRequired() {
             return isMobile ? (
             /* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────── */
             <div className="space-y-3">
-            {pageRows.map(r => {
+            {pageRows.map((r, serialIndex) => {
               const { date, time } = fmtISTPair(r.created_at);
               return (
-                <div key={r.id} className="card p-3 space-y-2">
+                <div key={r.id} className="card p-3 space-y-2"><SerialNumber value={safePage * PAGE_SIZE + serialIndex + 1} />
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Request</div>
@@ -878,7 +880,7 @@ export default function PaymentRequired() {
           </div>
             ) : (
           /* ─── DESKTOP TABLE (md+) ───────────────────────────────── */
-          <><div className="card p-0"><table className="freeze-head">
+          <><div className="card p-0"><NumberedTable start={safePage * PAGE_SIZE + 1} className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th title="Amount the approver agreed — may be less than requested">Approval Amt</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {pageRows.map(r => (
@@ -999,7 +1001,7 @@ export default function PaymentRequired() {
               ))}
               {listRows.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
           {pager}</>
             );
           })()}
@@ -1672,7 +1674,7 @@ export default function PaymentRequired() {
             {Object.entries(routingMatrix).map(([category, steps]) => (
               <div key={category} className="card p-3">
                 <h3 className="font-semibold text-sm mb-2 text-red-700">{category}</h3>
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="text-left px-2 py-1.5 w-12">Step</th>
@@ -1710,7 +1712,7 @@ export default function PaymentRequired() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             ))}
             <div className="flex justify-end pt-2 border-t">

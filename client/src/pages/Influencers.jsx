@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Influencer / Referral Partner module — mam (2026-05-20):
 // "make new influencer Sheet add fields according to sheet. and same
 // as upload can bulk and can download also".
@@ -229,7 +230,7 @@ export default function Influencers() {
 
       {/* Table */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-xs w-full min-w-[720px]">
+        <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="text-xs w-full min-w-[720px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="px-2 py-2 text-left">Form ID</th>
@@ -277,7 +278,7 @@ export default function Influencers() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...pager} />
 
@@ -563,7 +564,7 @@ export default function Influencers() {
               <div>
                 <div className="text-xs font-semibold text-red-700 mb-1">Failed rows (first 50)</div>
                 <div className="overflow-x-auto border rounded">
-                  <table className="w-full text-xs">
+                  <NumberedTable className="w-full text-xs">
                     <thead className="bg-red-50 text-red-700">
                       <tr><th className="px-2 py-1.5 text-left">Excel Row</th><th className="px-2 py-1.5 text-left">Reason</th></tr>
                     </thead>
@@ -572,7 +573,7 @@ export default function Influencers() {
                         <tr key={i} className="border-t"><td className="px-2 py-1.5 font-mono">{f.row}</td><td className="px-2 py-1.5">{f.reason}</td></tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}

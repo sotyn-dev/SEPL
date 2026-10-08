@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Cash Flow Tracker — rolling weekly cash-flow forecast.
 // (Was "AR/AP Tracker"; renamed by mam on 2026-09-03 when the old Cash Flow
 // page was deleted and this became THE cash view in Finance.)
@@ -389,7 +390,7 @@ export default function ArApTracker() {
 
           <div className="card p-0 overflow-x-auto">
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase border-b">Entries</div>
-            <table className="w-full text-sm">
+            <NumberedTable className="w-full text-sm">
               <thead><tr className="bg-gray-50 text-xs text-gray-500 uppercase">
                 <th className="text-left px-3 py-2">Party</th><th className="text-left px-3 py-2">Source</th><th className="text-left px-3 py-2">Week</th>
                 <th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Actual</th>
@@ -427,7 +428,7 @@ export default function ArApTracker() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </>
       )}
@@ -463,7 +464,7 @@ export default function ArApTracker() {
             );
           })()}
           <div className="card p-0 overflow-x-auto">
-          <table className="w-full text-sm">
+          <NumberedTable className="w-full text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-500 uppercase">
               <th className="text-left px-4 py-2">Week</th><th className="text-right px-4 py-2">AR (in)</th>
               <th className="text-right px-4 py-2">AP (out)</th><th className="text-right px-4 py-2">Net</th>
@@ -481,7 +482,7 @@ export default function ArApTracker() {
                 </tr>
               ))}
               {summary.rows.length > 0 && (
-                <tr className="border-t-2 bg-gray-50 font-bold">
+                <tr data-serial-skip className="border-t-2 bg-gray-50 font-bold">
                   <td className="px-4 py-2">Total</td>
                   <td className="px-4 py-2 text-right text-emerald-700">{fmtL(summary.totals.ar)}</td>
                   <td className="px-4 py-2 text-right text-red-600">{fmtL(summary.totals.ap)}</td>
@@ -490,7 +491,7 @@ export default function ArApTracker() {
                 </tr>
               )}
             </tbody>
-          </table>
+          </NumberedTable>
           </div>
         </div>
       )}
@@ -503,7 +504,7 @@ export default function ArApTracker() {
             <button onClick={exportLog} className="btn flex items-center gap-2 border"><FiDownload size={14} /> Export CSV</button>
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="w-full text-xs">
+            <NumberedTable className="w-full text-xs">
               <thead><tr className="bg-gray-50 text-gray-500 uppercase">
                 <th className="text-left px-3 py-2">When (IST)</th><th className="text-left px-3 py-2">User</th>
                 <th className="text-left px-3 py-2">Kind</th><th className="text-left px-3 py-2">Party</th>
@@ -524,7 +525,7 @@ export default function ArApTracker() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       )}

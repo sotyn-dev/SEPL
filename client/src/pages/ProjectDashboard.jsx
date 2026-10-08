@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import {
@@ -596,7 +597,7 @@ export default function ProjectDashboard() {
                   </div>
 
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <NumberedTable className="w-full text-left text-xs">
                       <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
                         <tr>
                           <th className="py-2.5 px-3">PO Number</th>
@@ -685,7 +686,7 @@ export default function ProjectDashboard() {
                           ))
                         )}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                 </div>
               )}
@@ -698,7 +699,7 @@ export default function ProjectDashboard() {
                     <span className="text-gray-400">Total {activeProject.po_line_items.length} item lines</span>
                   </div>
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <NumberedTable className="w-full text-left text-xs">
                       <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
                         <tr>
                           <th className="py-2.5 px-3">Item Description</th>
@@ -732,7 +733,7 @@ export default function ProjectDashboard() {
                           ))
                         )}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                 </div>
               )}
@@ -942,7 +943,7 @@ export default function ProjectDashboard() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <NumberedTable className="w-full text-left text-xs">
               <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
                 <tr>
                   <th className="py-2.5 px-3">Project / Site</th>
@@ -1017,7 +1018,7 @@ export default function ProjectDashboard() {
                   ))
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       )}

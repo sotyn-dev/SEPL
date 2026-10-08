@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 import { useEffect, useRef, useState } from 'react';
 import { FiCheck, FiHelpCircle, FiPlus, FiRefreshCw, FiSearch } from 'react-icons/fi';
 import toast from 'react-hot-toast';
@@ -95,7 +96,7 @@ export default function IndentHelp({ user }) {
     </div>
     {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
     <div className="rounded-xl border border-slate-200 bg-white overflow-x-auto">
-      <table className="w-full min-w-[1000px] text-sm">
+      <NumberedTable start={(data.page - 1) * 20 + 1} className="w-full min-w-[1000px] text-sm">
         <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500"><tr>{['Indent / Project', 'Issue', 'Stage', 'Raised by', 'Assigned to', 'Priority', 'Status', 'Action'].map(h => <th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-100">
           {loading ? <tr><td colSpan={8} className="p-10 text-center text-slate-500">Loading indent help…</td></tr> : data.rows.length === 0 ? <tr><td colSpan={8} className="p-10 text-center text-slate-500">{error ? 'Tickets are unavailable.' : 'No tickets match this view. Raise Indent Help to get started.'}</td></tr> : data.rows.map(t => <tr key={t.id} className="hover:bg-blue-50/30">
@@ -107,7 +108,7 @@ export default function IndentHelp({ user }) {
             <td className="px-4 py-4"><button className={`btn whitespace-nowrap text-xs ${t.status === 'open' && t.assigned_to === user?.id ? 'btn-primary' : 'btn-secondary'}`} onClick={() => { setSelected(t); setCompletionNote(''); }}>{t.status === 'open' && t.assigned_to === user?.id ? 'Mark Done' : 'View'}</button></td>
           </tr>)}
         </tbody>
-      </table>
+      </NumberedTable>
       <div className="border-t px-4 py-3 flex items-center justify-between gap-3 text-xs text-slate-500"><span>{data.total} ticket{data.total === 1 ? '' : 's'} · Page {data.page} of {data.pages}</span><div className="flex gap-2"><button className="btn btn-secondary text-xs" disabled={loading || data.page <= 1} onClick={() => setFilters(f => ({ ...f, page: data.page - 1 }))}>Previous</button><button className="btn btn-secondary text-xs" disabled={loading || data.page >= data.pages} onClick={() => setFilters(f => ({ ...f, page: data.page + 1 }))}>Next</button></div></div>
     </div>
 

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
@@ -1063,7 +1064,7 @@ export default function Estimator() {
             : <span className="text-[11px] text-gray-400">pick dates to auto-set the months</span>}
         </div>
         <div className="table-responsive">
-          <table className="min-w-[650px] w-full text-sm">
+          <NumberedTable className="min-w-[650px] w-full text-sm">
             <thead><tr className="text-[10px] uppercase text-gray-400 text-left">
               <th className="p-1 min-w-[180px]">Item</th><th className="p-1 text-right">Qty</th><th className="p-1 text-right">Monthly Cost ₹</th><th className="p-1 text-right">Months</th><th className="p-1 text-right">Amount ₹</th><th></th>
             </tr></thead>
@@ -1080,7 +1081,7 @@ export default function Estimator() {
               ))}
             </tbody>
             <tfoot><tr className="border-t-2 border-gray-200 font-semibold"><td className="p-1" colSpan={4}>Manpower Total</td><td className="p-1 text-right text-indigo-700">₹{fmt(manpower.reduce((t, m) => t + mpAmt(m), 0))}</td><td></td></tr></tfoot>
-          </table>
+          </NumberedTable>
         </div>
         {/* Overhead = % of project cost (before margin) — mam 2026-06-22 */}
         <div className="flex flex-wrap items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-200 text-sm">

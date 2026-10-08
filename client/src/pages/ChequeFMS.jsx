@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState, useMemo } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -294,7 +295,7 @@ export default function ChequeFMS() {
       {tab !== 'responsible' && (
         <div className="card p-0">
           <div className="table-responsive">
-            <table className="w-full text-xs freeze-head min-w-[700px]">
+            <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="w-full text-xs freeze-head min-w-[700px]">
               <thead className="bg-gray-50 text-gray-600 uppercase">
                 <tr>
                   <th className="px-2 py-2 text-left">Cheque #</th>
@@ -342,7 +343,7 @@ export default function ChequeFMS() {
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <Pagination {...pager} />
         </div>
@@ -440,7 +441,7 @@ export default function ChequeFMS() {
               <p className="text-xs text-gray-400 italic">No actions logged yet.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[400px]">
+                <NumberedTable className="w-full text-xs min-w-[400px]">
                   <thead className="bg-gray-50"><tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-left">Action</th><th className="px-2 py-1 text-left">Remarks</th><th className="px-2 py-1 text-left">By</th></tr></thead>
                   <tbody>
                     {history.map(h => (
@@ -452,7 +453,7 @@ export default function ChequeFMS() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             )}
             <div className="flex justify-end"><button onClick={() => setModal(null)} className="btn btn-secondary">Close</button></div>

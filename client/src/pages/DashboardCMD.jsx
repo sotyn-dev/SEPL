@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // CMD Dashboard — Stage 1 (Operating Console)
 // Mirrors mam's HTML spec SEPL_CMD_Single_Page_Dashboard_v2.html
 // section-by-section, wired to /api/dashboards/cmd-detail.
@@ -420,7 +421,7 @@ export default function DashboardCMD() {
             </div>
           </Card>
           <Card title="Top 5 debtors" meta="overdue">
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Customer</th>
                 <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Outstanding</th>
@@ -437,7 +438,7 @@ export default function DashboardCMD() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </Card>
           <Card title="Statutory · AP · payroll" meta="next 30d">
             <TicksList items={cash.statutory_dues.map(d => ({
@@ -507,7 +508,7 @@ export default function DashboardCMD() {
           <>
             <SectionHead>Data quality · Junk POs in book</SectionHead>
             <Card title="Junk-PO list" meta={`total ${fmtINR(data_quality.junk_po_total)} affected`}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
                 <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                   <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Lead No</th>
                   <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Client</th>
@@ -522,7 +523,7 @@ export default function DashboardCMD() {
                     <td style={{ padding: '8px 5px', textAlign: 'right', fontWeight: 600 }}>{fmtINR(p.po_amount)}</td>
                   </tr>
                 ))}</tbody>
-              </table>
+              </NumberedTable>
             </Card>
           </>
         )}

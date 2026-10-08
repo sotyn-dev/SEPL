@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Procurement Schedule — Phase A Gantt (mam 2026-05-28).
 // Custom SVG Gantt (no npm dependency added). Two-tier rows: a trade
 // header summarises its category, click to expand the BOQ items under
@@ -420,7 +421,7 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
         </div>
       </div>
       <div className="table-responsive">
-        <table className="w-full text-xs min-w-[600px]">
+        <NumberedTable className="w-full text-xs min-w-[600px]">
           <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
             <tr>
               <th className="text-left p-2">Item</th>
@@ -460,7 +461,7 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <p className="text-[10px] text-gray-500 px-3 py-2 border-t border-gray-100">
         Edit any value above before clicking <b>Approve</b>. Approving runs the backward-pass with these per-item lead times and writes the Gantt bars.
@@ -807,7 +808,7 @@ function RecordsTab({ projects, canDelete }) {
 
       {pickedProjectId && !loading && list.length > 0 && (
         <div className="card p-0 table-responsive">
-          <table className="w-full text-sm min-w-[650px]">
+          <NumberedTable className="w-full text-sm min-w-[650px]">
             <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
               <tr>
                 <th className="text-left p-2">When generated</th>
@@ -835,7 +836,7 @@ function RecordsTab({ projects, canDelete }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
           <p className="text-[10px] text-gray-500 p-2 border-t border-gray-100">
             Click <b>Open</b> to view a historical Gantt — same chart, same colours. <b>Download PDF</b> button at the top of the chart triggers your browser's print dialog (choose "Save as PDF" as the destination).
           </p>

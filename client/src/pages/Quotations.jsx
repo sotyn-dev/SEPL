@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
@@ -81,7 +82,7 @@ function MarginChartEditor({ chart, reload }) {
           Discount: within "OK up to" — done; above it — Sales Head; above the MD line — MD sir (SOP-03.3).
         </p>
       </div>
-      <table className="w-full text-sm">
+      <NumberedTable className="w-full text-sm">
         <thead className="text-[10px] text-gray-500 uppercase bg-gray-50">
           <tr><th className="text-left p-2">Category</th><th className="text-center p-2 w-32">Margin %</th><th className="w-10"></th></tr>
         </thead>
@@ -98,7 +99,7 @@ function MarginChartEditor({ chart, reload }) {
           ))}
           {chart.rows.length === 0 && <tr><td colSpan="3" className="text-center py-6 text-gray-400 text-xs">No categories yet — add the fixed margins below</td></tr>}
         </tbody>
-      </table>
+      </NumberedTable>
       <form onSubmit={addRow} className="flex items-end gap-2 border-t pt-3">
         <div className="flex-1"><label className="label">Category</label>
           <input className="input" placeholder="e.g. Fire Fighting / Electrical / Solar…" value={cat} onChange={e => setCat(e.target.value)} /></div>

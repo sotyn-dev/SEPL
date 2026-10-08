@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Rental Tools Module — mam (2026-05-16) spec:
 //   Stage 0 · Enquiry (site eng raises)
 //   Stage 1 · Rate Finalised — Ajmer locks vendor + rate, auto-PO created
@@ -409,7 +410,7 @@ export default function RentalTools() {
           )}
         </div>
         <div className="card p-0 overflow-x-auto">
-          <table className="w-full text-sm">
+          <NumberedTable className="w-full text-sm">
             <thead><tr className="bg-gray-50 text-xs uppercase text-gray-600">
               <th className="text-left px-3 py-2">Enquiry</th>
               <th className="text-left px-3 py-2">Site / Tool</th>
@@ -459,7 +460,7 @@ export default function RentalTools() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </>)}
 

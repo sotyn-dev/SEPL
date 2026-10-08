@@ -400,6 +400,41 @@ tbody tr:hover {
   background: rgba(254, 226, 226, 0.4);
 }
 
+/* Display sequence stays separate from the ERP's persistent record IDs. */
+.numbered-table .serial-number-cell {
+  width: 2.75rem;
+  min-width: 2.75rem;
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+}
+.numbered-table.freeze-col tr > :nth-child(2) {
+  position: sticky;
+  left: 2.75rem;
+  background: inherit;
+  z-index: 1;
+}
+.numbered-table.freeze-col thead tr > :nth-child(2) {
+  z-index: 30;
+  background: #f9fafb;
+}
+.numbered-table.freeze-2col tr > :nth-child(2) {
+  left: 2.75rem;
+}
+.numbered-table.freeze-2col tr > :nth-child(3) {
+  position: sticky;
+  left: calc(2.75rem + var(--freeze-col-1-w, 140px));
+  background: inherit;
+  z-index: 1;
+}
+.numbered-table.freeze-2col thead tr > :nth-child(3) {
+  z-index: 30;
+  background: #f9fafb;
+}
+
 /* freeze-2col — pins the FIRST TWO columns instead of just one.  Use
    when the meaningful row label spans two cells (e.g. on the Vendor
    Rates table the Indent No is in col 1 and the Sub-Item description

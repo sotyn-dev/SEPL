@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Per-employee MIS scorecard matching the SEPL Google Sheet format mam
 // shared on 2026-05-04. Three tabs:
 //   - My Scorecard  : current user's MIS for the picked week, editable
@@ -647,7 +648,7 @@ export default function Scorecard() {
           {displayCard.template && Object.keys(grouped).map(groupName => (
             <div key={groupName} className="card p-0 overflow-x-auto">
               <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 font-bold text-amber-800 text-sm">{groupName}</div>
-              <table className="w-full text-xs">
+              <NumberedTable className="w-full text-xs">
                 <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
                   <tr>
                     <th className="text-left p-2 w-[260px]">Team / Person</th>
@@ -660,11 +661,12 @@ export default function Scorecard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grouped[groupName].map(k => {
+                  {grouped[groupName].map((k, index) => {
                     const isRaci = k.data_source === 'auto:raci_steps_done';
                     return (
                       <Fragment key={k.kpi_id}>
                         <KpiRow
+                          serialNumber={index + 1}
                           kpi={k}
                           saving={savingKpi === k.kpi_id}
                           onSave={(patch) => saveEntry(k, patch)}
@@ -685,7 +687,7 @@ export default function Scorecard() {
                     );
                   })}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           ))}
         </div>
@@ -1026,7 +1028,7 @@ function RaciBreakdown({ data }) {
       {Object.entries(byMod).map(([mod, list]) => (
         <div key={mod} className="border rounded overflow-hidden">
           <div className="px-3 py-1.5 bg-amber-50 border-b border-amber-200 font-semibold text-amber-800 text-sm">{mod}</div>
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
               <tr>
                 <th className="text-left p-2">Step</th>
@@ -1068,7 +1070,7 @@ function RaciBreakdown({ data }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       ))}
     </div>
@@ -1096,7 +1098,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
+function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -1147,6 +1149,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
 
   return (
     <tr className={`border-t ${saving ? 'bg-amber-50' : ''}`}>
+      <td className="serial-number-cell">{serialNumber}</td>
       <td className="p-2">
         <div className="font-medium">{kpi.metric_name}</div>
         {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
@@ -1524,7 +1527,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
           </>
         )}
       </div>
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead className="bg-gray-50">
           <tr>
             <th className="text-left p-2">Group</th>
@@ -1896,7 +1899,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             );
           })}
         </tbody>
-      </table>
+      </NumberedTable>
 
       {adding && (
         <form onSubmit={addKpi} className="border-t pt-3 grid grid-cols-2 gap-2">
@@ -1961,7 +1964,7 @@ function AssignTemplates({ assignments, templates, onSaved }) {
         <div><p className="font-semibold">Assign templates</p><p className="text-xs text-gray-500 mt-1">Choose multiple templates for employees handling more than one role.</p></div>
         <input className="input text-sm w-full sm:w-64" aria-label="Search employees" placeholder="Search employee or template…" value={search} onChange={e => setSearch(e.target.value)} />
       </div>
-      <div className="overflow-x-auto"><table>
+      <div className="overflow-x-auto"><NumberedTable>
         <thead><tr><th>Employee</th><th>Dept</th><th>Role</th><th>Assigned templates</th></tr></thead>
         <tbody>
           {visible.map(a => (
@@ -1983,7 +1986,7 @@ function AssignTemplates({ assignments, templates, onSaved }) {
           ))}
           {!visible.length && <tr><td colSpan={4} className="text-center text-gray-400 py-6">No employees found.</td></tr>}
         </tbody>
-      </table></div>
+      </NumberedTable></div>
       {editing && <TemplateAssignmentPicker key={editing.user_id} employee={editing} templates={templates} onSaved={onSaved} onClose={() => setEditing(null)} />}
     </div>
   );

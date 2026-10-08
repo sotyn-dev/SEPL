@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
@@ -375,7 +376,7 @@ export default function CRMFunnel() {
 
         <div className="card p-0 overflow-hidden">
           <div className="table-responsive">
-            <table className="freeze-head dense-cols text-xs min-w-[950px] w-full">
+            <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head dense-cols text-xs min-w-[950px] w-full">
               <thead>
                 <tr>
                   <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
@@ -448,7 +449,7 @@ export default function CRMFunnel() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <Pagination {...pager} />
         </div>

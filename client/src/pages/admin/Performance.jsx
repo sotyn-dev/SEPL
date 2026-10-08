@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // Admin ▸ Performance — what is slow on the LIVE server, right now.
 //
 // Hang audit 2026-09-05. The server is one synchronous-SQLite process, so a
@@ -118,7 +119,7 @@ export default function Performance() {
               <span className="text-xs text-gray-500">requests ≥ {ms(data.thresholds.track_ms)}, ids collapsed to :id</span>
             </header>
             <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
+              <NumberedTable className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
                   <tr>
                     <th className="text-left px-4 py-2">Route</th>
@@ -146,7 +147,7 @@ export default function Performance() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           </section>
 

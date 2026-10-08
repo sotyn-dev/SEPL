@@ -1,3 +1,5 @@
+import NumberedTable from './NumberedTable';
+import SerialNumber from './SerialNumber';
 import { Fragment, useState } from 'react';
 import { FiChevronDown, FiChevronRight, FiFileText, FiPrinter, FiUpload, FiPackage } from 'react-icons/fi';
 import Pagination from './Pagination';
@@ -46,7 +48,7 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
     </div>
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1280px] text-left text-[11px] leading-relaxed">
+        <NumberedTable start={(pagination?.from || 0) + 1} className="w-full min-w-[1280px] text-left text-[11px] leading-relaxed">
           <thead className="bg-slate-50 text-[9px] uppercase tracking-wide text-slate-500 border-b border-slate-200">
             <tr>{['Delivery note no.', 'Type', 'PO / Purchase bill', 'Site / Company', 'Indent by', 'Date', 'File', 'Tally sales bill', 'Received by', 'Received on', 'Proof', 'Status', 'Actions'].map(label => <th key={label} className="px-3 py-3 font-semibold">{label}</th>)}</tr>
           </thead>
@@ -100,9 +102,9 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
                 </tr>
                 {isOpen && <tr className="border-b border-blue-100 bg-slate-50"><td colSpan={13} className="px-5 py-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3"><h4 className="font-semibold text-slate-800">{store ? 'Approved material issued from store' : 'Dispatched material'}</h4><span className="text-slate-500">{row.indent_number}{store && row.stock_issue_number ? ` · ${row.stock_issue_number}` : ''}</span></div>
-                  <table className="w-full max-w-3xl text-[11px] bg-white rounded-lg"><thead><tr className="text-[10px] text-slate-500 border-b"><th className="px-3 py-2">Material</th><th className="px-3 py-2">Item type</th><th className="px-3 py-2 text-right">{store ? 'Approved store qty' : 'Dispatch qty'}</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2 text-right">Balance</th><th className="px-3 py-2">Unit</th></tr></thead><tbody>
+                  <NumberedTable className="w-full max-w-3xl text-[11px] bg-white rounded-lg"><thead><tr className="text-[10px] text-slate-500 border-b"><th className="px-3 py-2">Material</th><th className="px-3 py-2">Item type</th><th className="px-3 py-2 text-right">{store ? 'Approved store qty' : 'Dispatch qty'}</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2 text-right">Balance</th><th className="px-3 py-2">Unit</th></tr></thead><tbody>
                     {material.map((item, index) => <tr key={index} className="border-b border-slate-100 last:border-0"><td className="px-3 py-2">{item.description || item.item_name || '—'}{item.item_code && <span className="ml-2 text-[10px] text-slate-400">{item.item_code}</span>}</td><td className="px-3 py-2">{item.item_type || '—'}</td><td className="px-3 py-2 text-right font-semibold">{Number(item.qty ?? item.quantity ?? 0).toLocaleString('en-IN')}</td><td className="px-3 py-2 text-right">{item.received_qty ?? 0}</td><td className="px-3 py-2 text-right font-semibold text-amber-700">{item.remaining_qty ?? item.qty}</td><td className="px-3 py-2">{item.unit || '—'}</td></tr>)}
-                  </tbody></table>
+                  </tbody></NumberedTable>
                   {!!row.receiving_history?.length && <div className="mt-4 space-y-2"><h4 className="font-semibold">Receiving history</h4>{row.receiving_history.map((receipt,index) => <div key={receipt.id} className="rounded-lg border border-slate-200 bg-white p-3">
                     <div className="flex flex-wrap gap-3 items-center"><b>Receiving {index + 1}</b><span>{receipt.received_by_name} · {dateText(receipt.received_at)}</span><Badge complete={receipt.approval_status === 'approved'} muted={!!receipt.legacy}>{receipt.legacy ? 'Earlier record' : receipt.approval_status === 'approved' ? 'Approved' : receipt.approval_status === 'rejected' ? 'Rejected' : 'Awaiting approval'}</Badge>{receipt.files.map((file,i) => <span key={file}>{fileLink(file,`Proof ${i + 1}`)}</span>)}</div>
                     <div className="mt-2 text-slate-600">{receipt.items.filter(it => it.received_qty > 0).map(it => `${it.description}: ${it.received_qty} ${it.unit || ''}`).join(' · ')}</div>
@@ -112,13 +114,13 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
             })}
             {!loading && !rows.length && <tr><td colSpan={13} className="p-8 text-center text-slate-500">No dispatches match these filters.</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       {pagination && <Pagination pg={pagination} setPerPage={setPerPage} />}
     </div>
     {(readyRows.length > 0 || readyLoading) && <details className="card p-4">
       <summary className="cursor-pointer text-sm font-semibold">Earlier purchase bills without a delivery challan ({readyPagination?.total || readyRows.length})</summary>
-      <div className="mt-3 space-y-3">{readyRows.map(po => <div key={po.id} className="flex flex-wrap gap-3 items-center justify-between border-t pt-3 text-sm">
+      <div className="mt-3 space-y-3">{readyRows.map((po, index) => <div key={po.id} className="flex flex-wrap gap-3 items-center justify-between border-t pt-3 text-sm"><SerialNumber value={(readyPagination?.from || 0) + index + 1} />
         <div>{po.po_number} · {po.indent_site_name || po.vendor_name}</div>
         {canUpload && <div className="flex gap-2">
           <button className="btn btn-secondary text-xs" onClick={() => onCreateChallan(po)}>Create Challan</button>

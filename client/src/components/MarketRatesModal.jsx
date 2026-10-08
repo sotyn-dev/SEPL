@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from './Modal';
@@ -490,7 +491,7 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
               <h5 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Previous Vendor POs ({pastPoRates.length})</h5>
               {pastPoRates.length > 0 ? (
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-xs text-left">
+                  <NumberedTable className="w-full text-xs text-left">
                     <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
                       <tr>
                         <th className="px-3 py-2">PO # / Date</th>
@@ -526,7 +527,7 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               ) : (
                 <div className="p-6 text-center text-xs text-gray-400 border border-dashed rounded-lg">

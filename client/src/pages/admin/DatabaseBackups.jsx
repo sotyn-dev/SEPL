@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // Admin-only: list of nightly DB backups with one-click download + a
 // "Backup Now" button for ad-hoc snapshots before risky operations.
 //
@@ -291,7 +292,7 @@ export default function DatabaseBackups() {
 
       {/* Backup list */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm">
+        <NumberedTable className="text-sm">
           <thead>
             <tr className="border-b-2 border-gray-300">
               <th>Filename</th>
@@ -358,7 +359,7 @@ export default function DatabaseBackups() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );

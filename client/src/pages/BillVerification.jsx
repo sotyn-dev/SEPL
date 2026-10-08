@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Labour Management System — Modules 4-6: Bill Verification chain,
 // Bills & Finance, Payments.
 //
@@ -106,7 +107,7 @@ function BillsTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">RA No</th>
             <th className="px-3 py-2 text-left">Contractor</th>
@@ -132,7 +133,7 @@ function BillsTab() {
             ))}
             {rows.length === 0 && <tr><td colSpan={7} className="text-center py-8 text-gray-400">No bills found</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={newModal} onClose={() => setNewModal(false)} title="New Contractor Bill">
@@ -335,7 +336,7 @@ function LedgerTab() {
             <div className="text-xl font-semibold text-emerald-700">{money(data.balance_due)}</div>
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <NumberedTable className="min-w-full text-sm">
               <thead><tr className="bg-gray-50 text-xs text-gray-600">
                 <th className="px-3 py-2 text-left">Date</th>
                 <th className="px-3 py-2 text-left">Bill</th>
@@ -354,7 +355,7 @@ function LedgerTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </>
       )}
@@ -377,13 +378,13 @@ function DashboardTab() {
       </div>
       <div className="card p-0 overflow-x-auto">
         <h3 className="text-sm font-medium px-4 pt-4">Bills Awaiting Verification, by Stage</h3>
-        <table className="min-w-full mt-2 text-sm">
+        <NumberedTable className="min-w-full mt-2 text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600"><th className="px-3 py-2 text-left">Stage</th><th className="px-3 py-2 text-right">Bills</th><th className="px-3 py-2 text-right">Amount</th></tr></thead>
           <tbody className="divide-y divide-gray-100">
             {data.by_stage.map(s => <tr key={s.stage}><td className="px-3 py-2">{s.label}</td><td className="px-3 py-2 text-right">{s.bills}</td><td className="px-3 py-2 text-right">{money(s.amount)}</td></tr>)}
             {data.by_stage.length === 0 && <tr><td colSpan={3} className="text-center py-6 text-gray-400">Nothing pending</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );

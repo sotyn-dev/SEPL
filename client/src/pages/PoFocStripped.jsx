@@ -1,3 +1,4 @@
+import SerialNumber from '../components/SerialNumber';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -236,8 +237,9 @@ export default function PoFocStripped() {
   // Tab is in the key: Approved and Re-Approved share this one pager.
   const shownPager = usePagination(shown, { resetKey: [tab, catFilter] });                       // Approved / Re-Approved entry cards
 
-  const entryCard = (e) => (
+  const entryCard = (e, serialNumber) => (
     <div key={e.id} className="card p-3">
+      <SerialNumber value={serialNumber} />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex-1 min-w-[220px]">
           <div className="flex items-center gap-2">
@@ -313,7 +315,7 @@ export default function PoFocStripped() {
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Pending kits ({shown.length})</div>
                 <input className="input max-w-xs" placeholder="Search pending kits…" value={draftSearch} onChange={e => setDraftSearch(e.target.value)} />
               </div>
-              {kitPager.pageItems.map(e => entryCard(e))}
+              {kitPager.pageItems.map((e, index) => entryCard(e, (kitPager.page - 1) * kitPager.perPage + index + 1))}
               {kitPager.total > 0 && <div className="card p-0"><Pagination {...kitPager} /></div>}
               {shownFiltered.length === 0 && <div className="text-xs text-gray-400 text-center py-2">No pending kit matches “{draftSearch}”.</div>}
             </div>
@@ -323,8 +325,8 @@ export default function PoFocStripped() {
             <div className="text-sm font-semibold text-gray-700 mb-2">PO items needing FOC <span className="text-gray-400">({pendingTotal})</span></div>
             <input className="input mb-2" placeholder="Search a PO item to define its FOC…" value={pendSearch} onChange={e => setPendSearch(e.target.value)} />
             <div className="divide-y divide-gray-100">
-              {pendPager.pageItems.map(p => (
-                <div key={p.id} className="flex items-center justify-between gap-2 py-1.5">
+              {pendPager.pageItems.map((p, serialIndex) => (
+                <div key={p.id} className="flex items-center justify-between gap-2 py-1.5"><SerialNumber value={(pendPager.page - 1) * pendPager.perPage + serialIndex + 1} />
                   <span className="text-sm text-gray-700 truncate" title={p.display_name}>{p.display_name}</span>
                   <button onClick={() => openForPoItem(p)} className="btn btn-secondary text-xs whitespace-nowrap flex items-center gap-1"><FiPlus size={12} /> Define FOC</button>
                 </div>
@@ -343,7 +345,7 @@ export default function PoFocStripped() {
               {tab === 'approved' ? 'No approved items yet.' : 'No re-approved (changed) items.'}
             </div>
           )}
-          <div className="space-y-3">{shownPager.pageItems.map(e => entryCard(e))}</div>
+          <div className="space-y-3">{shownPager.pageItems.map((e, index) => entryCard(e, (shownPager.page - 1) * shownPager.perPage + index + 1))}</div>
           {shownPager.total > 0 && <div className="card p-0"><Pagination {...shownPager} /></div>}
         </>
       )}

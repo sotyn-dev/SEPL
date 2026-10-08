@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // CMD Dashboard — Stage 2 (TOC View)
 // Mirrors mam's HTML spec SEPL_CMD_TOC_Dashboard_v3.html section-by-section.
 //
@@ -253,7 +254,7 @@ export default function DashboardCMDToc() {
 
         <Row cols="2">
           <Card title="Top 5 debtors" meta="collect today">
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Customer</th>
                 <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Outstanding</th>
@@ -272,7 +273,7 @@ export default function DashboardCMDToc() {
                   <td style={{ padding: '8px 5px', fontSize: 11 }}>{d.action_today || (d.days > 90 ? 'Director call · escalate' : d.days > 60 ? 'Stop new dispatch · meet' : 'Reconcile + chase')}</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </NumberedTable>
           </Card>
           <Card title="Statutory · AP · payroll" meta="next 30d">
             <TicksList items={cash.statutory_dues.map(d => ({
@@ -374,7 +375,7 @@ export default function DashboardCMDToc() {
 
         <Row cols="2-1">
           <Card title="Top 8 quotes pending" meta="oldest first · close today">
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Quote</th>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Client</th>
@@ -391,7 +392,7 @@ export default function DashboardCMDToc() {
                   <td style={{ padding: '8px 5px', textAlign: 'right', color: q.days_open > 14 ? C.red : q.days_open > 7 ? C.amber : C.ink2, fontWeight: q.days_open > 14 ? 600 : 400 }}>{q.days_open}d</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </NumberedTable>
           </Card>
           <Card title="Conversion by lead source">
             {sales.conversion_by_source.length === 0 ? (
@@ -420,7 +421,7 @@ export default function DashboardCMDToc() {
             </div>
           </Card>
           <Card title="Sites past target close date" meta={`${operations.sites_past_target.length} flagged`}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <NumberedTable style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Project</th>
                 <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Client</th>
@@ -437,7 +438,7 @@ export default function DashboardCMDToc() {
                   <td style={{ padding: '8px 5px', textAlign: 'right' }}>{fmtINR(s.value)}</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </NumberedTable>
           </Card>
           <Card title="Margin variance">
             <DataGap note="Worst-5 project margin variance lives in /audit/kpi; surface here in v3.1." />
