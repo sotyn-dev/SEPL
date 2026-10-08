@@ -260,6 +260,22 @@ export default function Scorecard() {
       setRenameSaving(false);
     }
   };
+  const [teamSummary, setTeamSummary] = useState(null);
+  const [overviewGroupMode, setOverviewGroupMode] = useState('flat'); // 'flat' | 'by_leader'
+
+  // TSK-0914: Load direct reports' team summary for the viewed user/week
+  useEffect(() => {
+    if (tab !== 'my' && tab !== 'view') {
+      setTeamSummary(null);
+      return;
+    }
+    let on = true;
+    api.get(`/scoring/team-summary?leader_id=${viewUserId}&week_start=${weekStart}`)
+      .then(r => { if (on) setTeamSummary(r.data); })
+      .catch(() => { if (on) setTeamSummary(null); });
+    return () => { on = false; };
+  }, [tab, viewUserId, weekStart]);
+
   const [overview, setOverview] = useState(null);
   // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
   // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
@@ -517,10 +533,9 @@ export default function Scorecard() {
               )}
             </div>
           </div>
-          {/* Admin-only employee switcher — pick anyone to inspect their MIS
-              without leaving the My Scorecard tab. */}
-          {(tab === 'my' || tab === 'view') && isAdmin() && (
-            <EmployeeSwitcher value={viewUserId} onChange={setViewUserId} />
+          {/* Admin & Team Leader employee switcher (TSK-0914) */}
+          {(tab === 'my' || tab === 'view') && (
+            <EmployeeSwitcher value={viewUserId} onChange={setViewUserId} currentUserId={user?.id} />
           )}
           <div className="ml-auto text-sm text-gray-700">
             <span className="font-semibold">{fmtRange(weekStart)}</span>
@@ -532,6 +547,21 @@ export default function Scorecard() {
       {(tab === 'my' || tab === 'view') && !displayCard && <div className="card p-4 text-sm text-gray-500">Loading scorecard…</div>}
       {(tab === 'my' || tab === 'view') && displayCard && (
         <div id="scorecard-print-area" className="space-y-6">
+          {/* Active view indicator for team leader / admin viewing another user */}
+          {viewUserId !== user?.id && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 flex items-center justify-between text-xs text-blue-800 print:hidden shadow-sm">
+              <span className="flex items-center gap-1.5 font-medium">
+                <FiUser size={14} className="text-blue-600" /> Viewing <b>{cardOwnerName}</b>&apos;s scorecard (Read Only)
+              </span>
+              <button
+                type="button"
+                onClick={() => { setViewUserId(user?.id); setTab('my'); }}
+                className="btn btn-secondary text-xs py-1 px-2.5 bg-white hover:bg-gray-50 text-blue-700 border-blue-200"
+              >
+                ← Back to My Scorecard
+              </button>
+            </div>
+          )}
           {/* Letterhead — appears only on the printed sheet */}
           <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
             <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
@@ -690,12 +720,131 @@ export default function Scorecard() {
               </NumberedTable>
             </div>
           ))}
+          {/* TEAM LEADER'S TEAM SCORING (TSK-0914) */}
+          {teamSummary?.has_team && (
+            <div className="card p-0 overflow-hidden border border-indigo-200 print:hidden mt-6 shadow-sm">
+              <div className="bg-gradient-to-r from-indigo-50 to-blue-50 p-4 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-sm">
+                      <FiUsers size={16} />
+                    </span>
+                    <h3 className="font-bold text-base text-gray-800">
+                      Team Performance · {teamSummary.leader.name}&apos;s Team
+                    </h3>
+                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">
+                      {teamSummary.team_count} direct report{teamSummary.team_count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Weekly scoring for employees reporting to this team leader. Click &ldquo;Open MIS&rdquo; to inspect any team member&apos;s scorecard.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="text-right bg-white px-3 py-1.5 rounded-lg border border-indigo-100 shadow-sm">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wide">Team Average</p>
+                    <p className={`text-xl font-bold ${vsClr(teamSummary.team_average_score)}`}>
+                      {fmtVs(teamSummary.team_average_score)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b border-gray-200">
+                    <tr>
+                      <th className="p-2 text-left w-12">#</th>
+                      <th className="p-2 text-left">Team Member</th>
+                      <th className="p-2 text-left">Role / Template</th>
+                      <th className="p-2 text-center">Delegations</th>
+                      <th className="p-2 text-center">PMS Tasks</th>
+                      <th className="p-2 text-center">Checklists</th>
+                      <th className="p-2 text-center">Tickets</th>
+                      <th className="p-2 text-right">Weekly Score</th>
+                      <th className="p-2 text-center w-24">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {teamSummary.members.map((m, idx) => (
+                      <tr key={m.user_id} className="hover:bg-blue-50/40 transition">
+                        <td className="p-2 font-bold text-gray-400">#{idx + 1}</td>
+                        <td className="p-2">
+                          <div className="font-semibold text-gray-900">{m.name}</div>
+                          <div className="text-[10px] text-gray-400">{m.department || '—'}</div>
+                        </td>
+                        <td className="p-2">
+                          <span className="text-gray-700">{m.template_name || m.role || '—'}</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.delegations.done === m.delegations.given && m.delegations.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.delegations.done}/{m.delegations.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.pms.done === m.pms.given && m.pms.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.pms.done}/{m.pms.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.checklists.done === m.checklists.given && m.checklists.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.checklists.done}/{m.checklists.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.tickets.done === m.tickets.given && m.tickets.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.tickets.done}/{m.tickets.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${scorePill(m.variance)}`}>
+                            {fmtVs(m.score)}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => { setViewUserId(m.user_id); setTab('view'); }}
+                            className="btn btn-secondary text-[11px] py-1 px-2.5 font-medium hover:bg-indigo-50 hover:text-indigo-600"
+                          >
+                            Open MIS
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* TEAM OVERVIEW (existing weekly aggregator) */}
+      {/* TEAM OVERVIEW (existing weekly aggregator + TSK-0914 Group by Leader) */}
       {tab === 'overview' && overview && (
         <div className="card p-0 overflow-x-auto">
+          <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50 border-b border-gray-200">
+            <div className="text-xs text-gray-500">
+              <b>{overview.users.length}</b> employees scored for week {fmtRange(weekStart)}.
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setOverviewGroupMode('flat')}
+                className={`px-2.5 py-1 rounded font-medium transition ${overviewGroupMode === 'flat' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border text-gray-700 hover:bg-gray-100'}`}
+              >
+                All Employees (Ranked)
+              </button>
+              <button
+                type="button"
+                onClick={() => setOverviewGroupMode('by_leader')}
+                className={`px-2.5 py-1 rounded font-medium transition ${overviewGroupMode === 'by_leader' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border text-gray-700 hover:bg-gray-100'}`}
+              >
+                Group by Team Leader
+              </button>
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
@@ -711,23 +860,69 @@ export default function Scorecard() {
               </tr>
             </thead>
             <tbody>
-              {overview.users.map((u, i) => (
-                <tr key={u.user_id}>
-                  <td className="text-gray-400 font-bold">#{i + 1}</td>
-                  <td className="font-medium">{u.name}</td>
-                  <td className="text-xs text-gray-500">{u.department || u.role}</td>
-                  <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
-                  <td className="text-center">{u.pms.done}/{u.pms.given}</td>
-                  <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
-                  <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
-                  <td className="text-right">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
-                  </td>
-                  <td>
-                    <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
-                  </td>
-                </tr>
-              ))}
+              {overviewGroupMode === 'flat' ? (
+                overview.users.map((u, i) => (
+                  <tr key={u.user_id}>
+                    <td className="text-gray-400 font-bold">#{i + 1}</td>
+                    <td className="font-medium">{u.name}</td>
+                    <td className="text-xs text-gray-500">{u.department || u.role}</td>
+                    <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
+                    <td className="text-center">{u.pms.done}/{u.pms.given}</td>
+                    <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
+                    <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
+                    <td className="text-right">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
+                    </td>
+                    <td>
+                      <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                (() => {
+                  const groups = {};
+                  overview.users.forEach(u => {
+                    const grp = u.manager_name ? `${u.manager_name}'s Team` : 'Other / Direct Reports';
+                    if (!groups[grp]) groups[grp] = [];
+                    groups[grp].push(u);
+                  });
+                  return Object.entries(groups).map(([groupTitle, groupMembers]) => {
+                    const avg = groupMembers.reduce((s, m) => s + (m.score || 0), 0) / groupMembers.length;
+                    return (
+                      <Fragment key={groupTitle}>
+                        <tr className="bg-indigo-50/70 border-y border-indigo-100">
+                          <td colSpan={7} className="py-2 px-3 font-bold text-xs text-indigo-900">
+                            👥 {groupTitle} ({groupMembers.length} member{groupMembers.length === 1 ? '' : 's'})
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${scorePill(avg - 100)}`}>
+                              Avg: {fmtVs(avg)}
+                            </span>
+                          </td>
+                          <td></td>
+                        </tr>
+                        {groupMembers.map((u, i) => (
+                          <tr key={u.user_id} className="hover:bg-gray-50/50">
+                            <td className="text-gray-400 font-bold pl-5">↳ #{i + 1}</td>
+                            <td className="font-medium">{u.name}</td>
+                            <td className="text-xs text-gray-500">{u.department || u.role}</td>
+                            <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
+                            <td className="text-center">{u.pms.done}/{u.pms.given}</td>
+                            <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
+                            <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
+                            <td className="text-right">
+                              <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
+                            </td>
+                            <td>
+                              <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  });
+                })()
+              )}
             </tbody>
           </table>
         </div>
@@ -1077,19 +1272,22 @@ function RaciBreakdown({ data }) {
   );
 }
 
-// ---------- Employee Switcher (admin) ----------
+// ---------- Employee Switcher (TSK-0914: Admin & Team Leader) ----------
 function EmployeeSwitcher({ value, onChange }) {
-  const [users, setUsers] = useState([]);
+  const [viewable, setViewable] = useState({ is_admin: false, is_leader: false, users: [] });
   useEffect(() => {
-    api.get('/scoring/assignments').then(r => setUsers(r.data || [])).catch(() => {});
+    api.get('/scoring/viewable-users').then(r => setViewable(r.data || { users: [] })).catch(() => {});
   }, []);
+
+  if (!viewable.users || viewable.users.length <= 1) return null;
+
   return (
     <div>
-      <label className="label">View as</label>
-      <select className="select" value={value || ''} onChange={e => onChange(+e.target.value)}>
-        {users.map(u => (
+      <label className="label">{viewable.is_admin ? 'View as' : 'Team Member'}</label>
+      <select className="select text-xs py-1.5" value={value || ''} onChange={e => onChange(+e.target.value)}>
+        {viewable.users.map(u => (
           <option key={u.user_id} value={u.user_id}>
-            {u.name} {u.template_name ? `— ${u.template_name}` : '(no template)'}
+            {u.is_self ? `👤 ${u.name} (Me)` : u.name} {u.template_name ? `— ${u.template_name}` : ''}
           </option>
         ))}
       </select>
