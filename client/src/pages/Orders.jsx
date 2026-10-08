@@ -453,7 +453,7 @@ export default function Orders() {
                 return (
                   <Fragment key={g.key}>
                     {/* Collapsed project row — project name + PO count + total amount. */}
-                    <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer border-l-4 border-blue-600" onClick={() => togglePoGroup(g.key)}>
+                    <tr key={`group-${g.key}`} className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer border-l-4 border-blue-600" onClick={() => togglePoGroup(g.key)}>
                       <td className="font-medium">
                         <div className="flex items-center gap-1.5 text-blue-700">
                           {open ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
