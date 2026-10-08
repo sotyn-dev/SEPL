@@ -284,8 +284,9 @@ export default function RentalTools() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => exportCsv('rental-tools-enquiries',
-            ['Enquiry','Site','Tool','Days','Site Eng','Stage','Status','Vendor','Rate','PO'],
-            enquiries.map(e => [e.enquiry_no, e.site_name, e.tool_description, e.days_required, e.site_engineer_name, e.current_stage, e.status, e.vendor_name, e.vendor_rate, e.po_number]))}
+            ['Enquiry','Site','Tool','Days','Site Eng','Stage','Status','Vendor','Rate','PO','Indent','Dispatch','Quantity','Unit','Rental Start','Rental End'],
+            enquiries.map(e => [e.enquiry_no, e.site_name, e.tool_description, e.days_required, e.site_engineer_name, e.current_stage, e.status, e.vendor_name, e.vendor_rate, e.po_number || e.dispatch?.vendor_po_number,
+              e.dispatch?.indent_number,e.dispatch?.dispatch_number,e.dispatch?.quantity,e.dispatch?.unit,e.dispatch?.rental_start_date,e.dispatch?.rental_end_date]))}
             className="btn btn-secondary flex items-center gap-2 text-sm">
             <FiDownload size={14} /> Export Excel
           </button>
@@ -432,6 +433,10 @@ export default function RentalTools() {
                   <td className="px-3 py-2">
                     <div className="font-medium">{e.site_name}</div>
                     {e.tool_description && <div className="text-xs text-gray-500">{e.tool_description}</div>}
+                    {e.dispatch && <div className="mt-1 text-xs text-cyan-800">
+                      {e.dispatch.quantity} {e.dispatch.unit} · {e.dispatch.indent_number} · {e.dispatch.dispatch_number}
+                      <div>{fmtD(e.dispatch.rental_start_date)} → {fmtD(e.dispatch.rental_end_date)} · {e.dispatch.rental_days} calendar days</div>
+                    </div>}
                   </td>
                   <td className="px-3 py-2 text-xs">{fmtD(e.date_of_requirement)}</td>
                   <td className="px-3 py-2 text-right font-semibold">{e.days_required}</td>
@@ -442,7 +447,7 @@ export default function RentalTools() {
                       <div className="text-gray-500">{fmt(e.vendor_rate)} / {e.vendor_rate_unit?.replace('per_', '')}</div>
                     </>) : '—'}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs">{e.po_number || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{e.po_number || e.dispatch?.vendor_po_number || '—'}</td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[e.current_stage]}`}>{STAGE_LABEL_SHORT[e.current_stage] || e.current_stage}</span></td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${e.status === 'open' ? 'bg-gray-100 text-gray-700' : e.status === 'closed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{e.status}</span></td>
                   {/* Eye-button action (mam, 2026-05-16: "i need action eye
@@ -529,6 +534,16 @@ export default function RentalTools() {
             </div>
 
             <div className="p-4 space-y-4">
+              {drawerEnq.dispatch && <div className="rounded border border-cyan-200 bg-cyan-50 p-3 text-xs space-y-1">
+                <b>Rental from confirmed dispatch</b>
+                <div>{drawerEnq.dispatch.indent_number} (#{drawerEnq.dispatch.indent_id}) · {drawerEnq.dispatch.dispatch_number} (#{drawerEnq.dispatch.dispatch_id})</div>
+                <div>{drawerEnq.dispatch.item_name} · {drawerEnq.dispatch.quantity} {drawerEnq.dispatch.unit}</div>
+                <div>{drawerEnq.dispatch.specification}</div>
+                <div>{fmtD(drawerEnq.dispatch.rental_start_date)} → {fmtD(drawerEnq.dispatch.rental_end_date)} · {drawerEnq.dispatch.rental_days} calendar days</div>
+                <div>Vendor PO: {drawerEnq.dispatch.vendor_po_number || '—'} · Receiving: {drawerEnq.dispatch.receiving_status}</div>
+                <div>Raised by: {drawerEnq.dispatch.raised_by_name || '—'} · Approved by: {drawerEnq.dispatch.approved_by_name || '—'}</div>
+                {drawerEnq.current_stage === 'rate_finalised' && <div>Dispatched · awaiting site receipt</div>}
+              </div>}
               {/* Snapshot */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="bg-gray-50 border rounded p-2">

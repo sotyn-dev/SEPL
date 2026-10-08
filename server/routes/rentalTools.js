@@ -121,7 +121,9 @@ router.get('/dashboard', requirePermission('rental_tools', 'view'), (req, res) =
     stage3_overdue: db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='material_received' AND DATE(return_target_date) < DATE('now')`).get().c,
   };
   const open_total = counts.enquiry + counts.rate_finalised + counts.material_received;
-  const total_value = db.prepare(`SELECT COALESCE(SUM(vendor_rate * days_required),0) v FROM rental_tool_enquiry WHERE status='open' AND vendor_rate IS NOT NULL`).get().v;
+  const total_value = db.prepare(`SELECT COALESCE(SUM(e.vendor_rate * e.days_required * COALESCE(r.quantity,1)),0) v
+    FROM rental_tool_enquiry e LEFT JOIN rental_dispatch_items r ON r.id=e.dispatch_item_id
+    WHERE e.status='open' AND e.vendor_rate IS NOT NULL`).get().v;
   // This-month enquiry count
   const thisMonth = db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`).get().c;
   res.json({
@@ -192,7 +194,7 @@ router.get('/enquiries', requirePermission('rental_tools', 'view'), (req, res) =
     params.push(like, like, like, like);
   }
   sql += ' ORDER BY e.id DESC LIMIT 500';
-  res.json(db.prepare(sql).all(...params));
+  res.json(db.prepare(sql).all(...params).map(row => require('../lib/rentalDispatch').decorate(db, row)));
 });
 
 // ── GET /api/rental-tools/enquiries/:id ────────────────────────
@@ -232,7 +234,7 @@ router.get('/enquiries/:id', requirePermission('rental_tools', 'view'), (req, re
   if (enquiry.po_id) {
     po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(enquiry.po_id) || null;
   }
-  res.json({ ...enquiry, history, po });
+  res.json({ ...require('../lib/rentalDispatch').decorate(db, enquiry), history, po });
 });
 
 // ── POST /api/rental-tools/enquiries ───────────────────────────
@@ -384,7 +386,10 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
   // value is "/uploads/rental-tools/<file>" either way.
   const photoUrl = await storage.adoptLocalFile(req.file.path, `${PHOTO_FOLDER}/${req.file.filename}`, req.file.mimetype);
   const now = new Date();
-  const returnTarget = addBusinessDays(now, enquiry.days_required);
+  // Dispatch rentals use the agreed inclusive calendar period. Manual rental
+  // enquiries retain their existing business-day calculation.
+  const returnTargetDate = enquiry.dispatch_item_id ? enquiry.return_target_date
+    : addBusinessDays(now, enquiry.days_required).toISOString().slice(0, 10);
 
   try {
     db.prepare(`
@@ -397,9 +402,9 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
         stage2_breached = CASE WHEN stage2_target_at < CURRENT_TIMESTAMP THEN 1 ELSE 0 END,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(photoUrl, lat, lng, returnTarget.toISOString().slice(0, 10), id);
+    `).run(photoUrl, lat, lng, returnTargetDate, id);
     db.prepare(`INSERT INTO rental_tool_history (enquiry_id, from_stage, to_stage, triggered_by, notes) VALUES (?, 'rate_finalised', 'material_received', ?, ?)`)
-      .run(id, String(req.user.id), `material received · photo uploaded · GPS ${lat.toFixed(5)},${lng.toFixed(5)} · return target ${returnTarget.toISOString().slice(0, 10)}`);
+      .run(id, String(req.user.id), `material received · photo uploaded · GPS ${lat.toFixed(5)},${lng.toFixed(5)} · return target ${returnTargetDate}`);
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
@@ -407,9 +412,9 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
     user: req.user, action: 'UPDATE', entity_type: 'rental_tool_enquiry',
     entity_id: id, entity_label: enquiry.enquiry_no,
     method: 'POST', path: '/api/rental-tools/enquiries/:id/material-received',
-    body: { photo: photoUrl, lat, lng, return_target: returnTarget.toISOString().slice(0, 10) },
+    body: { photo: photoUrl, lat, lng, return_target: returnTargetDate },
   });
-  res.json({ id, current_stage: 'material_received', return_target_date: returnTarget.toISOString().slice(0, 10), photo_url: photoUrl });
+  res.json({ id, current_stage: 'material_received', return_target_date: returnTargetDate, photo_url: photoUrl });
 });
 
 // ── POST /api/rental-tools/enquiries/:id/return ────────────────

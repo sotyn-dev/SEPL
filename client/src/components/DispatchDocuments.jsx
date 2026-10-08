@@ -13,7 +13,7 @@ const actionClass = 'inline-flex items-center justify-center gap-1.5 rounded-md 
 const billLabel = status => ({ uploaded: 'Uploaded', not_required: 'Not required', check_items: 'Check item type' }[status] || 'Bill pending');
 
 export default function DispatchDocuments({ rows, loading, pagination, setPerPage,
-  filters, onFilter, onPrint, onSalesBill, onReceive, canUpload,
+  filters, onFilter, onPrint, onSalesBill, onReceive, onRental, onAnotherRental, canUpload,
   readyRows = [], readyPagination, readyLoading, onCreateChallan, onReceivePo, setReadyPerPage }) {
   const [expanded, setExpanded] = useState(null);
   const total = pagination?.total ?? rows.length;
@@ -95,6 +95,9 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
                     {!!row.receiving_history?.length && <div className="mt-1 text-[10px] text-slate-500">{row.receiving_history.length} receiving{row.receiving_history.length === 1 ? '' : 's'}</div>}
                   </td>
                   <td className="px-3 py-4 min-w-[130px]"><div className="flex flex-col items-start gap-1.5">
+                    {row.has_rental_items && <Badge complete={!!row.rental_confirmed_at}>{row.rental_confirmed_at ? 'Rental dispatched' : 'Rental confirmation needed'}</Badge>}
+                    {canUpload && row.has_rental_items && onRental && <button type="button" className={`${actionClass} border-blue-200 text-blue-800`} onClick={() => onRental(row)}>{row.rental_confirmed_at ? 'Rental dispatch details' : 'Confirm rental dispatch'}</button>}
+                    {canUpload && row.has_rental_items && row.vendor_po_id && onAnotherRental && <button type="button" className={`${actionClass} border-blue-200 text-blue-800`} onClick={() => onAnotherRental(row)}>Another rental dispatch</button>}
                     {row.document_type === 'challan' && <button type="button" className={`${actionClass} border-slate-200 bg-white text-slate-600 hover:bg-slate-100`} onClick={() => onPrint(row)}><FiPrinter />Print challan</button>}
                     {canUpload && row.sales_bill_status !== 'not_required' && <button type="button" className={`${actionClass} border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100`} onClick={() => onSalesBill(row)}><FiUpload />{row.sales_bill_status === 'uploaded' ? 'Replace Tally bill' : 'Upload Tally bill'}</button>}
                     {canUpload && !received && <button type="button" className={`${actionClass} border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700`} onClick={() => onReceive(row)}><FiUpload />{row.receiving_history?.length ? 'Add another receiving' : 'Upload receiving'}</button>}
@@ -105,6 +108,9 @@ export default function DispatchDocuments({ rows, loading, pagination, setPerPag
                   <NumberedTable className="w-full max-w-3xl text-[11px] bg-white rounded-lg"><thead><tr className="text-[10px] text-slate-500 border-b"><th className="px-3 py-2">Material</th><th className="px-3 py-2">Item type</th><th className="px-3 py-2 text-right">{store ? 'Approved store qty' : 'Dispatch qty'}</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2 text-right">Balance</th><th className="px-3 py-2">Unit</th></tr></thead><tbody>
                     {material.map((item, index) => <tr key={index} className="border-b border-slate-100 last:border-0"><td className="px-3 py-2">{item.description || item.item_name || '—'}{item.item_code && <span className="ml-2 text-[10px] text-slate-400">{item.item_code}</span>}</td><td className="px-3 py-2">{item.item_type || '—'}</td><td className="px-3 py-2 text-right font-semibold">{Number(item.qty ?? item.quantity ?? 0).toLocaleString('en-IN')}</td><td className="px-3 py-2 text-right">{item.received_qty ?? 0}</td><td className="px-3 py-2 text-right font-semibold text-amber-700">{item.remaining_qty ?? item.qty}</td><td className="px-3 py-2">{item.unit || '—'}</td></tr>)}
                   </tbody></NumberedTable>
+                  {!!row.rental_items?.length && <div className="mt-3 space-y-2">{row.rental_items.map(item => <div key={item.id} className="rounded border border-cyan-200 bg-cyan-50 p-2 text-xs">
+                    <b>{item.item_name}</b> · {item.quantity} {item.unit} · {dateText(item.rental_start_date)} → {dateText(item.rental_end_date)} ({item.rental_days} calendar days)
+                  </div>)}</div>}
                   {!!row.receiving_history?.length && <div className="mt-4 space-y-2"><h4 className="font-semibold">Receiving history</h4>{row.receiving_history.map((receipt,index) => <div key={receipt.id} className="rounded-lg border border-slate-200 bg-white p-3">
                     <div className="flex flex-wrap gap-3 items-center"><b>Receiving {index + 1}</b><span>{receipt.received_by_name} · {dateText(receipt.received_at)}</span><Badge complete={receipt.approval_status === 'approved'} muted={!!receipt.legacy}>{receipt.legacy ? 'Earlier record' : receipt.approval_status === 'approved' ? 'Approved' : receipt.approval_status === 'rejected' ? 'Rejected' : 'Awaiting approval'}</Badge>{receipt.files.map((file,i) => <span key={file}>{fileLink(file,`Proof ${i + 1}`)}</span>)}</div>
                     <div className="mt-2 text-slate-600">{receipt.items.filter(it => it.received_qty > 0).map(it => `${it.description}: ${it.received_qty} ${it.unit || ''}`).join(' · ')}</div>

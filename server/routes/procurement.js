@@ -16,6 +16,7 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
 const { getDispatchDocuments } = require('../lib/dispatchDocuments');
+const rentalDispatch = require('../lib/rentalDispatch');
 // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
 const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
 
@@ -907,7 +908,17 @@ router.get('/indents', (req, res) => {
     kpiParams.push(like, like, like, like, like);
   }
 
-  // Specific list filters (status, category)
+  // Use the same canonical values as indent creation; category also scopes
+  // summary counts. Status cards still show each status within this category.
+  const selectedCategory = String(category || 'all').trim().toLowerCase();
+  if (!['all', 'material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental', 'ppe_kit'].includes(selectedCategory)) {
+    return res.status(400).json({ error: 'Invalid indent category' });
+  }
+  if (selectedCategory !== 'all') {
+    kpiConds.push(`LOWER(COALESCE(NULLIF(TRIM(i.indent_category), ''), 'material')) = ?`);
+    kpiParams.push(selectedCategory);
+  }
+  // Specific list filter (status)
   const listConds = [...kpiConds];
   const listParams = [...kpiParams];
 
@@ -918,11 +929,6 @@ router.get('/indents', (req, res) => {
       listConds.push(`i.status = ?`);
       listParams.push(status);
     }
-  }
-
-  if (category && category !== 'all') {
-    listConds.push(`COALESCE(NULLIF(TRIM(i.indent_category), ''), 'material') = ?`);
-    listParams.push(category);
   }
 
   const kpiWhereSql = kpiConds.length ? `WHERE ${kpiConds.join(' AND ')}` : '';
@@ -1002,7 +1008,7 @@ router.get('/indents', (req, res) => {
      LEFT JOIN business_book opb ON opb.id = op.business_book_id
      LEFT JOIN purchase_orders opo ON opo.id = op.po_id
      ${listWhereSql}
-     ORDER BY i.created_at DESC
+     ORDER BY i.created_at DESC, i.id DESC
   `;
 
   let indents;
@@ -1072,7 +1078,17 @@ router.get('/indents', (req, res) => {
 
   const itemsByIndent = new Map();
   const budgetByIndent = new Map();
+  const rentalsByItem = new Map();
+  if (indentIds.length) {
+    for (const rental of db.prepare(`SELECT r.indent_item_id,r.quantity,r.rental_start_date,r.rental_days,r.rental_end_date,dn.document_number
+      FROM rental_dispatch_items r JOIN indent_items ii ON ii.id=r.indent_item_id JOIN delivery_notes dn ON dn.id=r.delivery_note_id
+      WHERE ii.indent_id IN (${indentIds.map(() => '?').join(',')}) ORDER BY r.id`).all(...indentIds)) {
+      if (!rentalsByItem.has(rental.indent_item_id)) rentalsByItem.set(rental.indent_item_id, []);
+      rentalsByItem.get(rental.indent_item_id).push(rental);
+    }
+  }
   for (const it of allItems) {
+    it.rental_dispatches = rentalsByItem.get(it.id) || [];
     if (!itemsByIndent.has(it.indent_id)) itemsByIndent.set(it.indent_id, []);
     itemsByIndent.get(it.indent_id).push(it);
     budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
@@ -1146,6 +1162,7 @@ router.get('/indents', (req, res) => {
 
   const rows = indents.map(i => ({
     ...i,
+    indent_category: String(i.indent_category || 'material').trim().toLowerCase() || 'material',
     can_review_indent: l1List.some(u => u.id === req.user.id) && i.created_by !== req.user.id,
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
@@ -2551,11 +2568,12 @@ router.put('/indents/:id', (req, res) => {
               if (remainProcure <= 0.0001) {
                 // 100% from store — just flip the row's source.
                 convertParent.run(issueNoteId, plan.itemId);
+                plan.dispatchItemId = plan.itemId;
               } else {
                 // Partial — shrink parent to remaining procure qty + add a
                 // store child carrying the from-store qty.
                 updateParent.run(remainProcure, plan.itemId);
-                insertChild.run(
+                const child = insertChild.run(
                   parent.indent_id, parent.description, plan.fromStore,
                   parent.unit, parent.rate, plan.fromStore * (+parent.rate || 0),
                   safeFk(parent.vendor_id, 'vendors'), safeFk(parent.item_master_id, 'item_master'), parent.make,
@@ -2566,6 +2584,11 @@ router.put('/indents/:id', (req, res) => {
                   // "red colour" matters as much at the store as at Purchase.
                   parent.remarks || null,
                 );
+                plan.dispatchItemId = child.lastInsertRowid;
+                if (parent.rental_days != null || parent.rental_rate_per_day != null) {
+                  db.prepare('UPDATE indent_items SET rental_days=?,rental_rate_per_day=? WHERE id=?')
+                    .run(parent.rental_days, parent.rental_rate_per_day, plan.dispatchItemId);
+                }
               }
             }
             // Update the header with rollup + source warehouse (last used).
@@ -2581,6 +2604,7 @@ router.put('/indents/:id', (req, res) => {
             // & Receiving for printing + (billable items) a Sales Bill.
             // sales_bill_pending=1 when any line is a billable PO item.
             const storeItems = storePlans.map(p => ({
+              indent_item_id: p.dispatchItemId, item_master_id: p.masterId,
               description: p.description, specification: p.specification || '', size: p.size || '',
               make: p.make || '', item_code: p.item_code || '', item_name: p.item_name || '',
               qty: p.fromStore, unit: p.unit || '',
@@ -6034,6 +6058,25 @@ router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
 
 router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
+  try {
+    const ctx = rentalDispatch.context(getDb(), { poId: Number(b.vendor_po_id) || null });
+    if (ctx.items.length || String(ctx.indent?.indent_category || '').trim().toLowerCase() === 'rental') {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      if (b.document_type !== 'challan') return res.status(400).json({ error: 'Rental dispatch requires a delivery challan' });
+      // Confirm, save item periods, and create rental enquiries in one transaction.
+      const result = rentalDispatch.create(getDb(), +b.vendor_po_id, b, req.user);
+      return res.status(result.existing ? 200 : 201).json(result);
+    }
+    let requestedItems = b.items;
+    if (typeof requestedItems === 'string') { try { requestedItems = JSON.parse(requestedItems); } catch { requestedItems = []; } }
+    if (b.rental_items || (Array.isArray(requestedItems) && requestedItems.some(it => String(it?.item_type || '').toUpperCase() === 'RENTAL'))) {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      return res.status(400).json({ error: 'No linked rental items on this Vendor PO' });
+    }
+  } catch (error) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+    return res.status(error.status || 500).json({ error: error.message });
+  }
   // File is OPTIONAL on create. Mam's flow: ERP generates the document
   // (Delivery Note / Sales Bill PDF via the new print endpoint), staff
   // print it, get it signed at delivery, then upload the signed copy.
@@ -6276,6 +6319,27 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.array('
   }
 });
 
+router.get('/vendor-po/:id/rental-dispatch-items', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const ctx = rentalDispatch.context(getDb(), { poId: +req.params.id });
+    if (!ctx.po) return res.status(404).json({ error: 'Vendor PO not found' });
+    res.json({ items: ctx.items, indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+router.get('/delivery-notes/:id/rental-dispatch', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const ctx = rentalDispatch.context(getDb(), { noteId: +req.params.id });
+    res.json({ items: ctx.items, revision: ctx.note.rental_revision, confirmed_at: ctx.note.rental_confirmed_at,
+      indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+router.put('/delivery-notes/:id/rental-dispatch', needsApprove, (req, res) => {
+  try { res.json(rentalDispatch.confirm(getDb(), +req.params.id, req.body, req.user)); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
 router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
   // Partial update: only the fields sent are touched. A notes-only save
   // (Procurement Board popup) must not carry a stale status along and
@@ -6297,6 +6361,7 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
 });
 
 router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
+  if (getDb().prepare('SELECT id FROM rental_dispatch_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(409).json({ error: 'Confirmed rental dispatch history cannot be deleted' });
   if (getDb().prepare('SELECT id FROM delivery_receipts WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This challan has saved receiving history and cannot be deleted.' });
   if (getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);

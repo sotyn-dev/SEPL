@@ -86,3 +86,20 @@ test('inputs and original row elements are not mutated on repeat render', () => 
   assert.match(first, /value="123"/);
   assert.deepEqual(numbers(first), ['1']);
 });
+
+test('group row keys stay unique and stable when expanding, filtering and reordering', () => {
+  const keys = (ids, expanded) => {
+    const table = NumberedTable({ children: [head, <tbody>{ids.map(id => <Fragment key={id}>
+      <tr><td>{id}</td><td>Summary</td></tr>
+      {expanded === id && <tr data-serial-skip><td /><td>Details</td></tr>}
+    </Fragment>)}</tbody>] });
+    return table.props.children.find(section => section.type === 'tbody').props.children.map(row => row.key);
+  };
+  const before = keys(['a', 'b'], null);
+  assert.equal(new Set(before).size, 2);
+  const expanded = keys(['a', 'b'], 'a');
+  assert.equal(new Set(expanded).size, 3);
+  assert.deepEqual([expanded[0], expanded[2]], before);
+  assert.deepEqual(keys(['b', 'a'], null), before.toReversed());
+  assert.deepEqual(keys(['b'], null), [before[1]]);
+});

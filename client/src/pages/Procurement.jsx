@@ -9,6 +9,7 @@ import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import DispatchDocuments from '../components/DispatchDocuments';
+import RentalDispatchModal from '../components/RentalDispatchModal';
 import DeliveryReceivingModal from '../components/DeliveryReceivingModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
@@ -480,6 +481,7 @@ export default function Procurement() {
   // SELLING price (what we invoice the client), not vendor cost. Mam can
   // tweak qty / rate / disc % / include flag per row before generating.
   const [dispatchItems, setDispatchItems] = useState([]);
+  const [rentalDispatchTarget, setRentalDispatchTarget] = useState(null);
   const [dispatchItemsLoading, setDispatchItemsLoading] = useState(false);
   const [dispatchItemsSource, setDispatchItemsSource] = useState('po_items'); // 'po_items' | 'vendor_po' | 'empty'
   // Rate-source diagnostic — mam (2026-05-16): "if sales bill we
@@ -948,7 +950,9 @@ export default function Procurement() {
   activeTabRef.current = tab;
 
   // Central paginated loader for indents
+  const indentRequest = useRef(0);
   const fetchIndentsPage = async () => {
+    const request = ++indentRequest.current;
     setIndLoading(true);
     const { page, limit, status, category, from, to, search } = indParamsRef.current;
     try {
@@ -963,6 +967,7 @@ export default function Procurement() {
           q: search ? search.trim() : undefined,
         }
       });
+      if (request !== indentRequest.current) return;
       if (res.data && Array.isArray(res.data.rows)) {
         setIndents(res.data.rows);
         setIndTotal(res.data.total || 0);
@@ -975,10 +980,11 @@ export default function Procurement() {
       }
     } catch (err) {
       console.error('[fetchIndentsPage] failed:', err);
+      if (request !== indentRequest.current) return;
       setIndents([]);
       setIndTotal(0);
     } finally {
-      setIndLoading(false);
+      if (request === indentRequest.current) setIndLoading(false);
     }
   };
 
@@ -3581,7 +3587,7 @@ export default function Procurement() {
                       <tr>
                         <td className="text-center">
                           {items.length > 0 && (
-                            <button onClick={() => toggleIndentRow(i.id)} className="p-1 text-gray-400 hover:text-red-600" title={expanded ? 'Hide items' : 'Show items'}>
+                            <button type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Hide' : 'Show'} items for ${i.indent_number}`} onClick={() => toggleIndentRow(i.id)} className="p-1 text-gray-400 hover:text-red-600" title={expanded ? 'Hide items' : 'Show items'}>
                               {expanded ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
                             </button>
                           )}
@@ -3944,9 +3950,9 @@ export default function Procurement() {
                         </td>
                       </tr>
                       {expanded && items.length > 0 && (
-                        <tr className="bg-gray-50">
+                        <tr className="bg-gray-50" data-serial-skip>
                           <td></td>
-                          <td colSpan="13" className="p-3">
+                          <td colSpan="12" className="p-3">
                             <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
                             <table className="text-xs w-full">
                               <thead>
@@ -4009,7 +4015,12 @@ export default function Procurement() {
                                     </td>
                                     <td className="py-1 pr-3 text-right">{it.quantity}</td>
                                     <td className="py-1 pr-3">{it.unit || '—'}</td>
-                                    <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
+                                    <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}
+                                      {it.rental_dispatches?.map(rental => <div key={rental.document_number} className="mt-1 text-[10px] text-cyan-800 min-w-[140px]">
+                                        {rental.document_number} · {rental.quantity} {it.unit}<br />
+                                        {rental.rental_start_date} → {rental.rental_end_date}<br />{rental.rental_days} calendar days
+                                      </div>)}
+                                    </td>
                                     <td className="py-1 pr-3 text-right">
                                       {+it.master_price > 0 ? (
                                         <div className="inline-flex items-center gap-1">
@@ -5889,6 +5900,8 @@ export default function Procurement() {
         };
         const createChallan = async (po) => {
           try {
+            const rental = await api.get(`/procurement/vendor-po/${po.id}/rental-dispatch-items`);
+            if (rental.data.items.length) { setRentalDispatchTarget({ poId: po.id }); return; }
             const fd = new FormData();
             fd.append('vendor_po_id', po.id);
             fd.append('document_type', 'challan');
@@ -5898,6 +5911,8 @@ export default function Procurement() {
         };
         const openReceivePo = async po => {
           try {
+            const rental = await api.get(`/procurement/vendor-po/${po.id}/rental-dispatch-items`);
+            if (rental.data.items.length) { setRentalDispatchTarget({ poId: po.id, receiveAfter: true }); return; }
             const form = new FormData(); form.append('vendor_po_id',po.id); form.append('document_type','challan');
             const created = await api.post('/procurement/delivery-notes',form);
             const result = await api.get('/procurement/delivery-notes');
@@ -5914,7 +5929,12 @@ export default function Procurement() {
             setters[field](value); setDispListPage(1);
           }}
           canUpload={canApprove('procurement') || isAdmin()}
-          onSalesBill={openSalesBillUpload} onReceive={setReceiveTarget}
+          onSalesBill={openSalesBillUpload} onReceive={row => {
+            if (row.has_rental_items && !row.rental_confirmed_at) setRentalDispatchTarget({ noteId: row.id, receiveAfter: true });
+            else setReceiveTarget(row);
+          }}
+          onRental={row => setRentalDispatchTarget({ noteId: row.id })}
+          onAnotherRental={row => setRentalDispatchTarget({ poId: row.vendor_po_id })}
           onPrint={async row => {
             const printWin = window.open('', '_blank');
             try {
@@ -5927,6 +5947,19 @@ export default function Procurement() {
           onCreateChallan={createChallan} onReceivePo={openReceivePo} setReadyPerPage={setDispReadyPerPage}
         />;
       })()}
+
+      {rentalDispatchTarget && <RentalDispatchModal target={rentalDispatchTarget} onClose={() => setRentalDispatchTarget(null)} onSaved={async result => {
+        const receiveAfter = rentalDispatchTarget.receiveAfter;
+        setRentalDispatchTarget(null); load();
+        toast.success('Rental dispatch saved in Rental Tools');
+        if (receiveAfter) {
+          try {
+            const response = await api.get('/procurement/delivery-notes');
+            const row = response.data.find(item => item.id === result.id);
+            if (row) setReceiveTarget(row);
+          } catch { toast.error('Dispatch saved. Refresh to upload receiving.'); }
+        }
+      }} />}
 
       {/* ===== Debit Notes tab (mam 2026-06-04 post-PO chart, stage 7) ===== */}
       {tab === 'debitnotes' && (

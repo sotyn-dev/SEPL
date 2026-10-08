@@ -2,10 +2,16 @@ import { Children, Fragment, cloneElement, isValidElement } from 'react';
 
 // Flatten only arrays/fragments, never execute child components or inspect the DOM.
 // Existing row keys, event handlers, inputs and record IDs remain intact.
-function elements(children) {
-  return Children.toArray(children).flatMap(child =>
-    isValidElement(child) && child.type === Fragment ? elements(child.props.children) : [child]
-  );
+function elements(children, ancestry = '') {
+  return Children.toArray(children).flatMap(child => {
+    if (!isValidElement(child)) return [child];
+    // Fragment-local keys repeat (e.g. every indent's summary is ".0").
+    // Keep the full keyed ancestry when removing the fragment boundary.
+    const key = `${ancestry}/${child.key}`;
+    return child.type === Fragment
+      ? elements(child.props.children, key)
+      : [cloneElement(child, { key })];
+  });
 }
 
 function cells(row) {
