@@ -342,7 +342,7 @@ export default function HelpTickets() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+      <div className="flex flex-wrap items-center gap-2 pb-1">
         {[
           { id: 'mine',  label: 'Assigned to me',  count: counts.mine },
           { id: 'given', label: 'Raised by me',    count: counts.given },
@@ -354,7 +354,7 @@ export default function HelpTickets() {
           </button>
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
-        <div className="w-[264px]">
+        <div className="w-[264px] max-w-full">
           <StatusMultiSelect
             options={[
               { id: 'open', name: 'Open' },
