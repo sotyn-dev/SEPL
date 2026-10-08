@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { afterChatShareLogin } from '../lib/chatShareReturn';
 import { useAuth } from '../context/AuthContext';
 import { isStorageBlocked } from '../lib/tokenStore';
 import Modal from '../components/Modal';
@@ -44,7 +45,7 @@ export default function Login() {
       toast.success(`Welcome back, ${data.user.name}!`);
     } else {
       toast.success(`Welcome back, ${data.user.name}!`);
-      window.location.replace('/');
+      window.location.replace(afterChatShareLogin());
     }
   };
 

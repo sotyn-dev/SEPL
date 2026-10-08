@@ -4,6 +4,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
+import ChatSharedAttachment from '../components/ChatSharedAttachment';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
@@ -237,7 +238,9 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                     );
                   })()}
                   {m.attachment_url && (
-                    isImg(m.attachment_url)
+                    m.attachment_url.startsWith('/api/site-chat/share/files/')
+                      ? <ChatSharedAttachment url={m.attachment_url} name={m.attachment_name} />
+                      : isImg(m.attachment_url)
                       ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
                       : isAudio(m.attachment_url)
                         ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
@@ -249,7 +252,7 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                     {/* Native download of the attachment. `download` works because
                         /uploads is served from the same origin; the filename falls
                         back to the stored name so it doesn't save as a hash. */}
-                    {m.attachment_url && (
+                    {m.attachment_url && !m.attachment_url.startsWith('/api/site-chat/share/files/') && (
                       <a href={m.attachment_url} download={m.attachment_name || ''} target="_blank" rel="noreferrer"
                         className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Download"><FiDownload size={11} /></a>
                     )}
@@ -1054,6 +1057,7 @@ export default function SiteChat() {
       <div className="hidden md:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><BiMessageRoundedCheck className="text-blue-900" /> SOTYN Chat</h1>
+          <a href="/site-chat/share" className="text-xs text-blue-700 underline">Share content / resume draft</a>
           <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
         </div>
         {/* Your profile photo — tap to upload (mam 2026-06-19). */}
@@ -1076,6 +1080,7 @@ export default function SiteChat() {
               <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#1e3a8a]">✎</span>
             </button>
             <BiMessageRoundedCheck className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
+            <a href="/site-chat/share" className="md:hidden p-1.5 rounded hover:bg-white/15" title="Share content / resume draft" aria-label="Share content / resume draft"><FiPaperclip size={18} /></a>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>

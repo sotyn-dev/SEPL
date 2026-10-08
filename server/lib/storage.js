@@ -18,9 +18,9 @@
 // sweep owns that, and its scope is deliberately narrower (see sweep-uploads.js).
 const fs = require('fs');
 const path = require('path');
-const { UPLOADS_ROOT, QUARANTINE_ROOT, ensureDir } = require('./paths');
+const { DATA_ROOT, UPLOADS_ROOT, QUARANTINE_ROOT, ensureDir } = require('./paths');
 
-const NS = { UPLOADS: 'uploads', QUARANTINE: 'quarantine' };
+const NS = { UPLOADS: 'uploads', QUARANTINE: 'quarantine', CHAT_PRIVATE: 'chat-private' };
 
 const DRIVER = (process.env.STORAGE_DRIVER || 'local').toLowerCase();
 const isRemote = DRIVER === 's3';
@@ -44,7 +44,7 @@ function safeKey(key) {
   return parts.join('/');
 }
 
-const localRoot = (ns) => (ns === NS.QUARANTINE ? QUARANTINE_ROOT : UPLOADS_ROOT);
+const localRoot = (ns) => ns === NS.CHAT_PRIVATE ? path.join(DATA_ROOT, 'chat-private') : (ns === NS.QUARANTINE ? QUARANTINE_ROOT : UPLOADS_ROOT);
 const localPath = (ns, key) => path.join(localRoot(ns), ...key.split('/'));
 const remoteKey = (ns, key) => `${keyPrefix()}${ns}/${key}`;
 
@@ -215,7 +215,7 @@ function publicUrl(key) {
 // in place and the URL is still returned: the /uploads resolver serves it from disk via
 // dual-read, and the migration job (or the nightly) moves it later. A hiccup in the bucket
 // must not fail a user's upload or lose their file.
-async function adoptLocalFile(absPath, key, contentType) {
+async function adoptLocalFile(absPath, key, contentType, ns = NS.UPLOADS) {
   const k = safeKey(key);
   if (!k) throw new Error('Invalid storage key');
   // Local driver: multer already wrote it to its final home. Nothing to do.
@@ -227,13 +227,13 @@ async function adoptLocalFile(absPath, key, contentType) {
   try {
     const { PutObjectCommand } = sdk();
     await s3().send(new PutObjectCommand({
-      Bucket: bucket(), Key: remoteKey(NS.UPLOADS, k),
+      Bucket: bucket(), Key: remoteKey(ns, k),
       Body: fs.createReadStream(absPath),
       ContentLength: size,
       ContentType: contentType || 'application/octet-stream',
     }));
     // Verify before the local copy is treated as expendable.
-    const st = await statKey(k, NS.UPLOADS);
+    const st = await statKey(k, ns);
     if (!st || st.size !== size) {
       console.warn(`[storage] adopt verify failed for ${k} — keeping local copy`);
       return publicUrl(k);

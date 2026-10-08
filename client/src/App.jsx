@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import { ModuleGate } from './context/ModuleFlagsContext';
+import { chatShareLoginPath, afterChatShareLogin } from './lib/chatShareReturn';
 import Login from './pages/Login';
 // Layout (the authenticated app shell — sidebar, header, CallProvider/WebRTC,
 // AI chat, bells, ~64 icons) is lazy so it stays OUT of the entry chunk. A
@@ -61,6 +62,7 @@ const Bank = lazy(() => import('./pages/Bank'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
+const ChatShare = lazy(() => import('./pages/ChatShare'));
 const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
@@ -136,7 +138,7 @@ function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
   if (user?.must_change_password) return <InitialPasswordChange />;
-  return user ? children : <Navigate to="/login" />;
+  return user ? children : <Navigate to={chatShareLoginPath()} />;
 }
 
 function AdminRoute({ children }) {
@@ -169,7 +171,8 @@ export default function App() {
   return (
     <Suspense fallback={<div className="flex items-center justify-center h-screen text-lg text-gray-400">Loading…</div>}>
       <Routes>
-        <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
+        <Route path="/login" element={user ? <Navigate to={afterChatShareLogin()} /> : <Login />} />
+        <Route path="/site-chat/share" element={<ProtectedRoute><ModuleGate module="site_chat"><ChatShare /></ModuleGate></ProtectedRoute>} />
         {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
         {/* Online file viewer (mam 2026-08-27) — Excel/Word/CSV open in a tab

@@ -38,6 +38,14 @@ const markRead = (db, g, uid, knownMax) => {
   return max;
 };
 
+router.use('/share', require('./chatShare')({ getChatDb, canAccess, markRead, emitChat }));
+// New private attachments remain private when forwarded through existing Chat.
+router.use((req, res, next) => {
+  if (!req.body?.attachment_url) return next();
+  try { require('../lib/chatShare').guardAttachment(getChatDb(), req, req.body.attachment_url, canAccess); next(); }
+  catch(e) { res.status(e.status || 500).json({error:e.message}); }
+});
+
 // Permanent server-side trail for every destructive/membership chat action —
 // shows in `pm2 logs erp | grep chat-audit` even if the UI trail is missed.
 // Records the account AND the IP, so a teammate's script using a borrowed

@@ -1,6 +1,6 @@
 {
-  "name": "SEPL Business ERP",
-  "short_name": "SEPL ERP",
+  "name": "SOTYN ERP",
+  "short_name": "SOTYN",
   "description": "Secured Engineers Pvt Ltd · Business ERP",
   "id": "/",
   "start_url": "/",
@@ -9,9 +9,18 @@
   "orientation": "any",
   "background_color": "#ffffff",
   "theme_color": "#1e40af",
+  "share_target": {
+    "action": "/site-chat/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title", "text": "text", "url": "url",
+      "files": [{ "name": "files", "accept": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf", "text/plain", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"] }]
+    }
+  },
   "icons": [
     { "src": "/icon.svg", "sizes": "any",     "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable" },
-    { "src": "/icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/sotyn-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/sotyn-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }

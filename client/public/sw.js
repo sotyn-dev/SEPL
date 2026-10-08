@@ -2,6 +2,8 @@
 // closed and shows a desktop / phone notification. On click it tries
 // to focus an already-open ERP tab, otherwise opens a new one to the
 // notification's deep link.
+// An unavailable share script must not interrupt existing push/call handlers.
+try { importScripts('/chat-share-worker.js'); } catch (error) { console.warn('Chat share receiver unavailable', error); }
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
