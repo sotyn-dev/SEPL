@@ -292,6 +292,29 @@ router.post('/auto-match-boq', requirePermission('quotations', 'view'), upload.s
   }
 });
 
+// TSK-0822: AI BOQ to Item-wise BOM breakdown with SEPL & Perplexity dual pricing
+const { decomposeBoqLine } = require('../lib/boqDecomposer');
+
+router.post('/boq-item-breakdown', requirePermission('quotations', 'view'), async (req, res) => {
+  try {
+    const { description, quantity, unit, trade, client_spec } = req.body || {};
+    if (!description || String(description).trim().length < 3) {
+      return res.status(400).json({ error: 'Item description is required' });
+    }
+    const result = await decomposeBoqLine(getDb(), {
+      description,
+      quantity: quantity || 1,
+      unit: unit || 'Nos',
+      trade: trade || '',
+      client_spec: client_spec || ''
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[quotations/boq-item-breakdown]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Failed to generate item-wise breakdown' });
+  }
+});
+
 // Auto-load a client's BOQ from the Sales Funnel and match it (mam 2026-06-22).
 // No manual upload: find the funnel BOQ file for the selected lead's company
 // and run the same matcher. lead_id comes from the /leads dropdown.
