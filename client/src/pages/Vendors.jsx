@@ -200,7 +200,7 @@ export default function Vendors() {
       // vendor firm name"), plus deals-in / code / district / phone.
       const q = search.toLowerCase();
       const hit = (f) => (v[f] || '').toString().toLowerCase().includes(q);
-      if (!hit('name') && !hit('firm_name') && !hit('deals_in') && !hit('vendor_code') && !hit('district') && !hit('phone') && !hit('contact_person')) return false;
+      if (!hit('name') && !hit('firm_name') && !hit('deals_in') && !hit('vendor_code') && !hit('district') && !hit('phone') && !hit('contact_person') && !hit('gst_number')) return false;
     }
     return true;
   });
@@ -251,10 +251,10 @@ export default function Vendors() {
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, firm name, deals in, code, district, phone..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+            <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, firm name, deals in, code, district, phone, GST..." value={search} onChange={e => setSearch(e.target.value)} /></div>
             <button onClick={() => exportCsv('vendors',
-              ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
-              filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
+              ['Code','Name','Firm','GST Number','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
+              filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.gst_number, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
             {canCreate('vendors') && <button onClick={() => { setBulkText(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>}
             {canCreate('vendors') && <button onClick={() => { setEditing(null); setForm({ rating: 2 }); setModal('vendor'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Vendor</button>}
@@ -279,9 +279,9 @@ export default function Vendors() {
             <span className="text-[11px] text-gray-400">across all {vendors.length} vendors · {cmpFieldsPer} key fields each</span>
           </div>
 
-          <div className="card p-0 overflow-x-auto"><NumberedTable start={safePage * PAGE_SIZE + 1} className="min-w-[1000px] text-xs freeze-head">
+          <div className="card p-0 overflow-x-auto"><NumberedTable start={safePage * PAGE_SIZE + 1} className="min-w-[1050px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
-              <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor / Firm Name</th><th className="px-2 py-2">Category</th>
+              <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor / Firm Name</th><th className="px-2 py-2">GST Number</th><th className="px-2 py-2">Category</th>
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>
               <th className="px-2 py-2">Phone</th><th className="px-2 py-2">Payment</th><th className="px-2 py-2">Credit</th><th className="px-2 py-2">Last Updated</th><th className="px-2 py-2">Actions</th>
             </tr></thead>
@@ -295,6 +295,7 @@ export default function Vendors() {
                   {v.firm_name && <div className="text-[10px] text-gray-500 font-medium">{v.firm_name}</div>}
                   {v.authorized_dealer && v.authorized_dealer !== v.firm_name && <div className="text-[10px] text-gray-400">{v.authorized_dealer}</div>}
                 </td>
+                <td className="px-2 py-2 font-mono text-[10px] text-gray-700 whitespace-nowrap">{v.gst_number || '-'}</td>
                 <td className="px-2 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${CAT_COLORS[v.category] || 'bg-gray-100'}`}>{v.category || '-'}</span></td>
                 <td className="px-2 py-2 text-[11px]">{v.deals_in || '-'}</td>
                 <td className="px-2 py-2 text-[10px]">{v.type || '-'}</td>
@@ -317,7 +318,7 @@ export default function Vendors() {
                   </div>
                 </td>
               </tr>
-            ))}{filtered.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
+            ))}{filtered.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
           </NumberedTable></div>
 
           {/* Paginator — only when there's more than one page */}
