@@ -8,6 +8,16 @@ function migrate(db) {
   if (!columns.size) return;
   if (!columns.has('raiser_approval_required')) db.exec('ALTER TABLE indents ADD COLUMN raiser_approval_required INTEGER NOT NULL DEFAULT 0');
   if (!columns.has('review_revision')) db.exec('ALTER TABLE indents ADD COLUMN review_revision INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('l1_admin_override')) db.exec('ALTER TABLE indents ADD COLUMN l1_admin_override INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('l1_assigned_approver')) db.exec('ALTER TABLE indents ADD COLUMN l1_assigned_approver TEXT');
+  if (!columns.has('l2_admin_override')) db.exec('ALTER TABLE indents ADD COLUMN l2_admin_override INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('l2_assigned_approver')) db.exec('ALTER TABLE indents ADD COLUMN l2_assigned_approver TEXT');
+  if (!columns.has('crm_admin_override')) db.exec('ALTER TABLE indents ADD COLUMN crm_admin_override INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('crm_assigned_approver')) db.exec('ALTER TABLE indents ADD COLUMN crm_assigned_approver TEXT');
+  if (!columns.has('rejected_admin_override')) db.exec('ALTER TABLE indents ADD COLUMN rejected_admin_override INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('rejected_assigned_approver')) db.exec('ALTER TABLE indents ADD COLUMN rejected_assigned_approver TEXT');
+  if (!columns.has('approved_admin_override')) db.exec('ALTER TABLE indents ADD COLUMN approved_admin_override INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('approved_assigned_approver')) db.exec('ALTER TABLE indents ADD COLUMN approved_assigned_approver TEXT');
   db.exec(`CREATE TABLE IF NOT EXISTS indent_review_audit (
     id INTEGER PRIMARY KEY, indent_id INTEGER NOT NULL REFERENCES indents(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL, action TEXT NOT NULL, actor_id INTEGER NOT NULL,
@@ -18,14 +28,23 @@ function migrate(db) {
 function audit(db, row, actorId, action, details = {}) {
   db.prepare('INSERT INTO indent_review_audit (indent_id, revision, action, actor_id, details) VALUES (?,?,?,?,?)')
     .run(row.id, row.review_revision || 0, action, actorId, JSON.stringify(details));
-  if (action !== 'marked_correct') db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE dedupe_key=?')
-    .run(`indent-raiser:${row.id}:${row.review_revision}`);
+  if (action !== 'marked_correct' && action !== 'admin_override_marked_correct') {
+    db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE dedupe_key=?')
+      .run(`indent-raiser:${row.id}:${row.review_revision}`);
+  }
 }
 
-function validateAction(row, actorId, reviewerIds, body) {
+function validateAction(row, actorId, reviewerIds, body, isAdmin = false) {
   const fail = (error, code = 403) => ({ error, code });
   if (!usesRaiserApproval(row)) return null;
-  if (body.status === 'rejected') return fail('This workflow has no reject action. Save corrections and have the indent reviewed again.');
+  if (body.status === 'rejected') {
+    if (!isAdmin) return fail('This workflow has no reject action. Save corrections and have the indent reviewed again.');
+    const canReject = ['submitted', 'crm_approved', 'l1_approved'].includes(row.status);
+    if (!canReject) return fail(`Cannot reject an indent with status '${row.status}'.`, 400);
+    const reasonStr = String(body.reason || '').trim();
+    if (reasonStr.length < 3) return fail('Rejection reason is required (at least 3 characters).', 400);
+    return null;
+  }
   // CRM still runs through the existing permission and billing checks.
   if (row.crm_status === 'pending' && row.status === 'submitted' && body.status === 'approved') return null;
   if (!['reviewed', 'approved'].includes(body.status)) return fail('Use review and raiser approval; direct status changes are not allowed.');
@@ -34,12 +53,16 @@ function validateAction(row, actorId, reviewerIds, body) {
   const pendingRaiser = row.status === 'l1_approved' && row.l1_status === 'approved';
   if (body.status === 'reviewed') {
     if (!pendingReview || row.crm_status === 'pending') return fail('This indent is not ready for review.', 409);
-    if (!reviewerIds.includes(actorId)) return fail('Only the assigned indent reviewer can mark this indent correct.');
-    if (actorId === row.created_by) return fail('The raiser cannot also review this indent. Assign another reviewer in Workflow Settings.');
+    if (!isAdmin) {
+      if (!reviewerIds.includes(actorId)) return fail('Only the assigned indent reviewer can mark this indent correct.');
+      if (actorId === row.created_by) return fail('The raiser cannot also review this indent. Assign another reviewer in Workflow Settings.');
+    }
   } else {
     if (!pendingRaiser) return fail('The indent must be marked correct before the raiser can approve it.', 409);
-    if (actorId !== row.created_by) return fail('Only the user who raised this indent can give final approval.');
-    if (row.l1_by === actorId) return fail('Reviewer and final approver must be different users.');
+    if (!isAdmin) {
+      if (actorId !== row.created_by) return fail('Only the user who raised this indent can give final approval.');
+      if (row.l1_by === actorId) return fail('Reviewer and final approver must be different users.');
+    }
   }
   // Changes must be saved and reviewed first, never slipped into final approval.
   const forbidden = body.status === 'reviewed' ? ['quantity_overrides', 'unit_overrides', 'store_qty_per_item'] : ['quantity_overrides', 'unit_overrides'];
@@ -47,10 +70,35 @@ function validateAction(row, actorId, reviewerIds, body) {
   return null;
 }
 
-function markCorrect(db, row, actorId) {
+function markCorrect(db, row, actorId, reviewerIds = []) {
+  const isOverride = !reviewerIds.includes(actorId) || actorId === row.created_by;
+  let originalApproverName = null;
+  if (reviewerIds.length) {
+    const names = db.prepare(`SELECT name FROM users WHERE id IN (${reviewerIds.map(() => '?').join(',')})`).all(...reviewerIds);
+    originalApproverName = names.map(u => u.name).join(', ');
+  }
   db.transaction(() => {
-    db.prepare("UPDATE indents SET status='l1_approved', l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='pending' WHERE id=?").run(actorId, row.id);
-    audit(db, row, actorId, 'marked_correct', { items: db.prepare('SELECT * FROM indent_items WHERE indent_id=?').all(row.id) });
+    db.prepare(`UPDATE indents SET
+      status='l1_approved', l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='pending',
+      l1_admin_override=?, l1_assigned_approver=?
+      WHERE id=?`).run(
+        actorId,
+        isOverride ? 1 : 0,
+        isOverride ? (originalApproverName || 'Assigned Reviewer') : null,
+        row.id
+      );
+    const auditDetails = {
+      stage: 'l1_review',
+      stage_label: 'Checked correct',
+      action: 'marked_correct',
+      items: db.prepare('SELECT * FROM indent_items WHERE indent_id=?').all(row.id),
+    };
+    if (isOverride) {
+      auditDetails.admin_override = true;
+      auditDetails.original_assigned_approver = originalApproverName || 'Assigned Reviewer';
+      auditDetails.original_approver_ids = reviewerIds;
+    }
+    audit(db, row, actorId, isOverride ? 'admin_override_marked_correct' : 'marked_correct', auditDetails);
     db.prepare(`INSERT INTO notifications (user_id,type,title,body,link_url,channel_sent,dedupe_key)
       VALUES (?,'approval_pending',?,?,?,?,?)`).run(row.created_by, `Approve indent ${row.indent_number}`,
       'Your indent has been checked and marked correct. Review the items and give final approval.',
@@ -63,8 +111,10 @@ function invalidateReview(db, row, actorId) {
   audit(db, row, actorId, 'edited_review_invalidated', { previous_status: row.status, reviewed_by: row.l1_by });
   db.prepare(`UPDATE indents SET review_revision=review_revision+1,
     status=CASE WHEN crm_status='approved' THEN 'crm_approved' ELSE 'submitted' END,
-    l1_status='pending', l1_by=NULL, l1_at=NULL, l2_status='pending', l2_by=NULL, l2_at=NULL,
-    approved_by=NULL, approved_at=NULL, rejected_by=NULL, rejected_at=NULL, rejection_reason=NULL WHERE id=?`).run(row.id);
+    l1_status='pending', l1_by=NULL, l1_at=NULL, l1_admin_override=0, l1_assigned_approver=NULL,
+    l2_status='pending', l2_by=NULL, l2_at=NULL, l2_admin_override=0, l2_assigned_approver=NULL,
+    approved_by=NULL, approved_at=NULL, rejected_by=NULL, rejected_at=NULL, rejection_reason=NULL,
+    rejected_admin_override=0, rejected_assigned_approver=NULL WHERE id=?`).run(row.id);
 }
 
 module.exports = { START_DATE, appliesOn, usesRaiserApproval, migrate, audit, validateAction, markCorrect, invalidateReview };
