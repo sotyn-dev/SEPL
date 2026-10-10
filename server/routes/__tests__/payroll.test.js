@@ -93,7 +93,7 @@ test('payroll export includes displayed totals and adjustments without recalcula
   const jsx = fs.readFileSync(path.join(__dirname, '../../../client/src/pages/Payroll.jsx'), 'utf8');
   const start = jsx.indexOf('export function buildPayrollExport');
   const end = jsx.indexOf('const monthNow', start);
-  const exportContext = {};
+  const exportContext = { staffTypeLabel: (t) => t || 'Staff' };
   vm.runInNewContext(jsx.slice(start, end).replace('export function', 'function'), exportContext);
   const { headers, rows } = exportContext.buildPayrollExport([
     { employee_name: 'Gagan', present_days: 20.5, sunday_count: 0, sunday_worked_pay: 3, half_days: 9,
@@ -117,4 +117,76 @@ test('payroll export includes displayed totals and adjustments without recalcula
   assert.equal(cell('Payment Status'), 'Paid');
   assert.equal(rows[1][headers.indexOf('Present (paid equivalents)')], '');
   assert.equal(rows[1][headers.indexOf('Net Pay (Rs)')], 15000);
+});
+test('working on Sunday earns double pay (present day + sunday bonus)', () => {
+  // 2025-08-03 is a Sunday
+  const options = {
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:30', total_hours: 9 }, // Fri
+      { date: '2025-08-02', punch_in_time: '09:30', total_hours: 9 }, // Sat
+      { date: '2025-08-03', punch_in_time: '09:30', total_hours: 9 }, // Sun worked
+      { date: '2025-08-04', punch_in_time: '09:30', total_hours: 9 }, // Mon
+    ],
+  };
+  const res = run(options, employee, settings);
+  assert.equal(res.sunday_worked, 1);
+  assert.equal(res.sunday_worked_pay, 1);
+  const sunRow = res.breakdown.find(b => b.date === '2025-08-03');
+  assert.equal(sunRow.label, 'sunday_worked');
+  assert.equal(sunRow.pay, 2);
+  assert.equal(sunRow.sunday_bonus, 1);
+  assert.equal(sunRow.sunday_worked, true);
+});
+
+test('applied leave overridden by attendance: pays according to attendance and preserves leave quota', () => {
+  // Employee applied for casual leave on 2025-08-04 and 2025-08-05
+  // Punches in on 2025-08-04, but absent on 2025-08-05
+  const options = {
+    leaves: [
+      { from_date: '2025-08-04', to_date: '2025-08-04', leave_type: 'casual', status: 'approved' },
+      { from_date: '2025-08-05', to_date: '2025-08-05', leave_type: 'casual', status: 'approved' },
+    ],
+    attendance: [
+      { date: '2025-08-04', punch_in_time: '09:30', total_hours: 9 },
+    ],
+  };
+  const rules = { ...settings, cl_per_month: 1 };
+  const res = run(options, employee, rules);
+  const attendedRow = res.breakdown.find(b => b.date === '2025-08-04');
+  assert.equal(attendedRow.label, 'present');
+  assert.equal(attendedRow.pay, 1);
+  assert.equal(attendedRow.applied_leave, 'casual');
+
+  const absentLeaveRow = res.breakdown.find(b => b.date === '2025-08-05');
+  assert.equal(absentLeaveRow.label, 'paid_casual_leave');
+  assert.equal(absentLeaveRow.pay, 1);
+  assert.equal(res.cl_used, 1); // Only the un-attended day consumed the 1 available CL
+});
+test('calendar Sundays remain integer count (4 or 5) and never fractional when Sunday is worked', () => {
+  // Build attendance for all working days (Mon-Sat) in August 2025 (26 weekdays, 5 Sundays)
+  const allWorkDays = [];
+  for (let d = 1; d <= 31; d++) {
+    const dt = new Date(2025, 7, d);
+    const day = dt.getDay();
+    const dStr = `2025-08-${String(d).padStart(2, '0')}`;
+    if (day !== 0) { // Mon-Sat
+      allWorkDays.push({ date: dStr, punch_in_time: '09:30', total_hours: 9 });
+    }
+  }
+
+  // 1. Full day worked on Sunday Aug 3
+  const resFull = run({
+    attendance: [...allWorkDays, { date: '2025-08-03', punch_in_time: '09:30', total_hours: 9 }],
+  }, employee, settings);
+  assert.equal(resFull.sunday_count, 5); // Must be full 5 Sundays, NOT 4
+  assert.equal(resFull.present_days, 27); // 26 weekdays + 1 Sunday
+  assert.equal(resFull.paid_days, 32); // 27 + 5 = 32
+
+  // 2. Half day worked on Sunday Aug 3
+  const resHalf = run({
+    attendance: [...allWorkDays, { date: '2025-08-03', punch_in_time: '10:30', total_hours: 3 }],
+  }, employee, settings);
+  assert.equal(resHalf.sunday_count, 5); // Must be full 5 Sundays, NOT 4 and NEVER 3.5 or 4.5
+  assert.equal(resHalf.present_days, 26.5); // 26 weekdays + 0.5 Sunday
+  assert.equal(resHalf.paid_days, 31.5); // 26.5 + 5 = 31.5
 });
