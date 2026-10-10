@@ -2950,6 +2950,14 @@ function initializeDatabase() {
       unlocked_by INTEGER REFERENCES users(id),
       unlocked_at DATETIME,
 
+      -- Tally sync metadata (TSK-0826)
+      tally_guid TEXT,
+      tally_alter_id INTEGER,
+      is_tally_synced INTEGER DEFAULT 0,
+      tally_voucher_type TEXT DEFAULT 'Purchase',
+      tally_company TEXT,
+      tally_party_gstin TEXT,
+
       created_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -5180,6 +5188,32 @@ function initializeDatabase() {
     // mam 2026-06-30: when the approver edits a line's UOM at approval, mark it so
     // downstream views show THAT unit (Vendor Rates etc.) instead of the master UOM.
     try { db.exec(`ALTER TABLE indent_items ADD COLUMN unit_overridden INTEGER DEFAULT 0`); } catch (_) { }
+
+    // Tally Bill automatic sync metadata (TSK-0826)
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN tally_guid TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN tally_alter_id INTEGER`); } catch (_) { }
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN is_tally_synced INTEGER DEFAULT 0`); } catch (_) { }
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN tally_voucher_type TEXT DEFAULT 'Purchase'`); } catch (_) { }
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN tally_company TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE tally_bills ADD COLUMN tally_party_gstin TEXT`); } catch (_) { }
+    try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tally_bills_guid ON tally_bills(tally_guid) WHERE tally_guid IS NOT NULL`); } catch (_) { }
+
+    try {
+      db.exec(`CREATE TABLE IF NOT EXISTS tally_sync_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sync_type TEXT NOT NULL,
+        vouchers_received INTEGER DEFAULT 0,
+        vouchers_added INTEGER DEFAULT 0,
+        vouchers_updated INTEGER DEFAULT 0,
+        vouchers_skipped INTEGER DEFAULT 0,
+        last_alter_id INTEGER DEFAULT 0,
+        company_name TEXT,
+        status TEXT DEFAULT 'success',
+        error_message TEXT,
+        ip_address TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`);
+    } catch (_) { }
     // One-time backfill: existing rows whose line UOM already differs from the
     // master UOM were edited deliberately (e.g. IND-0172 mtr→KG), so flag them so
     // the edit shows immediately. Guarded so it runs exactly once.
