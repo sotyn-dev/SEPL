@@ -1910,7 +1910,7 @@ router.get('/checklists/by-date', (req, res) => {
 
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-           c.department, c.recurrence_start_date, c.recurrence_end_date,
+           c.department, c.proof_type, c.proof_label, c.recurrence_start_date, c.recurrence_end_date,
            c.fortnight_days, c.created_at,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
@@ -2009,12 +2009,12 @@ router.get('/checklists/followup', (req, res) => {
   // Pull the candidate task list (admin sees all, others only their own).
   const taskSql = isAdmin
     ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-              c.department, c.assigned_to, u.name AS assigned_to_name,
+              c.department, c.proof_type, c.proof_label, c.assigned_to, u.name AS assigned_to_name,
               c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        ORDER BY u.name COLLATE NOCASE, c.department, c.description`
     : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-              c.department, c.assigned_to, u.name AS assigned_to_name,
+              c.department, c.proof_type, c.proof_label, c.assigned_to, u.name AS assigned_to_name,
               c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.assigned_to = ?
@@ -2024,7 +2024,7 @@ router.get('/checklists/followup', (req, res) => {
   // Pull ALL completions in the window (one query, then bucket
   // client-side by checklist_id + date).
   const compRows = db.prepare(`
-    SELECT checklist_id, user_id, completion_date, proof_url,
+    SELECT checklist_id, user_id, completion_date, proof_url, notes,
            approval_status, submitted_at
     FROM checklist_completions
     WHERE completion_date BETWEEN ? AND ?
@@ -2066,12 +2066,14 @@ router.get('/checklists/followup', (req, res) => {
       } else if (isPast)  status = 'missed';
       else if (isToday)   status = 'today';
       else                status = 'future';
-      return { date: d, status, proof_url: comp?.proof_url || null, submitted_at: comp?.submitted_at || null };
+      return { date: d, status, proof_url: comp?.proof_url || null, notes: comp?.notes || null, submitted_at: comp?.submitted_at || null };
     });
     return {
       id: t.id,
       description: t.description || t.title,
       frequency: t.frequency,
+      proof_type: t.proof_type || 'photo',
+      proof_label: t.proof_label || null,
       department: t.department,
       assigned_to: t.assigned_to,
       assigned_to_name: t.assigned_to_name,

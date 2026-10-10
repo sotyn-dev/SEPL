@@ -66,7 +66,7 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 // CRM owner options — taken from mam's screenshot.  Anyone can add
 // more by typing in the picklist field; values are stored as plain
 // text so the list isn't a hard constraint.
-const CRM_OWNERS = ['Sushila', 'Lovely'];
+const CRM_OWNERS = ['Lovely'];
 
 export default function CRMKitting() {
   const { user, isAdmin, canEdit, canCreate, canDelete } = useAuth();
@@ -739,7 +739,7 @@ export default function CRMKitting() {
                     onClick={() => setMetaDraft(d => ({ ...d, crm_owner: name }))}
                     className={`px-2.5 py-1.5 text-xs rounded border ${
                       metaDraft.crm_owner === name
-                        ? (name === 'Sushila' ? 'bg-violet-100 border-violet-300 text-violet-700' : 'bg-orange-100 border-orange-300 text-orange-700')
+                        ? 'bg-orange-100 border-orange-300 text-orange-700 font-semibold'
                         : 'border-gray-300 hover:bg-gray-50'
                     }`}
                   >

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
@@ -277,7 +278,7 @@ export default function Complaints() {
       )}
 
       <div className="bg-white rounded-xl border table-responsive">
-        <table className="w-full text-sm freeze-head min-w-[850px]">
+        <NumberedTable className="w-full text-sm freeze-head min-w-[850px]">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
               <th className="text-left px-3 py-2">Complaint #</th>
@@ -329,7 +330,7 @@ export default function Complaints() {
                 : 'No complaints found.'}
             </td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {showAdd && (

@@ -53,6 +53,13 @@ catch (e) { console.warn('[hang-detector] not started:', e.message); }
 // 10 MB through a synchronous server (audit 2026-09-07).
 app.use('/api/public', require('./routes/publicSotynLead'));
 
+// Energy Desk — the solar savings report on securedengineers.com. Public, so it
+// sits here with the other public intake, before the 10 MB parser below, and
+// parses its own bodies under 32 kb. Inert unless ENERGY_DESK_ENABLED=1:
+// /health then answers enabled:false and the website keeps to its own
+// in-browser report. See server/energyDesk/router.js.
+app.use('/api/public/energy-desk', require('./energyDesk/router'));
+
 // Global body parser for every OTHER route. Deliberately last of the three:
 // the hang detector must see all traffic, and the public webhook must parse
 // its own body under a 32 kb cap before this 10 MB one can claim it.
@@ -299,6 +306,19 @@ try {
   console.warn('[bank-mail] Scheduler not started:', e.message);
 }
 
+// Energy Desk config — hourly fetch of the website's published
+// /energy-desk/config.json (every number the solar savings report uses, each
+// with its source). Only when ENERGY_DESK_ENABLED=1. Skip via
+// ERP_DISABLE_ENERGY_DESK_CONFIG=1.
+if (/^(1|true|yes)$/i.test(String(process.env.ENERGY_DESK_ENABLED || '')) && !process.env.ERP_DISABLE_ENERGY_DESK_CONFIG) {
+  try {
+    require('./energyDesk/store').ensureEnergyDeskSchema(require('./db/schema').getDb());
+    require('./energyDesk/config').start();
+  } catch (e) {
+    console.warn('[energy-desk] not started:', e.message);
+  }
+}
+
 // AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
 // to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
 try {
@@ -372,6 +392,13 @@ try {
   console.warn('[payroll-exempt] failed to start:', e.message);
 }
 
+// TSK-0489: Recurring monthly Purchase Bill Audit checklist (25th of month) for Pooja Kaplesh
+try {
+  require('./scripts/tsk0489PurchaseAuditBackfill').runOnce();
+} catch (e) {
+  console.warn('[tsk-0489-backfill] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
@@ -393,6 +420,13 @@ try {
   require('./scripts/hrAutomationsCron').schedule();
 } catch (e) {
   console.warn('[hr-cron] Scheduler not started:', e.message);
+}
+
+// Procurement schedule reminder cron — mam (2026-05-29):
+try {
+  require('./scripts/vendorTredsReminderCron').schedule();
+} catch (e) {
+  console.warn('[vendor-treds] Scheduler not started:', e.message);
 }
 
 // Procurement schedule reminder cron — mam (2026-05-29):
@@ -563,6 +597,7 @@ try {
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
+app.use('/api/market-rates', require('./routes/marketRates'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/tally-bills', require('./routes/tallyBills'));
 app.use('/api/tally-sync', require('./routes/tallySync'));
@@ -580,6 +615,7 @@ app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
+app.use('/api/vendor-treds', require('./routes/vendorTreds'));
 app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
 app.use('/api/fire-noc', require('./routes/fireNoc'));
@@ -678,6 +714,8 @@ app.post('/api/public/employee-upload/:token',
 // manual sweep needed. Runs before express.static so the restored file is served.
 // New employee documents require HR read access even when their URL is known.
 app.use('/uploads/employee-documents', authMiddleware, require('./middleware/auth').requirePermission('employees', 'view'));
+// Private business documents are served only by record-aware authenticated API routes.
+app.use('/uploads/vendor-treds', (req, res) => res.status(404).end());
 app.use('/uploads', async (req, res, next) => {
   let key = null;
   try {

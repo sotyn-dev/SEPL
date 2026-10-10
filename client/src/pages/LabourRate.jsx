@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -167,7 +168,7 @@ export default function LabourRate() {
 
       {/* Table */}
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="min-w-full text-sm">
           <thead>
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
               <th className="p-2 w-20">Task ID</th>
@@ -196,7 +197,7 @@ export default function LabourRate() {
             ))}
             {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...pager} />
       <div className="text-xs text-gray-400">{filtered.length} item(s){catFilter ? ` in ${catFilter}` : ''}.</div>

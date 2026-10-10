@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 // Sotyn Leads — the sotyn.ai website enquiry inbox.
 //
 // Mam (2026-09-07): "generate a new small module which name sotyn lead and
@@ -453,7 +455,7 @@ export default function SotynLeads() {
       {/* Desktop table */}
       <div className="hidden md:block bg-white border rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr className="text-left">
                 <th className="px-3 py-2 font-semibold">Received</th>
@@ -501,14 +503,14 @@ export default function SotynLeads() {
                 </td></tr>
               )}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
 
       {/* Mobile cards — same actions as the table */}
       <div className="md:hidden space-y-2">
-        {pager.pageItems.map(l => (
-          <div key={l.id} className="bg-white border rounded-xl p-3 shadow-sm">
+        {pager.pageItems.map((l, serialIndex) => (
+          <div key={l.id} className="bg-white border rounded-xl p-3 shadow-sm"><SerialNumber value={(pager.page - 1) * pager.perPage + serialIndex + 1} />
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="font-semibold text-slate-800">{l.name}</div>
@@ -580,7 +582,7 @@ export default function SotynLeads() {
                 <span className="text-slate-500"><b>{importPreview.skipped}</b> unusable</span>
               </div>
               <div className="max-h-64 overflow-y-auto">
-                <table className="w-full text-xs">
+                <NumberedTable className="w-full text-xs">
                   <thead className="bg-white sticky top-0">
                     <tr className="text-left text-slate-500 border-b">
                       <th className="px-2 py-1.5 font-semibold">Form</th>
@@ -612,7 +614,7 @@ export default function SotynLeads() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
               {importPreview.found > (importPreview.rows || []).length && (
                 <div className="px-3 py-1.5 text-[11px] text-slate-500 border-t">

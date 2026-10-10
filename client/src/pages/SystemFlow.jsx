@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 // SYSTEM FLOW — ERP Management system register (v2).
 //
 // Mam (2026-09-08): "change it fully, 2,3 photo is steps and 4 is create system".
@@ -402,7 +404,7 @@ export default function SystemFlow() {
       {/* Desktop: the sheet's layout — one row per system, four step blocks */}
       <div className="hidden md:block bg-white border rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="text-sm min-w-max">
+          <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="text-sm min-w-max">
             <thead>
               <tr className="bg-slate-100 border-b">
                 <th colSpan={7} className="px-2 py-1.5 text-left text-[11px] font-bold text-slate-600 border-r">SYSTEM</th>
@@ -475,15 +477,15 @@ export default function SystemFlow() {
                 </td></tr>
               )}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination {...pager} />
       </div>
 
       {/* Mobile: same data, same actions */}
       <div className="md:hidden space-y-2">
-        {pager.pageItems.map((r) => (
-          <div key={r.id} className="bg-white border rounded-xl p-3">
+        {pager.pageItems.map((r, serialIndex) => (
+          <div key={r.id} className="bg-white border rounded-xl p-3"><SerialNumber value={(pager.page - 1) * pager.perPage + serialIndex + 1} />
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="font-semibold text-slate-800">{r.system_name}</div>
@@ -558,7 +560,7 @@ export default function SystemFlow() {
                   <span className="text-amber-700"><b>{bulk.preview.duplicates}</b> already there</span>
                 </div>
                 <div className="max-h-64 overflow-y-auto">
-                  <table className="w-full text-xs">
+                  <NumberedTable className="w-full text-xs">
                     <thead className="bg-white sticky top-0">
                       <tr className="text-left text-slate-500 border-b">
                         <th className="px-2 py-1.5 font-semibold">System name</th>
@@ -588,7 +590,7 @@ export default function SystemFlow() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}

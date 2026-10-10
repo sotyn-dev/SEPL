@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import RaBillingBoard from '../components/RaBillingBoard';
@@ -284,7 +285,7 @@ export default function SalesBilling() {
 
   const BillTable = ({ rows, showPayment, sentMode, pager }) => (<>
     <div className="card p-0 overflow-x-auto">
-      <table className="text-sm w-full min-w-[850px]">
+      <NumberedTable start={pager ? (pager.page - 1) * pager.perPage + 1 : 1} className="text-sm w-full min-w-[850px]">
         <thead>
           <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
             <th className="px-3 py-2 text-left">Bill No</th>
@@ -350,7 +351,7 @@ export default function SalesBilling() {
             </tr>
           ))}
         </tbody>
-      </table>
+      </NumberedTable>
     </div>
     {pager && <Pagination {...pager} />}
   </>);
@@ -459,7 +460,7 @@ export default function SalesBilling() {
             Your <b>orders from Business Book</b> are the sales orders. Raise the <b>Sales Order bill</b> against each, then the Final bill. ★ = in Planning.
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full">
+            <NumberedTable start={(ordersPager.page - 1) * ordersPager.perPage + 1} className="text-sm w-full">
               <thead>
                 <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                   <th className="px-3 py-2 text-left">Order</th>
@@ -507,7 +508,7 @@ export default function SalesBilling() {
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <Pagination {...ordersPager} />
         </div>
@@ -521,7 +522,7 @@ export default function SalesBilling() {
             {material.length > 0 && <span className="ml-1 text-rose-600 font-semibold">{material.filter(m => m.sales_bill_status === 'pending').length} pending</span>}
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full min-w-[700px]">
+            <NumberedTable start={(materialPager.page - 1) * materialPager.perPage + 1} className="text-sm w-full min-w-[700px]">
               <thead>
                 <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                   <th className="px-3 py-2 text-left">Indent</th>
@@ -564,7 +565,7 @@ export default function SalesBilling() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
           <Pagination {...materialPager} />
         </div>
@@ -690,7 +691,7 @@ export default function SalesBilling() {
                     {/* DPR list table when expanded */}
                     {isExpanded && (
                       <div className="p-0 overflow-x-auto">
-                        <table className="text-xs w-full">
+                        <NumberedTable className="text-xs w-full">
                           <thead>
                             <tr className="bg-gray-100/50 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-100">
                               <th className="w-8 px-3 py-2 text-center">Pick</th>
@@ -727,7 +728,7 @@ export default function SalesBilling() {
                               );
                             })}
                           </tbody>
-                        </table>
+                        </NumberedTable>
                       </div>
                     )}
                   </div>
@@ -803,14 +804,14 @@ export default function SalesBilling() {
               )}
               {order.items.length > 0 && (
                 <div className="max-h-32 overflow-y-auto border border-gray-100 rounded-lg">
-                  <table className="text-[11px] w-full">
+                  <NumberedTable className="text-[11px] w-full">
                     <thead><tr className="bg-gray-50 text-gray-500"><th className="px-2 py-1 text-left">Item</th><th className="px-2 py-1 text-right">Qty</th><th className="px-2 py-1 text-right">Rate</th><th className="px-2 py-1 text-right">Amount</th></tr></thead>
                     <tbody>
                       {order.items.map(it => (
                         <tr key={it.id} className="border-t border-gray-50"><td className="px-2 py-1">{it.description}</td><td className="px-2 py-1 text-right">{it.quantity} {it.unit}</td><td className="px-2 py-1 text-right">{fmt(it.rate)}</td><td className="px-2 py-1 text-right">{fmt(it.amount)}</td></tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               )}
               {nextType && (

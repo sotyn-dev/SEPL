@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // MD Collections Dashboard — one screen so MD can answer
 // "where are we still spending effort but not getting paid?"
 //
@@ -126,7 +127,7 @@ export default function CollectionsMD() {
           <h4 className="font-semibold text-gray-700">Per-Site Activity vs Payment</h4>
           <span className="text-[11px] text-gray-400">{sitesShown.length} site{sitesShown.length === 1 ? '' : 's'}{showOnlySilent ? ' · silent overdue only' : ''}</span>
         </div>
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50/60">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Site</th>
@@ -222,7 +223,7 @@ export default function CollectionsMD() {
               );
             })}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* Footer hint */}

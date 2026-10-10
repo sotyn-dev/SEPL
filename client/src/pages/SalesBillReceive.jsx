@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Sales Bill Receive — client sales bill uploaded against an indent.
 //
 // Flow (Procurement, after Indent to Dispatch):
@@ -186,7 +187,7 @@ export default function SalesBillReceive() {
       </div>
 
       <div className="card p-0">
-        <table className="freeze-head">
+        <NumberedTable className="freeze-head">
           <thead>
             <tr>
               <th>Indent No</th>
@@ -235,7 +236,7 @@ export default function SalesBillReceive() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={form.id ? 'Edit Sales Bill Receive' : 'Receive Sales Bill'}>

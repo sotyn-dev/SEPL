@@ -17,6 +17,7 @@
 // email for the CMD without giving the AI a user login.
 
 const express = require('express');
+const { getActiveProjectMetric, countActiveProjectsWithDpr } = require('../lib/activeProjects');
 const { istToday } = require('../lib/istDate');
 const fs = require('fs');
 const path = require('path');
@@ -72,12 +73,16 @@ const safeCount = (db, sql, ...params) => {
 function computeKpis(db) {
   const t = today();
   const mStart = monthStart();
+  const activeProjects = getActiveProjectMetric(db);
+  const reportingProjects = countActiveProjectsWithDpr(db, t);
 
   return [
     {
       id: 'active_sites',
-      label: 'Active Sites',
-      value: safeCount(db, `SELECT COUNT(*) c FROM sites WHERE status='active'`),
+      label: activeProjects.label,
+      value: activeProjects.count,
+      definition: activeProjects.definition,
+      scope: activeProjects.scope,
       unit: 'count',
     },
     {
@@ -112,16 +117,14 @@ function computeKpis(db) {
     },
     {
       id: 'dpr_submitted_today',
-      label: 'DPRs Submitted Today',
-      value: safeCount(db, `SELECT COUNT(DISTINCT site_id) c FROM dpr WHERE report_date = ?`, t),
+      label: 'Active Projects With DPR Today',
+      value: reportingProjects,
       unit: 'count',
     },
     {
       id: 'dpr_missing_today',
-      label: 'Sites Missing DPR Today',
-      value: Math.max(0,
-        safeCount(db, `SELECT COUNT(*) c FROM sites WHERE status='active'`) -
-        safeCount(db, `SELECT COUNT(DISTINCT site_id) c FROM dpr WHERE report_date = ?`, t)),
+      label: 'Active Projects Missing DPR Today',
+      value: activeProjects.count - reportingProjects,
       unit: 'count',
     },
     {

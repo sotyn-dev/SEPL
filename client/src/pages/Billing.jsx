@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -68,7 +69,7 @@ export default function Billing() {
             <h3 className="font-semibold">Sales Bills (to Client)</h3>
             <button onClick={() => { setForm({ po_id: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('sales'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Bill</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Bill No</th><th>PO</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {salesBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.po_number}</td><td>{b.bill_date}</td><td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{(canDelete('billing') || canDelete('procurement')) && <button onClick={async () => {
@@ -78,7 +79,7 @@ export default function Billing() {
               }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}</td></tr>))}
               {salesBills.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No sales bills</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -88,7 +89,7 @@ export default function Billing() {
             <h3 className="font-semibold">RA Bills (Running Account)</h3>
             <button onClick={() => { setForm({ installation_id: '', bill_number: '', bill_date: '', work_done_amount: 0, previous_amount: 0, current_amount: 0 }); setModal('ra'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create RA Bill</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Bill No</th><th>Date</th><th>Work Done</th><th>Previous</th><th>Current</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {raBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.bill_date}</td><td>Rs {b.work_done_amount?.toLocaleString()}</td><td>Rs {b.previous_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.current_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
@@ -98,7 +99,7 @@ export default function Billing() {
               }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}</td></tr>))}
               {raBills.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No RA bills</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -108,7 +109,7 @@ export default function Billing() {
             <h3 className="font-semibold">MB Bills (Measurement Book)</h3>
             <button onClick={() => { setForm({ installation_id: '', bill_number: '', measurements: '', total_amount: 0 }); setModal('mb'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create MB Bill</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Bill No</th><th>Site / Installation</th><th>Source</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {mbBills.map(b => (<tr key={b.id}>
@@ -146,7 +147,7 @@ export default function Billing() {
               </tr>))}
               {mbBills.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No MB bills</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -156,7 +157,7 @@ export default function Billing() {
             <h3 className="font-semibold">Installation Bills</h3>
             <button onClick={() => { setForm({ installation_id: '', bill_number: '', amount: 0 }); setModal('inst'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Bill</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Bill No</th><th>Amount</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {instBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
@@ -166,7 +167,7 @@ export default function Billing() {
               }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}</td></tr>))}
               {instBills.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-400">No installation bills</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
@@ -176,7 +177,7 @@ export default function Billing() {
             <h3 className="font-semibold">Testing & Commissioning</h3>
             <button onClick={() => { setForm({ installation_id: '', test_date: '', test_type: '', result: 'pass', notes: '' }); setModal('test'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Test</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0"><NumberedTable className="freeze-head">
             <thead><tr><th>Date</th><th>Type</th><th>Result</th><th>Tested By</th><th>Notes</th><th>Actions</th></tr></thead>
             <tbody>
               {testing.map(t => (<tr key={t.id}><td>{t.test_date}</td><td>{t.test_type}</td><td><StatusBadge status={t.result} /></td><td>{t.tested_by_name}</td><td className="max-w-xs truncate">{t.notes}</td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
@@ -186,7 +187,7 @@ export default function Billing() {
               }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}</td></tr>))}
               {testing.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No tests yet</td></tr>}
             </tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 

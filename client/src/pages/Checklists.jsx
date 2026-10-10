@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -5,10 +6,11 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 import Pagination, { usePagination } from '../components/PaginationBar';
+import ChecklistProofAction from '../components/ChecklistProofAction';
 
 // Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
 // Marketing, Finance, IT, MDO, Operations, Admin" + Purchase added
@@ -36,6 +38,7 @@ export default function Checklists() {
   // user clicks Mark Done on a row whose proof_type === 'text'.
   const [textProofRow, setTextProofRow] = useState(null);
   const [textProofDraft, setTextProofDraft] = useState('');
+  const [proofNote, setProofNote] = useState(null);
 
   // History / approval tab — mam (2026-05-16): "where i can check as
   // per daily and previous check list done or not done proof and
@@ -122,8 +125,12 @@ export default function Checklists() {
   // Inline "Upload Proof" — picks a file, uploads to /upload, then marks the
   // checklist complete for today with that URL. Appears only on rows assigned
   // to the logged-in user.
-  const uploadProof = async (c, file) => {
-    setUploadingId(c.id);
+  const refreshProofViews = () => {
+    load(); loadHistory(historyDate);
+    if (followup) loadFollowup();
+  };
+  const uploadProof = async (c, file, completionDate) => {
+    setUploadingId(completionDate ? `${c.id}-${completionDate}` : c.id);
     try {
       let proofUrl = null;
       if (file) {
@@ -134,9 +141,9 @@ export default function Checklists() {
       // Mam (2026-05-22): proof_type='none' rows pass null file and
       // backend accepts it (no enforcement).  Photo/pdf/file rows
       // always have a file at this point.
-      await api.post(`/hr/checklists/${c.id}/complete`, { proof_url: proofUrl });
+      await api.post(`/hr/checklists/${c.id}/complete`, { proof_url: proofUrl, completion_date: completionDate });
       toast.success(file ? `Proof uploaded for "${c.description || c.title}"` : `Marked done`);
-      load();
+      refreshProofViews();
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     setUploadingId(null);
   };
@@ -145,11 +152,14 @@ export default function Checklists() {
   // dedicated modal so admin can type a longer note than fits inline.
   const submitTextProof = async () => {
     if (!textProofDraft.trim()) return toast.error('Type your note before submitting');
+    const date = textProofRow.completion_date;
+    setUploadingId(date ? `${textProofRow.id}-${date}` : textProofRow.id);
     try {
-      await api.post(`/hr/checklists/${textProofRow.id}/complete`, { notes: textProofDraft });
+      await api.post(`/hr/checklists/${textProofRow.id}/complete`, { notes: textProofDraft.trim(), completion_date: date });
       toast.success('Marked done');
-      setTextProofRow(null); setTextProofDraft(''); load();
+      setTextProofRow(null); setTextProofDraft(''); refreshProofViews();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setUploadingId(null); }
   };
 
   // Mam (2026-05-22): Excel upload for bulk — server parses the file,
@@ -300,7 +310,7 @@ export default function Checklists() {
     if (editing) { await api.put(`/hr/checklists/${editing.id}`, form); }
     else { await api.post('/hr/checklists', form); }
     toast.success(editing ? 'Updated' : 'Created');
-    setModal(false); load();
+    setModal(false); refreshProofViews();
   };
 
   return (
@@ -365,7 +375,7 @@ export default function Checklists() {
       </div>
       {!canManage() && (
         <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          Only admins can create checklists. Tap <span className="font-semibold text-emerald-700">Upload Proof</span> next to each of your tasks below to submit.
+          Complete each task using the action beside it. The master’s Proof Type determines whether you upload a file, add a note, or mark it done.
         </p>
       )}
 
@@ -461,7 +471,7 @@ export default function Checklists() {
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
       {view === 'by-date' && (<>
         <div className="card p-0 table-responsive">
-          <table className="freeze-head w-full text-xs min-w-[800px]">
+          <NumberedTable start={(historyPager.page - 1) * historyPager.perPage + 1} className="freeze-head w-full text-xs min-w-[800px]">
             <thead className="whitespace-nowrap">
               <tr>
                 <th>Person</th>
@@ -510,7 +520,9 @@ export default function Checklists() {
                         <a href={r.proof_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1">
                           <FiExternalLink size={11} /> View
                         </a>
-                      ) : <span className="text-gray-400">—</span>}
+                      ) : r.notes ? <button className="text-blue-600 underline" onClick={() => setProofNote({ title: r.description || r.title, date: historyDate, notes: r.notes })}>View note</button>
+                        : done && r.proof_type === 'none' ? <span className="text-gray-500">No attachment required</span>
+                        : <span className="text-gray-400">—</span>}
                     </td>
                     <td>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-semibold uppercase ${apBadge}`}>{apStat}</span>
@@ -559,7 +571,7 @@ export default function Checklists() {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination {...historyPager} />
       </>)}
@@ -595,7 +607,7 @@ export default function Checklists() {
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={() => setFollowupSubView('list')}
                     className={`btn ${followupSubView === 'list' ? 'btn-primary' : 'btn-secondary'} text-sm`}>
-              📋 List · Upload Proof
+              📋 List · Complete Tasks
             </button>
             <button onClick={() => setFollowupSubView('timeline')}
                     className={`btn ${followupSubView === 'timeline' ? 'btn-primary' : 'btn-secondary'} text-sm`}>
@@ -685,7 +697,7 @@ export default function Checklists() {
             };
             return (<>
               <div className="card p-0 table-responsive">
-                <table className="w-full text-xs min-w-[780px]">
+                <NumberedTable start={(followupPager.page - 1) * followupPager.perPage + 1} className="w-full text-xs min-w-[780px]">
                   <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase whitespace-nowrap">
                     <tr>
                       <th className="px-2 py-2 text-left">Name</th>
@@ -727,27 +739,12 @@ export default function Checklists() {
                                   <FiExternalLink size={11} /> View
                                 </a>
                               )}
+                              {c.notes && <button className="text-[11px] text-blue-700 hover:underline" onClick={() => setProofNote({ title: t.description, date: c.date, notes: c.notes })}>View note</button>}
+                              {!isPending && !c.proof_url && !c.notes && t.proof_type === 'none' && <span className="text-[10px] text-gray-500">No attachment required</span>}
                               {canUpload && isPending && (
-                                <label className={`btn btn-success text-[10px] px-2 py-1 cursor-pointer flex items-center gap-1 ${uploadingThis ? 'opacity-60 pointer-events-none' : ''}`}>
-                                  <FiUpload size={10} /> {uploadingThis ? '…' : (c.status === 'done_rejected' ? 'Re-upload' : 'Upload Proof')}
-                                  <input type="file" className="hidden" onChange={async (e) => {
-                                    const f = e.target.files?.[0];
-                                    if (!f) return;
-                                    setUploadingId(`${t.id}-${c.date}`);
-                                    try {
-                                      const fd = new FormData(); fd.append('file', f);
-                                      const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                                      await api.post(`/hr/checklists/${t.id}/complete`, {
-                                        proof_url: up.data.url,
-                                        completion_date: c.date,
-                                      });
-                                      toast.success(`Proof uploaded for ${dateLabel}`);
-                                      loadFollowup();
-                                    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
-                                    setUploadingId(null);
-                                    e.target.value = '';
-                                  }} />
-                                </label>
+                                <ChecklistProofAction task={t} busy={uploadingThis} rejected={c.status === 'done_rejected'}
+                                  onUpload={file => uploadProof(t, file, c.date)}
+                                  onNote={() => { setTextProofRow({ ...t, completion_date: c.date }); setTextProofDraft(c.notes || ''); }} />
                               )}
                               {!canUpload && !c.proof_url && <span className="text-gray-300 text-[10px]">—</span>}
                             </div>
@@ -759,7 +756,7 @@ export default function Checklists() {
                       <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
                     )}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
               <Pagination {...followupPager} />
             </>);
@@ -825,7 +822,7 @@ export default function Checklists() {
               <span className="text-xs font-normal text-gray-400">({byPerson[personName].length})</span>
             </h4>
           </div>
-          <table className="freeze-head w-full text-xs min-w-[720px]">
+          <NumberedTable className="freeze-head w-full text-xs min-w-[720px]">
             <thead className="whitespace-nowrap"><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (
@@ -854,43 +851,9 @@ export default function Checklists() {
                         <span className="text-[10px] text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded">
                           ✓ Done today {todayDone[c.id].proof_url && <a href={todayDone[c.id].proof_url} target="_blank" rel="noreferrer" className="text-emerald-800 hover:underline flex items-center gap-0.5"><FiExternalLink size={10} /> proof</a>}
                         </span>
-                      ) : (() => {
-                        const pt = c.proof_type || 'photo';
-                        // Mam (2026-05-22): proof_label overrides the
-                        // generic "Photo / PDF / Proof" wording so the
-                        // button reads e.g. "Upload GST File".
-                        const friendly = c.proof_label && c.proof_label.trim() ? c.proof_label.trim() : null;
-                        if (pt === 'text') {
-                          return (
-                            <button onClick={() => { setTextProofRow(c); setTextProofDraft(''); }}
-                              className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
-                              ✍️ {friendly ? `Add ${friendly}` : 'Mark Done (text)'}
-                            </button>
-                          );
-                        }
-                        if (pt === 'none') {
-                          return (
-                            <button onClick={() => uploadProof(c, null)}
-                              className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
-                              ✓ Mark Done
-                            </button>
-                          );
-                        }
-                        const accept = pt === 'photo' ? 'image/*'
-                                     : pt === 'pdf'   ? '.pdf,application/pdf'
-                                     :                  '.pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx';
-                        const genericLabel = pt === 'photo' ? 'Photo'
-                                           : pt === 'pdf'   ? 'PDF'
-                                           :                  'Proof';
-                        const label = `Upload ${friendly || genericLabel}`;
-                        return (
-                          <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingId === c.id ? 'opacity-60 pointer-events-none' : ''}`} title={friendly ? `Required: ${friendly}` : undefined}>
-                            <FiUpload size={11} /> {uploadingId === c.id ? '...' : label}
-                            <input type="file" accept={accept} className="hidden"
-                              onChange={e => { const f = e.target.files[0]; if (f) uploadProof(c, f); e.target.value = ''; }} />
-                          </label>
-                        );
-                      })()
+                      ) : <ChecklistProofAction task={c} busy={uploadingId === c.id}
+                        onUpload={file => uploadProof(c, file)}
+                        onNote={() => { setTextProofRow(c); setTextProofDraft(''); }} />
                     )}
                     {canManage() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
                     {/* Delete asks twice when proof already exists: the server
@@ -922,7 +885,7 @@ export default function Checklists() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       ))}
 
@@ -1182,7 +1145,7 @@ Send WhatsApp report                                  ← uses shared settings b
                   </p>
                   <details className="text-gray-500">
                     <summary className="cursor-pointer hover:text-gray-700">Show parsed preview</summary>
-                    <table className="mt-1 text-[10px] w-full border border-gray-200 rounded">
+                    <NumberedTable className="mt-1 text-[10px] w-full border border-gray-200 rounded">
                       <thead className="bg-gray-50"><tr><th className="text-left px-2 py-1">Task</th><th className="text-left px-2 py-1">Proof Name</th><th className="text-left px-2 py-1">Type</th><th className="text-left px-2 py-1">Time</th></tr></thead>
                       <tbody>
                         {parsed.map((p, i) => (
@@ -1194,7 +1157,7 @@ Send WhatsApp report                                  ← uses shared settings b
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </details>
                 </div>
               );
@@ -1411,6 +1374,7 @@ Send WhatsApp report                                  ← uses shared settings b
           note instead of uploading a file. */}
       <Modal isOpen={!!textProofRow} onClose={() => setTextProofRow(null)} title={`${textProofRow?.proof_label ? `Add ${textProofRow.proof_label}` : 'Mark Done'} — ${textProofRow?.description?.slice(0, 60) || ''}`}>
         <div className="space-y-3">
+          {textProofRow?.completion_date && <p className="text-xs text-gray-600">Task date: {textProofRow.completion_date}</p>}
           <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
             {textProofRow?.proof_label
               ? <>This checklist requires a text note labelled <b>{textProofRow.proof_label}</b>. Type the details below and submit.</>
@@ -1426,9 +1390,13 @@ Send WhatsApp report                                  ← uses shared settings b
           />
           <div className="flex justify-end gap-3">
             <button onClick={() => setTextProofRow(null)} className="btn btn-secondary">Cancel</button>
-            <button onClick={submitTextProof} className="btn btn-primary">Submit Note</button>
+            <button onClick={submitTextProof} disabled={uploadingId !== null || !textProofDraft.trim()} className="btn btn-primary">{uploadingId !== null ? 'Saving…' : 'Submit Note'}</button>
           </div>
         </div>
+      </Modal>
+      <Modal isOpen={!!proofNote} onClose={() => setProofNote(null)} title={proofNote?.title || 'Proof note'}>
+        <p className="text-xs text-gray-500 mb-2">Task date: {proofNote?.date}</p>
+        <p className="whitespace-pre-wrap break-words text-sm">{proofNote?.notes}</p>
       </Modal>
     </div>
   );

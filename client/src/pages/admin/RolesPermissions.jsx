@@ -14,6 +14,16 @@ import { useModuleFlags } from '../../context/ModuleFlagsContext';
 // revoke access.  Grouped by sidebar section for readability; keys
 // (used by backend role_permissions) are unchanged.
 const ALL_MODULES = [
+  { key: 'vendor_treds_dashboard', label: 'Vendor & TReDS — Dashboard & Daily Tasks' },
+  { key: 'vendor_registrations', label: 'Vendor & TReDS — Vendor Registration & Documents' },
+  { key: 'vendor_enquiries', label: 'Vendor & TReDS — Enquiries / RFQs & Follow-ups' },
+  { key: 'vendor_approvals', label: 'Vendor & TReDS — Vendor Approvals' },
+  { key: 'treds_accounts', label: 'Vendor & TReDS — Accounts & Client Mapping' },
+  { key: 'treds_invoices', label: 'Vendor & TReDS — Invoices' },
+  { key: 'bill_discounting', label: 'Vendor & TReDS — Bill Discounting & Reconciliation' },
+  { key: 'vendor_treds_reports', label: 'Vendor & TReDS — Reports' },
+  { key: 'vendor_treds_masters', label: 'Vendor & TReDS — Master Data & Contacts' },
+  { key: 'vendor_treds_settings', label: 'Vendor & TReDS — Targets & Settings' },
   { key: 'project_profit', label: 'Project Profit & Loss' },
   // — Finance & Daily Operations
   { key: 'dashboard', label: 'Dashboard' },

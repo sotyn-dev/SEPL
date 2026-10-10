@@ -1,7 +1,7 @@
 // Synthetic, in-memory database only. Used by regression tests and local demo.
 const path = require('node:path');
 const fs = require('node:fs');
-function fixture() {
+function fixture({ enforceApprovalPermission = false } = {}) {
   process.env.ERP_DB_PATH = ':memory:';
   const originalWrite = fs.writeFileSync;
   const originalLog = console.log;
@@ -31,7 +31,10 @@ function fixture() {
     if (!req.user) return res.status(401).json({ error: 'Unknown dummy user' });
     next();
   };
-  stub('../../../middleware/auth', { authMiddleware: auth, requirePermission: () => auth, adminOnly: auth, getUserPermissions: () => permissions });
+  stub('../../../middleware/auth', { authMiddleware: auth, requirePermission: (module, action) => (req, res, next) => auth(req, res, () => {
+    if (enforceApprovalPermission && action === 'approve' && req.user.role !== 'admin' && !permissions[module]?.can_approve) return res.status(403).json({ error: 'Permission denied' });
+    next();
+  }), adminOnly: auth, getUserPermissions: () => permissions });
   const users = [
     [9001, 'Naveen (Demo reviewer)', 'naveen-demo', 'user', 'l1'],
     [9002, 'Site Engineer A (Demo raiser)', 'engineer-demo', 'user', null],

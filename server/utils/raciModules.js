@@ -704,10 +704,13 @@ const MODULE_DEFS = {
 // depends on the user or the week — recomputing it each time was the single
 // biggest blocker found in the hang audit (2026-09-05). Any write request
 // clears the cache (lib/readCache), so a read after a write is never stale.
-function moduleSnapshot(db, key, def) {
-  return require('../lib/readCache').memo(`raci:module:${key}`, () => {
+const snapshotDbIds = new WeakMap();
+let nextSnapshotDbId = 1;
+function moduleSnapshot(db, key, def, { allRecords = false } = {}) {
+  if (!snapshotDbIds.has(db)) snapshotDbIds.set(db, nextSnapshotDbId++);
+  return require('../lib/readCache').memo(`raci:module:${key}:${snapshotDbIds.get(db)}:${allRecords ? 'all' : 'board'}`, () => {
     let recs;
-    try { recs = def.rows(db) || []; } catch { return null; }
+    try { recs = def.rows(db, { allRecords }) || []; } catch { return null; }
     if (!recs.length) return null;
     const ids = recs.map(r => r.id);
     const raciByRec = {};
@@ -820,6 +823,17 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
 // the on-time tally, and up to 8 example pending record titles. Sorted in module
 // declaration order, then step order within each module.
 function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
+  return raciWeekBreakdown(db, userId, sinceDate, untilDate);
+}
+
+// A selected module step measures the workflow, regardless of the employee's
+// R/A/C/I assignment. Keep the general personal RACI source unchanged.
+function raciModuleWeekBreakdown(db, moduleKey, sinceDate, untilDate) {
+  if (!MODULE_DEFS[moduleKey]) return [];
+  return raciWeekBreakdown(db, null, sinceDate, untilDate, { moduleKey });
+}
+
+function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null } = {}) {
   const HOUR = 3600000;
   const acc = new Map();                              // `${module}|${stepKey}` -> tally
   const tallyFor = (mod, modLabel, stepKey, stepLabel, weight, commitment) => {
@@ -836,9 +850,9 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     }
     return t;
   };
-  for (const key of Object.keys(MODULE_DEFS)) {
+  for (const key of (moduleKey ? [moduleKey] : Object.keys(MODULE_DEFS))) {
     const def = MODULE_DEFS[key];
-    const snap = moduleSnapshot(db, key, def);
+    const snap = moduleSnapshot(db, key, def, { allRecords: !!moduleKey });
     if (!snap) continue;
     const { recs, raciByRec } = snap;
     const md = {};
@@ -851,6 +865,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
     // R and A both count (mam 2026-08-28) — kept in LOCKSTEP with raciUserWeek.
     const roleOf = (cfg, m) => {
+      if (moduleKey) return 'Module';
       const rId = (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
       if (rId === userId) return 'R';
       const aId = (cfg && cfg.accountable_id) || (m && m.accountable_id) || null;
@@ -870,13 +885,16 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
         const userRole = roleOf(cfg, m);
         const markRole = (t) => { if (userRole && !(t.role || '').includes(userRole)) t.role = t.role ? `${t.role}+${userRole}` : userRole; };
         const stampRaw = (rec.native_completion?.includes(s.key) ? rec.stamps?.[s.key] : ((cfg && cfg.done_at) || rec.stamps?.[s.key])) || null;
-        if (!stampRaw) {
+        // For a historical module week, a later completion was still pending
+        // at that week's end. Do not lose it simply because it is done today.
+        const completedLater = moduleKey && stampRaw && String(stampRaw).slice(0, 10) > untilDate;
+        if (!stampRaw || completedLater) {
           // Same two rules as raciUserWeek: pending only at the record's actual
           // in-flight step (audit 2026-08-17 — no phantom "pending at L1" for
           // records the flow already moved past), AND only when the step landed
           // on this person inside the week (mam 2026-08-22). These two functions
           // must stay in lockstep or the drill-down disagrees with the KPI row.
-          if (!recClosed && s.key === rec.current_key && userRole) {
+          if (((!recClosed && s.key === rec.current_key) || completedLater) && userRole) {
             const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
             if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) {
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
@@ -889,6 +907,8 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
               t.pending_before += 1; markRole(t);
             }
           }
+          // Later steps cannot have reached the workflow before this closure.
+          if (completedLater) prevRaw = stampRaw;
           continue;
         }
         const atMs = tsMs(stampRaw);
@@ -918,4 +938,4 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   });
 }
 
-module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown, stepsFor, activeSteps, editorStepsFor, disabledStepKeys };
+module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown, raciModuleWeekBreakdown, stepsFor, activeSteps, editorStepsFor, disabledStepKeys };

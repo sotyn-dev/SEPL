@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api';
 import StaffTypeFilter from '../components/StaffTypeFilter';
@@ -228,27 +229,17 @@ export default function Attendance() {
       // old code only re-fetched inside the GPS success callback, so a phone that
       // couldn't get a fix never updated.
       api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
-      // Even if the browser has no geolocation API, still send a
-      // heartbeat so admin sees "online but GPS unavailable" instead of
-      // mistaking the user for absent / off-network.
+      // Layout owns both valid readings and unavailable heartbeats. This page
+      // only refreshes its display, so it cannot submit conflicting errors.
       if (!navigator.geolocation) {
-        api.post('/attendance/track-location', { gps_off: true, reason: 'no-geolocation-api' }).catch(() => {});
+        setLocation(null);
         return;
       }
       navigator.geolocation.getCurrentPosition(pos => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
-        // No POST here: Layout.jsx already sends the 30-second location ping
-        // for every page, so this page was writing a SECOND row per ping
-        // (2× location_tracking growth, 2× the geofence work on the server).
-        // The GPS-OFF heartbeats below stay — Layout's tracker is silent on error.
-      }, (err) => {
-        // GPS off / permission denied / timeout — send a "GPS OFF"
-        // heartbeat so the admin Location Tracking page can surface
-        // them in red. Mam: 'can show me here like some off GPS even
-        // network is good'.
-        const reasonMap = { 1: 'permission-denied', 2: 'position-unavailable', 3: 'timeout' };
-        api.post('/attendance/track-location', { gps_off: true, reason: reasonMap[err?.code] || 'unknown-error' }).catch(() => {});
+      }, () => {
+        setLocation(null);
       }, { enableHighAccuracy: true, timeout: 15000 });
     };
     trackLocation(); // fire immediately
@@ -900,7 +891,7 @@ export default function Attendance() {
               <div className="card p-3">
                 <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Attendance Detail (last 15 working days)</h4>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <NumberedTable className="w-full text-xs">
                     <thead>
                       <tr className="text-left text-gray-500 border-b">
                         <th className="py-1.5 pr-2 font-semibold">Date</th>
@@ -937,7 +928,7 @@ export default function Attendance() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             );
@@ -1020,7 +1011,7 @@ export default function Attendance() {
           {/* Today's Records */}
           <div className="card p-0 overflow-x-auto">
             <div className="p-3 border-b"><h4 className="font-semibold">Today's Attendance</h4></div>
-            <div className="overflow-x-auto hidden md:block"><table className="text-sm">
+            <div className="overflow-x-auto hidden md:block"><NumberedTable className="text-sm">
               <thead><tr><th>Name</th><th>Dept</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Photo</th></tr></thead>
               <tbody>{dashboard.todayRecords?.map(r => (
                 <tr key={r.id} className={r.bucket === 'terminated' ? 'bg-red-50' : r.bucket === 'guest' ? 'bg-amber-50' : ''}>
@@ -1032,7 +1023,7 @@ export default function Attendance() {
                   <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 </tr>
               ))}</tbody>
-            </table></div>
+            </NumberedTable></div>
             {/* Mobile cards — Today's Attendance (mam 2026-06-02). */}
             <div className="md:hidden p-3 space-y-3">
               {(dashboard.todayRecords || []).length === 0 && (
@@ -1105,7 +1096,7 @@ export default function Attendance() {
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
           {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="text-sm">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><NumberedTable className="text-sm">
             <thead className="sticky top-0 z-10 bg-gray-100"><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
             <tbody>{records.map(r => (
               <tr key={r.id}>
@@ -1124,7 +1115,7 @@ export default function Attendance() {
                 }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
               </tr>
             ))}</tbody>
-          </table></div>
+          </NumberedTable></div>
 
           {/* Mobile cards — polished pattern (mam 2026-06-02): small
               "Employee" label → big bold name → status pill, calendar
@@ -1276,7 +1267,7 @@ export default function Attendance() {
           <div className="card p-0 overflow-x-auto">
             <div className="p-3 border-b"><h4 className="font-semibold text-sm">My Attendance · {myHistFrom} → {myHistTo}</h4></div>
             <div className="overflow-x-auto">
-              <table className="text-sm w-full">
+              <NumberedTable className="text-sm w-full">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-2 py-2 text-left">Date</th>
@@ -1315,7 +1306,7 @@ export default function Attendance() {
                     <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
                   )}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           </div>
         </div>
@@ -1412,7 +1403,7 @@ export default function Attendance() {
               <div className="card p-0 overflow-x-auto">
                 <div className="p-3 border-b"><h4 className="font-semibold text-sm">Daily Detail</h4></div>
                 <div className="overflow-x-auto">
-                  <table className="text-sm w-full">
+                  <NumberedTable className="text-sm w-full">
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-2 py-2 text-left">Date</th>
@@ -1451,7 +1442,7 @@ export default function Attendance() {
                         <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
                       )}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             </>
@@ -1463,7 +1454,7 @@ export default function Attendance() {
       {tab === 'report' && (
         <>
           <StaffTypeFilter value={staffType} onChange={setStaffType} />
-          <div className="card p-0 hidden md:block"><table className="text-sm freeze-head">
+          <div className="card p-0 hidden md:block"><NumberedTable className="text-sm freeze-head">
             <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Avg Hours</th></tr></thead>
             <tbody>{report.map(r => (
               <tr key={r.user_id}>
@@ -1475,7 +1466,7 @@ export default function Attendance() {
                 <td className="font-semibold">{r.avg_hours || '-'}h</td>
               </tr>
             ))}</tbody>
-          </table></div>
+          </NumberedTable></div>
           {/* Mobile cards (mam 2026-06-02) */}
           <div className="md:hidden space-y-3">
             {report.length === 0 && (
@@ -1523,7 +1514,7 @@ export default function Attendance() {
             <button onClick={() => { setForm({ site_name: '', latitude: '', longitude: '', radius_meters: 200 }); setModal('geofence'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={14} /> Add Geofence</button>
           </div>
           <p className="text-xs text-gray-500">Employees can only punch in/out when inside these areas. If no geofence set, punch from anywhere.</p>
-          <div className="card p-0 overflow-x-auto"><table className="text-sm min-w-[650px]">
+          <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm min-w-[650px]">
             <thead><tr><th>Site</th><th>Latitude</th><th>Longitude</th><th>Radius</th><th>Active</th><th>Actions</th></tr></thead>
             <tbody>{geofences.map(g => (
               <tr key={g.id}>
@@ -1534,14 +1525,14 @@ export default function Attendance() {
                 </td>
               </tr>
             ))}{geofences.length === 0 && <tr><td colSpan="6" className="text-center py-6 text-gray-400">No geofence set. Add site locations for attendance.</td></tr>}</tbody>
-          </table></div>
+          </NumberedTable></div>
         </>
       )}
 
       {/* LEAVES TAB */}
       {tab === 'leaves' && (
         <>
-        <div className="card p-0 overflow-x-auto hidden md:block"><table className="text-sm">
+        <div className="card p-0 overflow-x-auto hidden md:block"><NumberedTable className="text-sm">
           <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Hrs / Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>{leaves.map(l => {
             // For short_leave show from-time → to-time so admin can audit
@@ -1608,7 +1599,7 @@ export default function Attendance() {
             </tr>
             );
           })}</tbody>
-        </table></div>
+        </NumberedTable></div>
 
         {/* Mobile cards (mam 2026-06-02) — Leaves */}
         <div className="md:hidden space-y-3">

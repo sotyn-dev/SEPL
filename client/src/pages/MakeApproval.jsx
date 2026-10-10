@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -42,7 +43,7 @@ export default function MakeApproval({ orders }) {
       </select>
     </label>
     {error && <div role="alert" className="text-red-600">{error} <button onClick={()=>setVersion(v=>v+1)} className="underline">Retry</button></div>}
-    {loading?<p className="text-gray-500">Loading BOQ items…</p>:!poId?<p className="text-gray-500">Choose an order to review its makes.</p>:!error && <div className="card p-0 overflow-x-auto"><table className="w-full text-sm min-w-[750px]">
+    {loading?<p className="text-gray-500">Loading BOQ items…</p>:!poId?<p className="text-gray-500">Choose an order to review its makes.</p>:!error && <div className="card p-0 overflow-x-auto"><NumberedTable className="w-full text-sm min-w-[750px]">
       <thead><tr><th>BOQ item</th><th>Quantity</th><th>Brand / make</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>{data.items.map(i=><tr key={i.id}>
         <td className="max-w-sm whitespace-normal">{i.description}</td><td>{i.quantity} {i.unit}</td>
@@ -53,7 +54,7 @@ export default function MakeApproval({ orders }) {
           {isAdmin() && i.make_status==='pending' && <><button className="btn btn-primary text-xs" disabled={busy!==null || drafts[i.id]!==i.selected_make} onClick={()=>act(i,'approved')}>Approve</button><button className="btn btn-secondary text-xs" disabled={busy!==null || drafts[i.id]!==i.selected_make} onClick={()=>act(i,'rejected')}>Reject</button></>}
         </div></td>
       </tr>)}{data.items.length===0 && <tr><td colSpan={5} className="text-center py-8 text-gray-500">No BOQ items saved for this order.</td></tr>}</tbody>
-    </table></div>}
+    </NumberedTable></div>}
     <datalist id="po-make-options">{data.makes.map(m=><option key={m} value={m}/>)}</datalist>
   </section>;
 }

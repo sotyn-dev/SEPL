@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Client Snags & Site Readiness FMS
 //
 //   Dual-mode module:
@@ -847,7 +848,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       <div className="card p-0 shadow-sm border overflow-hidden">
         <div className="overflow-auto max-h-[70vh]">
           {activeTab === 'site_readiness' ? (
-            <table className="freeze-head freeze-col w-full min-w-[1150px] text-left">
+            <NumberedTable start={paginationFrom + 1} className="freeze-head freeze-col w-full min-w-[1150px] text-left">
               <thead>
                 <tr>
                   <th onClick={() => handleSort('snag_no')} className="cursor-pointer hover:text-indigo-600 select-none">
@@ -1038,10 +1039,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           ) : (
             /* Tab 2: Legacy Billing & Document Snags */
-            <table className="freeze-head freeze-col w-full min-w-[1100px] text-left">
+            <NumberedTable start={paginationFrom + 1} className="freeze-head freeze-col w-full min-w-[1100px] text-left">
               <thead>
                 <tr>
                   <th onClick={() => handleSort('snag_no')} className="cursor-pointer hover:text-indigo-600 select-none">
@@ -1130,7 +1131,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           )}
         </div>
 

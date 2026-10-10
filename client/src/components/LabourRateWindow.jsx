@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Labour Rate Window — the read-only rate picker used during Work Order
 // creation. The official company labour rate reference: HR maintains the
 // rates, everyone else reads them here and picks a crew off them.
@@ -108,7 +109,7 @@ export default function LabourRateWindow({ isOpen, onClose, onPick, picked = [] 
         </div>
 
         <div className="card p-0 overflow-x-auto max-h-[50vh] overflow-y-auto">
-          <table className="min-w-full">
+          <NumberedTable className="min-w-full">
             <thead><tr className="bg-gray-50 text-xs text-gray-600 sticky top-0">
               <th className="px-3 py-2 text-left font-semibold">Labour Category</th>
               <th className="px-3 py-2 text-left font-semibold">Trade</th>
@@ -181,7 +182,7 @@ export default function LabourRateWindow({ isOpen, onClose, onPick, picked = [] 
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
 
         <div className="flex justify-between items-center">

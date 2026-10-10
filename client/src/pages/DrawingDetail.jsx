@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // One drawing — its identity, its full revision timeline, and every revision
 // still openable no matter how many newer ones exist.
 //
@@ -60,10 +61,10 @@ export default function DrawingDetail() {
     api.get('/drawing-tracker/options').then(r => {
       setOpts(r.data);
       if (r.data?.raci) setRaci(r.data.raci);
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
   const loadRaci = useCallback(() => {
-    api.get('/drawing-tracker/raci').then(r => setRaci(r.data.raci)).catch(() => {});
+    api.get('/drawing-tracker/raci').then(r => setRaci(r.data.raci)).catch(() => { });
   }, []);
   useEffect(() => { loadRaci(); }, [loadRaci]);
 
@@ -173,9 +174,6 @@ export default function DrawingDetail() {
       <div className="card p-4 bg-slate-900 text-white rounded-xl shadow-md space-y-4">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <span className="bg-red-600 text-white text-[11px] font-bold px-2 py-0.5 rounded tracking-wide uppercase">
-              SOP-06 Flow
-            </span>
             <span className="font-semibold text-sm text-slate-100">Drawing Approval Pipeline</span>
             <span className="text-xs text-slate-400 hidden sm:inline">
               · Owner: Design Head ({[raci?.s1_s2_drafting?.assigned_name, raci?.s3_senior_check?.assigned_name, raci?.s4_client_submit?.assigned_name, raci?.s5_escalation_80?.assigned_name].filter(Boolean).join(' · ') || 'Asad · Ambuj · Lovely · Rajat sir'})
@@ -187,13 +185,12 @@ export default function DrawingDetail() {
                 <FiClock className="text-amber-400" /> Needed by: <strong className="text-amber-300">{fmtDate(data.target_date)}</strong>
               </span>
             )}
-            <span className={`text-xs px-2.5 py-1 rounded-md font-bold uppercase ${
-              stepIdx === 5 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
-              stepIdx === 4 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' :
-              stepIdx === 3 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40' :
-              stepIdx === 2 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' :
-              'bg-slate-700 text-slate-300'
-            }`}>
+            <span className={`text-xs px-2.5 py-1 rounded-md font-bold uppercase ${stepIdx === 5 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
+                stepIdx === 4 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' :
+                  stepIdx === 3 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40' :
+                    stepIdx === 2 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' :
+                      'bg-slate-700 text-slate-300'
+              }`}>
               {SOP_STEPS[stepIdx].label}
             </span>
           </div>
@@ -207,13 +204,12 @@ export default function DrawingDetail() {
             return (
               <div
                 key={s.key}
-                className={`p-2.5 rounded-lg border transition-all text-xs ${
-                  isDone
+                className={`p-2.5 rounded-lg border transition-all text-xs ${isDone
                     ? 'bg-emerald-950/40 border-emerald-600/50 text-emerald-200'
                     : isCurrent
-                    ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-400/50 text-amber-100'
-                    : 'bg-slate-800/60 border-slate-700/60 text-slate-400'
-                }`}
+                      ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-400/50 text-amber-100'
+                      : 'bg-slate-800/60 border-slate-700/60 text-slate-400'
+                  }`}
               >
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase mb-1">
                   <span className={isDone ? 'text-emerald-400' : isCurrent ? 'text-amber-300 font-extrabold' : 'text-slate-400'}>
@@ -320,9 +316,8 @@ export default function DrawingDetail() {
                   </div>
                   <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden relative">
                     <div
-                      className={`h-full transition-all duration-500 ${
-                        sla.isOverdue ? 'bg-red-500' : sla.is80 ? 'bg-amber-500' : 'bg-purple-500'
-                      }`}
+                      className={`h-full transition-all duration-500 ${sla.isOverdue ? 'bg-red-500' : sla.is80 ? 'bg-amber-500' : 'bg-purple-500'
+                        }`}
                       style={{ width: `${sla.percent}%` }}
                     />
                     <div className="absolute top-0 bottom-0 left-[50%] w-0.5 bg-yellow-400/80" title="50% Reminder" />
@@ -454,7 +449,7 @@ export default function DrawingDetail() {
         {/* History table */}
         <div className="card p-0 overflow-x-auto">
           <h3 className="text-sm font-semibold px-4 pt-4">Revision History</h3>
-          <table className="min-w-full mt-2 text-sm">
+          <NumberedTable className="min-w-full mt-2 text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-center">Rev</th>
               <th className="px-3 py-2 text-left">Date</th>
@@ -490,7 +485,7 @@ export default function DrawingDetail() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
 

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FiSun, FiPlus, FiSave, FiTrash2 } from 'react-icons/fi';
@@ -44,7 +45,7 @@ function CatTable({ cat }) {
   };
   return (
     <div className="card p-4 overflow-x-auto">
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead><tr className="bg-gray-50 text-left text-gray-500 uppercase text-[10px]">
           {cat.cols.map((c) => <th key={c.k} className="p-2">{c.l}</th>)}<th></th></tr></thead>
         <tbody>
@@ -64,7 +65,7 @@ function CatTable({ cat }) {
             </tr>))}
           {!rows.length && <tr><td colSpan={cat.cols.length + 1} className="p-4 text-center text-gray-300">No rows.</td></tr>}
         </tbody>
-      </table>
+      </NumberedTable>
       <button onClick={() => setRows((rs) => [...rs, { _dirty: true, active: 1 }])} className="btn btn-secondary text-xs mt-3 flex items-center gap-1"><FiPlus size={13} /> Add row</button>
     </div>);
 }

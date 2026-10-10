@@ -825,7 +825,7 @@ router.put('/followup/:fid', requirePermission('leads', 'edit'), (req, res) => {
   const { outcome, notes, next_followup_date } = req.body;
   if (!outcome) return res.status(400).json({ error: 'Outcome required' });
   const db = getDb();
-  db.prepare('UPDATE lead_followups SET outcome=?, notes=?, done=1, done_by=?, next_followup_date=? WHERE id=?')
+  db.prepare('UPDATE lead_followups SET outcome=?, notes=?, completed_at=CASE WHEN COALESCE(done,0)=0 THEN CURRENT_TIMESTAMP ELSE completed_at END, done=1, done_by=CASE WHEN COALESCE(done,0)=0 THEN ? ELSE done_by END, next_followup_date=? WHERE id=?')
     .run(outcome, notes, req.user.id, next_followup_date, req.params.fid);
   // Auto-create next follow-up if set
   if (next_followup_date) {

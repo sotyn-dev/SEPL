@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -89,7 +90,7 @@ function FactorsEditor() {
   return (
     <div className="card p-4 overflow-x-auto">
       <p className="text-[11px] text-gray-500 mb-2">State tariff &amp; subsidy top-up are optional starting points — quotes always let the salesperson override with the customer's actual bill rate.</p>
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead><tr className="bg-gray-50 text-left text-gray-500 uppercase text-[10px]"><th className="p-2">Kind</th><th className="p-2">Name</th><th className="p-2">Val 1</th><th className="p-2">Val 2</th><th className="p-2">Val 3</th><th className="p-2">Val 4</th><th className="p-2">Val 5</th><th></th></tr></thead>
         <tbody>
           {rows.map((r, i) => (
@@ -101,7 +102,7 @@ function FactorsEditor() {
               <td className="p-1"><button onClick={() => save(r, i)} className={`px-2 py-1 rounded ${r._dirty ? 'bg-blue-700 text-white' : 'text-gray-300'}`}><FiSave size={13} /></button></td>
             </tr>))}
         </tbody>
-      </table>
+      </NumberedTable>
     </div>);
 }
 
@@ -112,7 +113,7 @@ function SettingsEditor() {
   const save = async (r, i) => { try { await api.put(`/solar/settings/${r.key}`, { value: r.value }); setRows((rs) => rs.map((x, idx) => idx === i ? { ...x, _dirty: false } : x)); toast.success('Saved'); } catch { toast.error('Save failed'); } };
   return (
     <div className="card p-4">
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead><tr className="bg-gray-50 text-left text-gray-500 uppercase text-[10px]"><th className="p-2">Key</th><th className="p-2">Value</th><th className="p-2">Unit</th><th className="p-2">Note</th><th></th></tr></thead>
         <tbody>
           {rows.map((r, i) => (
@@ -123,7 +124,7 @@ function SettingsEditor() {
               <td className="p-1"><button onClick={() => save(r, i)} className={`px-2 py-1 rounded ${r._dirty ? 'bg-blue-700 text-white' : 'text-gray-300'}`}><FiSave size={13} /></button></td>
             </tr>))}
         </tbody>
-      </table>
+      </NumberedTable>
     </div>);
 }
 

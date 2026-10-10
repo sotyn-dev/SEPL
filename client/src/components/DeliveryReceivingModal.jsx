@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 import { useState, useRef } from 'react';
 import Modal from './Modal';
 import api from '../api';
@@ -41,14 +42,14 @@ export default function DeliveryReceivingModal({ row, employees, warehouses, onC
         <p className="mt-1 text-xs text-blue-800">Receiving {historyCount + 1} · Enter quantities arriving in this delivery. Earlier receipts stay saved.</p>
       </div>
       <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full text-xs text-left"><thead className="bg-slate-50 text-slate-600"><tr>
+        <NumberedTable className="w-full text-xs text-left"><thead className="bg-slate-50 text-slate-600"><tr>
           {['Material', 'Dispatch qty', 'Already received', 'Balance', 'Receiving now'].map(label => <th key={label} className="p-2">{label}</th>)}
         </tr></thead><tbody>{items.map(it => <tr key={it.line_key} className="border-t border-slate-100">
           <td className="p-2 font-medium">{it.description || it.item_name}<div className="text-slate-400 font-normal">{it.unit}</div></td>
           <td className="p-2">{it.qty}</td><td className="p-2">{it.received_qty || 0}</td><td className="p-2 font-semibold">{it.remaining_qty}</td>
           <td className="p-2"><input aria-label={`Receiving now: ${it.description || it.item_name}`} type="number" className="input w-24 text-right" min="0" max={it.remaining_qty} step="any" required disabled={saving || it.remaining_qty === 0}
             value={quantities[it.line_key]} onChange={e => setQuantities(q => ({ ...q, [it.line_key]: e.target.value }))} /></td>
-        </tr>)}</tbody></table>
+        </tr>)}</tbody></NumberedTable>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs font-medium">Received by *<input className="input mt-1" list="delivery-receivers" value={name} onChange={e => setName(e.target.value)} required disabled={saving} placeholder="Name of site receiver" /></label>

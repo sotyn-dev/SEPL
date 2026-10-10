@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from './Modal';
@@ -105,7 +106,7 @@ export default function PipeWeightsModal({ isOpen, onClose }) {
 
       {/* Table */}
       <div className="overflow-auto max-h-[50vh]">
-        <table className="text-xs w-full freeze-head">
+        <NumberedTable className="text-xs w-full freeze-head">
           <thead><tr className="bg-gray-100">
             <th className="px-2 py-1.5 text-left">Class</th>
             <th className="px-2 py-1.5 text-left">Size</th>
@@ -136,7 +137,7 @@ export default function PipeWeightsModal({ isOpen, onClose }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </Modal>
   );

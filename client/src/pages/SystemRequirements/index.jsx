@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../api';
@@ -364,7 +365,7 @@ export default function SystemRequirementsBoard() {
                 }
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <NumberedTable className="w-full text-sm">
                   <thead className="bg-gray-50 text-left text-xs text-gray-500">
                     <tr>
                       <th className="px-3 py-2">Req</th>
@@ -413,7 +414,7 @@ export default function SystemRequirementsBoard() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
               <div className="px-3 py-2 text-xs text-gray-400 border-t">{total} shown (active filter)</div>
             </div>
@@ -507,7 +508,7 @@ export default function SystemRequirementsBoard() {
                   </div>
                 )}
                 {(hasRows || hasOutcomes) && (
-                  <table className="w-full text-sm">
+                  <NumberedTable className="w-full text-sm">
                     <thead className="bg-gray-50 text-left text-xs text-gray-500">
                       <tr>
                         {hasRows && Object.keys(report.rows[0]).map(k => (
@@ -533,7 +534,7 @@ export default function SystemRequirementsBoard() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 )}
               </div>
             );

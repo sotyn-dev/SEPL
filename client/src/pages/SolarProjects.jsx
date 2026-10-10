@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FiSun, FiX, FiAlertTriangle, FiCheckCircle, FiTrash2, FiTool, FiPlus, FiFileText, FiCalendar } from 'react-icons/fi';
@@ -233,7 +234,7 @@ function ComponentsTab({ projectId }) {
   return (
     <div className="space-y-3">
       <p className="text-[11px] text-gray-500">Serial numbers &amp; warranty per installed component — for future OEM claims. Panels are usually one bulk row (qty = count); inverters/batteries are worth entering per serial.</p>
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead><tr className="bg-gray-50 text-left text-gray-500 uppercase text-[10px]">
           <th className="p-1.5">Category</th><th className="p-1.5">Make / Model</th><th className="p-1.5">Rating</th>
           <th className="p-1.5">Serial</th><th className="p-1.5 text-right">Qty</th><th className="p-1.5">Installed</th><th className="p-1.5">Warranty till</th><th></th>
@@ -252,7 +253,7 @@ function ComponentsTab({ projectId }) {
             </tr>))}
           {!rows.length && <tr><td colSpan={8} className="p-4 text-center text-gray-300">No components recorded yet.</td></tr>}
         </tbody>
-      </table>
+      </NumberedTable>
 
       {adding ? (
         <div className="border rounded-lg p-3 bg-gray-50 grid grid-cols-2 md:grid-cols-4 gap-2">

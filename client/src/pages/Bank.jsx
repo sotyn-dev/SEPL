@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // BANK module (mam 2026-08-31): "payment received and payment out from bank
 // come here — one bank module". Tabs: Transactions (IN green / OUT red with
 // match status), Import Statement (PNB / HDFC CSV or Excel), Accounts.
@@ -129,7 +130,7 @@ function Transactions({ accounts, onChanged }) {
 
       {rows.length > 0 && (
         <div className="overflow-x-auto border rounded-lg">
-          <table className="min-w-full text-sm">
+          <NumberedTable className="min-w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-600">
               <tr>
                 <th className="px-2 py-2 text-left">Date</th>
@@ -164,7 +165,7 @@ function Transactions({ accounts, onChanged }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 

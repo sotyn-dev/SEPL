@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Sub-contractor Hiring workflow tracker (mam 2026-05-28).
 // Phase A: manual step tracker, file uploads, vendor candidate list,
 // award flow, two PASS gates (Pre-Qualify + Docs Complete) with the
@@ -115,7 +116,7 @@ function ListView({ list, onOpen, onCreate, onReload, canCreate, canDelete }) {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="w-full text-sm">
+        <NumberedTable className="w-full text-sm">
           <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
             <tr>
               <th className="text-left p-2">Site</th>
@@ -158,7 +159,7 @@ function ListView({ list, onOpen, onCreate, onReload, canCreate, canDelete }) {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </>
   );
@@ -686,7 +687,7 @@ function CandidatesPanel({ hiringId, data, vendors, canEdit, onReload }) {
       )}
       {data.candidates.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
               <tr>
                 <th className="text-left p-1.5">Vendor</th>
@@ -722,7 +723,7 @@ function CandidatesPanel({ hiringId, data, vendors, canEdit, onReload }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 

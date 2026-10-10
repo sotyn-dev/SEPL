@@ -7,6 +7,8 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import ProofPreview from '../components/ProofPreview';
+import PmsFollowupRemarks, { PmsFollowupSummary } from '../components/PmsFollowupRemarks';
+import './PMSTasks.css';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -65,6 +67,7 @@ export default function PMSTasks() {
   const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
+  const [remarkTask, setRemarkTask] = useState(null);
   const [form, setForm] = useState({});
   // Upload state for the new attachment field on the create modal
   // (mam, 2026-05-22: "give here option also upload file like take
@@ -324,16 +327,16 @@ export default function PMSTasks() {
   }));
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div>
+    <div className="pms-tasks-page min-w-0 w-full space-y-4">
+      <div className="flex flex-wrap justify-between items-start gap-3">
+        <div className="min-w-0 flex-1 basis-80">
           <h3 className="text-xl font-bold text-gray-800">PMS Tasks</h3>
           <p className="text-sm text-gray-500">Project Management tasks by CRM — pick a project, CRM auto-fills from the latest Client PO.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => exportCsv('pms-tasks',
-            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number'],
-            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '']))}
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
@@ -344,7 +347,7 @@ export default function PMSTasks() {
       {/* Mam wants PMS scoped to the logged-in user (like Delegations) —
           users land on their own queue, can expand to team-wide via
           'Followup'. Admin gets the full archive too. */}
-      <div className="flex gap-2 text-sm overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+      <div className="flex flex-wrap items-center gap-2 text-sm pb-1">
         {[
           { id: 'mine', label: 'My Tasks' },
           { id: 'given', label: 'Given by me' },
@@ -357,7 +360,7 @@ export default function PMSTasks() {
           </button>
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
-        <div className="w-[248px]">
+        <div className="w-[248px] max-w-full">
           <StatusMultiSelect
             options={[
               { id: 'pending', name: 'Pending' },
@@ -405,17 +408,23 @@ export default function PMSTasks() {
         </div>
       </div>
 
-      {/* Desktop table — bounded scroll + sticky thead so columns stay
-          pinned while scrolling.  Mam, 2026-05-13. */}
-      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto hidden md:block">
-        <table className="text-sm w-full min-w-[950px]">
+      {/* Fit all columns to the available content width, including the sidebar.
+          Use the complete task cards when there is too little room for a table. */}
+      <div className="pms-task-table-wrap card p-0 max-h-[70vh] overflow-auto">
+        <table className="pms-task-table">
+          <colgroup>
+            {[3, 6, 12, 7, 16, 13, 8, 8, 7, 6, 8, 6].map((width, index) => (
+              <col key={index} style={{ width: `${width}%` }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
-              <th className="w-12 text-center">S.No.</th>
+              <th className="text-center">S.No.</th>
               <th>Task ID</th>
               <th>Project</th>
               <th>Created By <span className="text-[9px] text-gray-400 font-normal normal-case">(CRM below)</span></th>
               <th>Description</th>
+              <th>Follow-up Remark</th>
               <th>Assigned To</th>
               <th>Due / Done</th>
               <th>Status</th>
@@ -425,7 +434,7 @@ export default function PMSTasks() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
+            {tasks.length === 0 && <tr><td colSpan="12" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
             {pager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
@@ -446,8 +455,8 @@ export default function PMSTasks() {
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{(pager.page - 1) * pager.perPage + idx + 1}</td>
-                  <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
-                  <td className="max-w-[220px]">
+                  <td className="font-mono text-[10px] text-red-700">PMS-{String(t.id).padStart(4, '0')}</td>
+                  <td>
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
                     <div className="text-[10px] text-gray-500">
                       {t.lead_no && <span className="font-mono mr-1">{t.lead_no}</span>}
@@ -463,17 +472,20 @@ export default function PMSTasks() {
                     </div>
                     {t.crm_name && <div className="text-[10px] text-gray-400">CRM: {t.crm_name}</div>}
                   </td>
-                  <td className="max-w-md min-w-[240px]">
+                  <td>
                     {/* Wrap properly across all viewports — no more line-clamp,
                         long descriptions break onto multiple lines. */}
                     {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</div>}
-                    <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
+                    <div className="text-gray-800 whitespace-pre-wrap break-words text-xs">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
                   </td>
-                  <td className="whitespace-nowrap">{t.assigned_to_name}</td>
-                  <td className="whitespace-nowrap text-xs">
+                  <td>
+                    <PmsFollowupSummary task={t} onOpen={setRemarkTask} />
+                  </td>
+                  <td>{t.assigned_to_name}</td>
+                  <td className="text-xs">
                     {completedDate
                       ? <span className="text-emerald-700 font-medium">Done {completedDate}</span>
                       : t.due_date
@@ -500,7 +512,7 @@ export default function PMSTasks() {
                       )}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap">
+                  <td>
                     {t.extension_status === 'pending' && t.requested_due_date ? (
                       <div className="flex flex-col gap-1">
                         <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block">→ {t.requested_due_date}</span>
@@ -538,8 +550,8 @@ export default function PMSTasks() {
         </table>
       </div>
 
-      {/* Mobile cards */}
-      <div className="md:hidden space-y-2">
+      {/* Cards for phones and narrow content areas. */}
+      <div className="pms-task-cards space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
         {pager.pageItems.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
@@ -579,6 +591,10 @@ export default function PMSTasks() {
               {t.status === 'rejected' && t.reject_reason && (
                 <div className="bg-red-50 border border-red-200 rounded px-2 py-1 text-[11px] text-red-700 mb-2 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5" /> {t.reject_reason}</div>
               )}
+              <div className="my-3 rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                <p className="text-[10px] uppercase font-semibold text-gray-500 mb-1">Follow-up remark</p>
+                <PmsFollowupSummary task={t} onOpen={setRemarkTask} />
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
@@ -621,6 +637,11 @@ export default function PMSTasks() {
       <Pagination {...pager} className="card p-0" />
 
       {/* Create Modal */}
+      {remarkTask && <PmsFollowupRemarks key={remarkTask.id} task={remarkTask} onClose={() => setRemarkTask(null)}
+        onSaved={(taskId, remark) => setTasks(previous => previous.map(task => task.id === taskId ? {
+          ...task, followup_remark: remark.remark, followup_remark_by: remark.author_name,
+          followup_remark_at: remark.created_at, followup_remark_count: (task.followup_remark_count || 0) + 1,
+        } : task))} />}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>
         <form onSubmit={save} className="space-y-3">
           <div>

@@ -15,6 +15,7 @@ const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { getDb } = require('../db/schema');
 const { computeKpiPayload } = require('./auditReport');
 const { computeCmdDetail } = require('../utils/cmdDashboard');
+const { ACTIVE_PROJECTS_CTE, getActiveProjectMetric } = require('../lib/activeProjects');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -198,12 +199,19 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
       if (d.getUTCDay() !== 0) workDates.push(d.toISOString().slice(0, 10));
     }
     const nWork = workDates.length || 1;
-    const activeSites = db.prepare("SELECT COUNT(*) c FROM sites WHERE status='active'").get().c;
+    const activeProjects = getActiveProjectMetric(db);
+    const activeSites = activeProjects.count;
     const pct = (num, den) => den > 0 ? Math.round(num / den * 100) : null;
 
     // 1 · Weekly Plan Completion — approved plans for the CURRENT week / active sites
-    const planApproved = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE week_start = ? AND status = 'approved'").get(weekStart).c;
-    const planOnTime = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE week_start = ? AND status = 'approved' AND submitted_late = 0").get(weekStart).c;
+    const plans = db.prepare(`${ACTIVE_PROJECTS_CTE}
+      SELECT COUNT(DISTINCT ap.project_key) AS approved,
+        COUNT(DISTINCT CASE WHEN wp.submitted_late = 0 THEN ap.project_key END) AS on_time
+      FROM active_projects ap JOIN project_sites ps ON ps.project_key = ap.project_key
+      JOIN weekly_plans wp ON wp.site_id = ps.site_id
+      WHERE wp.week_start = ? AND wp.status = 'approved'`).get(weekStart);
+    const planApproved = plans.approved;
+    const planOnTime = plans.on_time;
 
     // 2 · Material Available Before Work — approved plans in window whose stock
     // check found NOTHING to indent (auto_indent_id IS NULL = fully covered)
@@ -216,7 +224,10 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
 
     // 4 · Labour Attendance Submitted — avg daily % of sites with a morning punch
     const punchByDay = Object.fromEntries(db.prepare(
-      'SELECT attendance_date d, COUNT(DISTINCT site_id) c FROM contractor_attendance WHERE attendance_date >= ? GROUP BY attendance_date'
+      `${ACTIVE_PROJECTS_CTE} SELECT ca.attendance_date d, COUNT(DISTINCT ap.project_key) c
+       FROM active_projects ap JOIN project_sites ps ON ps.project_key = ap.project_key
+       JOIN contractor_attendance ca ON ca.site_id = ps.site_id
+       WHERE ca.attendance_date >= ? GROUP BY ca.attendance_date`
     ).all(fromIso).map(r => [r.d, r.c]));
     const punchAvg = activeSites > 0
       ? Math.round(workDates.reduce((s, d) => s + Math.min(1, (punchByDay[d] || 0) / activeSites), 0) / nWork * 100)
@@ -237,7 +248,11 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
 
     // 6 · DPR Submission — avg daily % of active sites with a submitted DPR
     const dprByDay = Object.fromEntries(db.prepare(
-      'SELECT report_date d, COUNT(DISTINCT site_id) c FROM dpr WHERE report_date >= ? AND submission_time IS NOT NULL GROUP BY report_date'
+      `${ACTIVE_PROJECTS_CTE} SELECT d.report_date d, COUNT(DISTINCT ap.project_key) c
+       FROM active_projects ap JOIN project_sites ps ON ps.project_key = ap.project_key
+       JOIN dpr d ON d.site_id = ps.site_id
+       WHERE d.report_date >= ? AND d.submission_time IS NOT NULL
+         AND COALESCE(d.is_planned_template, 0) = 0 GROUP BY d.report_date`
     ).all(fromIso).map(r => [r.d, r.c]));
     const dprAvg = activeSites > 0
       ? Math.round(workDates.reduce((s, d) => s + Math.min(1, (dprByDay[d] || 0) / activeSites), 0) / nWork * 100)
@@ -255,7 +270,7 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
     const kpis = [
       { key: 'plan_completion', label: 'Weekly Plan Completion', unit: '%', target: 100, dir: '>=',
         value: pct(planApproved, activeSites),
-        detail: `${planApproved}/${activeSites} sites approved for week ${weekStart} · ${planOnTime} by Friday` },
+        detail: `${planApproved}/${activeSites} active projects approved for week ${weekStart} · ${planOnTime} by Friday` },
       { key: 'material_ready', label: 'Material Available Before Work', unit: '%', target: 95, dir: '>=',
         value: pct(planCovered, planWin),
         detail: `${planCovered}/${planWin} approved plans fully covered by stock + pipeline` },
@@ -264,13 +279,13 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
         detail: `${indEmg}/${indTotal} indents flagged emergency in ${days}d` },
       { key: 'attendance', label: 'Labour Attendance Submitted', unit: '%', target: 100, dir: '>=',
         value: punchAvg,
-        detail: `avg over ${nWork} working days · ${activeSites} active sites` },
+        detail: `avg over ${nWork} working days · ${activeSites} active projects` },
       { key: 'inventory_accuracy', label: 'Inventory Accuracy', unit: '%', target: 98, dir: '>=',
         value: pct(matBacked, matTotal),
         detail: `${matBacked}/${matTotal} DPR consumptions backed by a stock movement` },
       { key: 'dpr_rate', label: 'DPR Submission Rate', unit: '%', target: 90, dir: '>=',
         value: dprAvg,
-        detail: `avg over ${nWork} working days · ${activeSites} active sites` },
+        detail: `avg over ${nWork} working days · ${activeSites} active projects` },
       { key: 'otd', label: 'Procurement On-Time Delivery', unit: '%', target: 95, dir: '>=',
         value: pct(+otd.ok || 0, +otd.c || 0),
         detail: `${+otd.ok || 0}/${+otd.c || 0} receipts on/before the PO's expected date` },
@@ -279,7 +294,7 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
       ok: k.value === null ? null : (k.dir === '<=' ? k.value <= k.target : k.value >= k.target),
     }));
 
-    res.json({ window_days: days, from: fromIso, week_start: weekStart, active_sites: activeSites, kpis });
+    res.json({ window_days: days, from: fromIso, week_start: weekStart, active_projects: activeProjects, active_sites: activeSites, kpis });
   } catch (e) {
     console.error('[dashboards/spos-kpis] failed:', e.message);
     res.status(500).json({ error: e.message });

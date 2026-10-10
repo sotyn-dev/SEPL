@@ -13,3 +13,6 @@ client/public/*.xlsx
 *.db
 *.sqlite
 client/dist/*.xlsx
+/outputs/
+/scratch/
+

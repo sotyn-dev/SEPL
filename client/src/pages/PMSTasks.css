@@ -1,0 +1,73 @@
+.pms-tasks-page {
+  container-type: inline-size;
+}
+
+.pms-task-table-wrap {
+  display: none;
+}
+
+.pms-task-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.pms-task-table th,
+.pms-task-table td {
+  padding: 12px 5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pms-task-table th {
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
+.pms-task-table th:first-child {
+  padding-inline: 2px;
+}
+
+.pms-task-table td :is(div, p, span, a, button) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.pms-task-table td :is(.flex, .inline-flex) {
+  flex-wrap: wrap;
+}
+
+.pms-task-table td svg {
+  flex-shrink: 0;
+}
+
+.pms-task-table td:nth-child(9) > span {
+  display: inline-block;
+  padding: 2px 3px;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.pms-task-table td .btn {
+  justify-content: center;
+  padding: 5px 4px;
+  font-size: 10px;
+}
+
+.pms-task-table td:nth-child(10) .btn svg {
+  display: none;
+}
+
+/* Use the content width so opening the sidebar cannot clip the last columns. */
+@container (min-width: 960px) {
+  .pms-task-table-wrap {
+    display: block;
+  }
+
+  .pms-task-cards {
+    display: none;
+  }
+}

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
@@ -411,7 +412,7 @@ export default function Leads() {
   // One lead row — reused by the flat list and the grouped children so the
   // columns never drift. Tentative Amount column added (mam 2026-06-25).
   const renderLeadRow = (l, child = false) => (
-    <tr key={l.id} className={`border-b hover:bg-red-50/40 cursor-pointer ${child ? 'bg-gray-50/60' : ''}`} onClick={() => viewLead(l)}>
+    <tr key={l.id} data-serial-skip={child} className={`border-b hover:bg-red-50/40 cursor-pointer ${child ? 'bg-gray-50/60' : ''}`} onClick={() => viewLead(l)}>
       <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>{l.lead_no}</td>
       <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
       <td className="px-3 py-2.5 text-gray-600">{l.company_name || '-'}</td>
@@ -674,7 +675,7 @@ export default function Leads() {
         {groupLeads && (
           <div className="text-xs text-gray-500">{leadGroups.length} project{leadGroups.length !== 1 ? 's' : ''} ({leads.length} lead{leads.length !== 1 ? 's' : ''}{leadsMergedCount > 0 ? `, ${leadsMergedCount} merged` : ''}) · tap a project to expand</div>
         )}
-        <div className="card p-0 overflow-hidden"><div className="table-responsive"><table className="text-xs freeze-head min-w-[720px] sm:min-w-full">
+        <div className="card p-0 overflow-hidden"><div className="table-responsive"><NumberedTable start={(listPager.page - 1) * listPager.perPage + 1} className="text-xs freeze-head min-w-[720px] sm:min-w-full">
           <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2 text-right">Tentative Amt</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
           <tbody>
             {/* Flat list, or merged-by-project when grouping is on. */}
@@ -706,7 +707,7 @@ export default function Leads() {
             })}
             {leads.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
           </tbody>
-        </table></div><Pagination {...listPager} /></div>
+        </NumberedTable></div><Pagination {...listPager} /></div>
       </>)}
 
       {/* View + Stage Actions */}

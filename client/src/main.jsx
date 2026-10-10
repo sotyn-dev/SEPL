@@ -17,6 +17,8 @@ import { getToken } from './lib/tokenStore'
 import '@fontsource-variable/inter/wght.css'
 import './index.css'
 import App from './App.jsx'
+// Receiving an installed-app share must also work when push permission is off.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 // Live update after a deploy — every open tab moves to the new build by
 // itself (mam 2026-09-05). Details in the component.
 import UpdateWatcher from './components/UpdateWatcher'

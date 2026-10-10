@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -93,7 +94,7 @@ export default function Expenses() {
       {/* Bounded scroll + sticky thead — same one-table freeze pattern
           as Cash Flow's project tracker.  Mam: "thats nice please go
           do same as in expense, delegation, pms, helpticket". */}
-      <div className="card p-0 overflow-auto max-h-[70vh]"><table>
+      <div className="card p-0 overflow-auto max-h-[70vh]"><NumberedTable>
         <thead className="sticky top-0 z-10 bg-gray-100"><tr><th>Description</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {expenses.map(e => (
@@ -149,7 +150,7 @@ export default function Expenses() {
           ))}
           {expenses.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No expenses yet</td></tr>}
         </tbody>
-      </table></div>
+      </NumberedTable></div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editingId ? 'Edit Expense' : 'Submit Expense'}>
         <form onSubmit={save} className="space-y-4">

@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Training LMS Admin Tab — manage videos + per-employee assignments.
 //
 // Mam (2026-05-22 Phase 1 Batch E, module #12): admin adds videos
@@ -156,7 +157,7 @@ export default function TrainingTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Video / Type</th>
@@ -218,7 +219,7 @@ export default function TrainingTab() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       {/* CREATE / EDIT VIDEO MODAL */}
@@ -311,7 +312,7 @@ export default function TrainingTab() {
           {assignmentsList.length === 0 ? (
             <p className="text-center py-6 text-gray-400 text-[13px]">No employees assigned yet</p>
           ) : (
-            <table className="text-[12px] w-full">
+            <NumberedTable className="text-[12px] w-full">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Employee</th>
@@ -341,7 +342,7 @@ export default function TrainingTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           )}
         </div>
       </Modal>

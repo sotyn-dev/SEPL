@@ -2,6 +2,8 @@
 // closed and shows a desktop / phone notification. On click it tries
 // to focus an already-open ERP tab, otherwise opens a new one to the
 // notification's deep link.
+// Version 2026-10-08-v2: incoming share target with image/* wildcard support
+try { importScripts('/chat-share-worker.js?v=2'); } catch (error) { console.warn('Chat share receiver unavailable', error); }
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Tally Bills — Bill lifecycle: Upload → PMS Tasks → Approval → Payment
 // (Director change request 2026-08-13; target 11.5 working days end-to-end).
 //
@@ -306,7 +307,7 @@ export default function TallyBills() {
 
           {/* ── Desktop register (only the ACTIVE layout is mounted) ── */}
           {isDesktop && <div className="card p-0 overflow-x-auto">
-            <table className="freeze-head">
+            <NumberedTable start={page * PAGE_SIZE + 1} className="freeze-head">
               <thead><tr>
                 <th>Bill</th><th>Vendor</th><th>Project</th><th>Category</th>
                 <th className="text-right">Bill Amt</th><th className="text-right">Approved</th>
@@ -359,7 +360,7 @@ export default function TallyBills() {
                   <tr><td colSpan="13" className="text-center py-10 text-gray-400">No bills yet — upload the first Tally bill</td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>}
 
           {/* ── Mobile cards (parity: open + delete mirrored) ── */}
@@ -913,21 +914,21 @@ function ReportsTab() {
 
       {data && kind === 'sla-compliance' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="card p-0 overflow-x-auto"><table className="text-sm w-full">
+          <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm w-full">
             <thead><tr><th>Stage</th><th className="text-right">Done</th><th className="text-right">On Time</th><th className="text-right">Compliance</th><th className="text-right">Avg Delay</th></tr></thead>
             <tbody>{data.by_stage.map(s => (
               <tr key={s.stage}><td>{s.stage}</td><td className="text-right tabular-nums">{s.total}</td><td className="text-right tabular-nums">{s.on_time}</td>
                 <td className={`text-right tabular-nums font-bold ${s.compliance_pct >= 80 ? 'text-emerald-600' : 'text-red-600'}`}>{s.compliance_pct}%</td>
                 <td className="text-right tabular-nums">{s.avg_delay}</td></tr>))}
               {data.by_stage.length === 0 && <tr><td colSpan="5" className="text-center py-6 text-gray-400">No completed stages yet</td></tr>}
-            </tbody></table></div>
-          <div className="card p-0 overflow-x-auto"><table className="text-sm w-full">
+            </tbody></NumberedTable></div>
+          <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm w-full">
             <thead><tr><th>Person</th><th className="text-right">Stages</th><th className="text-right">On Time</th><th className="text-right">Compliance</th></tr></thead>
             <tbody>{data.by_person.map(p => (
               <tr key={p.person}><td>{p.person}</td><td className="text-right tabular-nums">{p.total}</td><td className="text-right tabular-nums">{p.on_time}</td>
                 <td className={`text-right tabular-nums font-bold ${p.compliance_pct >= 80 ? 'text-emerald-600' : 'text-red-600'}`}>{p.compliance_pct}%</td></tr>))}
               {data.by_person.length === 0 && <tr><td colSpan="4" className="text-center py-6 text-gray-400">No data</td></tr>}
-            </tbody></table></div>
+            </tbody></NumberedTable></div>
         </div>
       )}
 
@@ -954,7 +955,7 @@ function ReportsTab() {
       )}
 
       {data && kind === 'bottleneck' && (
-        <div className="card p-0 overflow-x-auto"><table className="text-sm w-full">
+        <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm w-full">
           <thead><tr><th>Stage</th><th className="text-right">Bills</th><th className="text-right">Avg Days</th><th className="text-right">Budget</th><th className="text-right">Breaches</th><th>Load</th></tr></thead>
           <tbody>{data.map(r => {
             const over = r.budget_days > 0 ? r.avg_days / r.budget_days : 0;
@@ -967,11 +968,11 @@ function ReportsTab() {
             </tr>);
           })}
             {data.length === 0 && <tr><td colSpan="6" className="text-center py-6 text-gray-400">No data</td></tr>}
-          </tbody></table></div>
+          </tbody></NumberedTable></div>
       )}
 
       {data && kind === 'variance' && (
-        <div className="card p-0 overflow-x-auto"><table className="text-sm w-full">
+        <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm w-full">
           <thead><tr><th>Bill</th><th>Vendor</th><th className="text-right">Bill Amt</th><th className="text-right">Approved</th><th className="text-right">Received</th><th className="text-right">Variance</th><th>Remark</th></tr></thead>
           <tbody>{data.map(r => (
             <tr key={r.id}><td className="font-medium">{r.bill_number}</td><td>{r.vendor_name}</td>
@@ -981,11 +982,11 @@ function ReportsTab() {
               <td className={`text-right tabular-nums font-bold ${r.variance > 0 ? 'text-red-600' : 'text-purple-700'}`}>{inr(r.variance)} ({r.variance_pct}%)</td>
               <td className="max-w-[200px] truncate text-xs text-gray-500">{r.remark}</td></tr>))}
             {data.length === 0 && <tr><td colSpan="7" className="text-center py-6 text-gray-400">No variances recorded</td></tr>}
-          </tbody></table></div>
+          </tbody></NumberedTable></div>
       )}
 
       {data && kind === 'outstanding' && (
-        <div className="card p-0 overflow-x-auto"><table className="text-sm w-full">
+        <div className="card p-0 overflow-x-auto"><NumberedTable className="text-sm w-full">
           <thead><tr><th>Bill</th><th>Vendor</th><th className="text-right">Approved</th><th className="text-right">Received</th><th className="text-right">Balance</th><th>Expected</th><th className="text-right">Days Overdue</th></tr></thead>
           <tbody>{data.map(r => (
             <tr key={r.id}><td className="font-medium">{r.bill_number}</td><td>{r.vendor_name}</td>
@@ -995,7 +996,7 @@ function ReportsTab() {
               <td className="text-xs">{r.expected_date ? fmtDate(r.expected_date) : '—'}</td>
               <td className={`text-right tabular-nums font-bold ${r.days_overdue > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{r.days_overdue}</td></tr>))}
             {data.length === 0 && <tr><td colSpan="7" className="text-center py-6 text-gray-400">Nothing outstanding</td></tr>}
-          </tbody></table></div>
+          </tbody></NumberedTable></div>
       )}
     </div>
   );

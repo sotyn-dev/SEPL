@@ -1,4 +1,5 @@
 const express = require('express');
+const { getActiveProjectMetric } = require('../lib/activeProjects');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -305,7 +306,8 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   // Mam (2026-05-22): new KPI tile — total AR cleared across all projects.
   const totalArCleared = result.reduce((s, r) => s + (r.ar_cleared_value || 0), 0);
 
-  res.json({ projects: result, summary: { totalSale, totalSaleExGst, totalReceived, totalArCleared, totalValue, totalPurchase, projectCount: result.length } });
+  // projectCount remains the number of financial rows, including historical work.
+  res.json({ projects: result, summary: { totalSale, totalSaleExGst, totalReceived, totalArCleared, totalValue, totalPurchase, projectCount: result.length, activeProjects: getActiveProjectMetric(db) } });
 });
 
 // POST update project manual fields (milestone, aanchal value, payment days)

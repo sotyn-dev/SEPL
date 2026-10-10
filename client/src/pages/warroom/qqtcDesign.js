@@ -93,7 +93,7 @@ export const MODULE_AUDIT = [
   { mod: 'Quotes & Orders · Estimation', owner: 'Rajeev Sood', backup: 'MD.Asad Ali', q: 'Yes', rules: '2, 4',
     red: '0 quotes logged sent in 90 d (vs 168 leads) · quote lead-time data gap',
     fix: 'Link quotations.lead_id; enforce Quote-in-4 SLA; decline <18% margin.', touch: true },
-  { mod: 'CRM · Sales Funnel · Customers', owner: 'Lovely Sharma', backup: 'Sushila', q: 'Partial', rules: '6, 8',
+  { mod: 'CRM · Sales Funnel · Customers', owner: 'Lovely Sharma', backup: '—', q: 'Partial', rules: '6, 8',
     red: '168 leads → 12 qualified (−93%) · 36 leads "Unknown" source · top-2 customer concentration 53%',
     fix: 'Capture loss_reason on close; reward qualified→PO not lead volume (Rule 8); diversify beyond top-2 clients.', touch: false },
   { mod: 'Solar Division', owner: 'GAP', backup: '—', q: 'No', rules: '1, 8',

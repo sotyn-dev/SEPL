@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Tools Management — catalog every returnable asset (drills, ladders,
 // multimeters, safety gear) with its current location (site / user),
 // condition, and movement history. Plus weekly tools-list submission
@@ -265,14 +266,14 @@ export default function Tools() {
         <summary className="cursor-pointer font-semibold">RGP challan imports: {rgpSync.imported} tool entries linked · {rgpSync.review.length} challans need review</summary>
         <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate (or indent rate for zero-value RGP challans). Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
         <button disabled={syncBusy} onClick={() => retryRgp()} className="btn btn-secondary mb-3">{syncBusy ? 'Checking…' : 'Retry old / unresolved RGP challans'}</button>
-        {!!rgpSync.review.length && <div className="overflow-x-auto"><table className="w-full text-sm">
+        {!!rgpSync.review.length && <div className="overflow-x-auto"><NumberedTable className="w-full text-sm">
           <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th></tr></thead>
           <tbody>{rgpSync.review.map(row => <tr key={row.delivery_note_id}>
             <td>{row.document_number || `Challan #${row.delivery_note_id}`}<div className="text-xs text-gray-500">{row.indent_number}</div></td>
             <td>{row.site_name || 'Missing site'}<div className="text-xs text-gray-500">{row.raised_by_name || 'Missing Raised By'}</div></td>
             <td>{row.reason || 'Waiting for import'}</td>
           </tr>)}</tbody>
-        </table></div>}
+        </NumberedTable></div>}
       </details>}
       {tab === 'dashboard' && stats && (
         <>
@@ -294,7 +295,7 @@ export default function Tools() {
               <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Count totals recorded quantities. Amount is the recorded total value of tool entries, excluding scrapped tools. RGP imports use dispatched quantity × recorded rate.</p>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <NumberedTable className="w-full">
                 <thead><tr><th>Site Name</th><th>Site Engineer</th><th className="text-right">Tools Count</th><th className="text-right">Tools Amount (Rs)</th></tr></thead>
                 <tbody>
                   {!stats.by_site && <tr><td colSpan="4" className="text-center py-8 text-gray-400">Site-wise summary unavailable</td></tr>}
@@ -313,7 +314,7 @@ export default function Tools() {
                   <td className="text-right tabular-nums">{stats.by_site.reduce((sum, site) => sum + site.tool_count, 0).toLocaleString('en-IN')}</td>
                   <td className="text-right tabular-nums whitespace-nowrap">{stats.by_site.reduce((sum, site) => sum + site.tools_amount, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 </tr></tfoot>}
-              </table>
+              </NumberedTable>
             </div>
           </div>
 
@@ -365,7 +366,7 @@ export default function Tools() {
 
           <div className="card p-0 overflow-hidden">
             <div className="table-responsive">
-              <table className="min-w-[800px]">
+              <NumberedTable start={(toolsPager.page - 1) * toolsPager.perPage + 1} className="min-w-[800px]">
                 <thead>
                   <tr>
                     <th>Code</th>
@@ -433,7 +434,7 @@ export default function Tools() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
             <Pagination {...toolsPager} />
           </div>
@@ -451,7 +452,7 @@ export default function Tools() {
             </div>
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table>
+            <NumberedTable>
               <thead><tr><th>Week</th><th>Site</th><th>Submitted By</th><th className="text-right">Tools Count</th><th>Photo</th><th>Notes</th></tr></thead>
               <tbody>
                 {submissions.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No submissions for this week</td></tr>}
@@ -466,7 +467,7 @@ export default function Tools() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </>
       )}

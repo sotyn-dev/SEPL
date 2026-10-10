@@ -56,6 +56,9 @@ function addReceipt(db, noteId, body, files, actor, workflow) {
   return db.transaction(() => {
     const note = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(noteId);
     if (!note) fail('Dispatch not found');
+    if (note.rental_confirmed_at === null && require('./rentalDispatch').context(db, { noteId }).items.length) {
+      fail('Confirm rental dispatch with Rental Start Date and Total Rental Days before recording receiving');
+    }
     const key = String(body.request_id || '');
     if (key && !/^[a-zA-Z0-9-]{16,80}$/.test(key)) fail('Invalid receiving request ID');
     const previous = key && db.prepare('SELECT * FROM delivery_receipts WHERE request_id=?').get(key);

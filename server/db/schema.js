@@ -1739,12 +1739,13 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Each user is assigned to one template (their role's MIS)
+    -- Each user can have several role templates.
     CREATE TABLE IF NOT EXISTS score_user_template (
-      user_id INTEGER PRIMARY KEY REFERENCES users(id),
-      template_id INTEGER REFERENCES score_templates(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      template_id INTEGER NOT NULL REFERENCES score_templates(id),
       assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      assigned_by INTEGER REFERENCES users(id)
+      assigned_by INTEGER REFERENCES users(id),
+      PRIMARY KEY (user_id, template_id)
     );
 
     -- Module owners — mam decides the accountable owner + backup per ERP
@@ -2832,6 +2833,17 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS pms_followup_remarks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES pms_tasks(id) ON DELETE CASCADE,
+      remark TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pms_followup_task
+      ON pms_followup_remarks(task_id, created_at DESC, id DESC);
+
     -- Checklist completions — one row per (checklist, user, date). Used to
     -- show the daily checklist widget on dashboard and track whether the user
     -- uploaded proof today. Unique per-day so users can't double-complete.
@@ -3077,12 +3089,28 @@ function initializeDatabase() {
     console.warn('[labour_management] migrations skipped (non-fatal):', e.message);
   }
 
+  try {
+    const { runHandoverSnagsMigrations } = require('./handoverSnagsSchema');
+    runHandoverSnagsMigrations(db);
+  } catch (e) {
+    console.warn('[handover_snags] migrations skipped (non-fatal):', e.message);
+  }
+
+  require('../lib/scoreTemplateAssignments').initialize(db);
+
   // Safe schema migrations for columns added after initial release
   const migrations = [
     // Scorecard commitment split (mam 2026-08-27): "commitment has two type —
     // previous pending task and current commitment". commitment_prev = the
     // promise on clearing the backlog; commitment stays the current-week one.
     ['score_entries', 'commitment_prev TEXT'],
+    ['score_kpis', "planned_mode TEXT NOT NULL DEFAULT 'source'"],
+    ['score_kpis', "actual_mode TEXT NOT NULL DEFAULT 'source'"],
+    ['score_kpis', "metric_type TEXT NOT NULL DEFAULT 'number'"],
+    ['score_kpis', "time_basis TEXT NOT NULL DEFAULT 'elapsed'"],
+    ['score_entries', 'planned_at TEXT'],
+    ['score_entries', 'actual_at TEXT'],
+    ['lead_followups', 'completed_at TEXT'],
     // Quote-with-margin from a funnel BOQ (mam 2026-08-27, SOP-02 F5-F7):
     // the quotation remembers which funnel lead it came from, the margin %
     // applied on the BOQ base, and the uploaded quotation file.
@@ -5312,7 +5340,9 @@ function initializeDatabase() {
       const insKpi = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare(`INSERT INTO score_user_template (user_id,template_id,assigned_by)
+        SELECT n.user_id,n.template_id,1 FROM (SELECT ? AS user_id,? AS template_id) n
+        WHERE NOT EXISTS (SELECT 1 FROM score_user_template WHERE user_id=n.user_id)`);
       let made = 0, assigned = 0;
       for (const p of PEOPLE) {
         let t = findTpl.get(p.tpl);
@@ -5402,7 +5432,9 @@ function initializeDatabase() {
       const hasKpi = db.prepare('SELECT 1 FROM score_kpis WHERE template_id = ? AND metric_name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare(`INSERT INTO score_user_template (user_id,template_id,assigned_by)
+        SELECT n.user_id,n.template_id,1 FROM (SELECT ? AS user_id,? AS template_id) n
+        WHERE NOT EXISTS (SELECT 1 FROM score_user_template WHERE user_id=n.user_id)`);
       let made = 0, appended = 0, assigned = 0;
       for (const p of NEW_PEOPLE) {
         let t = findTpl.get(p.tpl); let tid;
@@ -5495,17 +5527,17 @@ function initializeDatabase() {
       const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign = db.prepare(
-        `INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1)
-         ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`
-      );
+      const assign = db.transaction((userId, templateId) => {
+        db.prepare('DELETE FROM score_user_template WHERE user_id=?').run(userId);
+        db.prepare('INSERT INTO score_user_template(user_id,template_id,assigned_by) VALUES(?,?,1)').run(userId,templateId);
+      });
       let n = 0;
       for (const [nm, tpl] of MAP) {
         const t = findTpl.get(tpl);
         if (!t) continue;
         let u = findUser.get(nm);
         if (!u) { const c = findLike.all(nm.split(' ')[0] + '%'); if (c.length === 1) u = c[0]; }
-        if (u) { assign.run(u.id, t.id); n++; }
+        if (u) { assign(u.id, t.id); n++; }
       }
       db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_cards_reassign_v1', 'done')").run();
       console.log(`[schema] kpi_cards_reassign_v1: reassigned ${n}/7 people to their new KPI templates`);
@@ -6745,6 +6777,8 @@ in your first week. If a process feels broken, raise a Help Ticket
   ];
 
   const ALL_MODULES = [
+    'vendor_treds_dashboard', 'vendor_registrations', 'vendor_enquiries', 'vendor_approvals',
+    'treds_accounts', 'treds_invoices', 'bill_discounting', 'vendor_treds_reports', 'vendor_treds_masters', 'vendor_treds_settings',
     'dashboard', 'leads', 'quotations', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement', 'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
     'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'snags', 'company_assets', 'help_tickets',
     'sub_contractors', 'ai_agent', 'crm_funnel', 'cheques', 'fire_noc', 'rental_tools', 'influencers', 'crm_kitting',
@@ -7594,6 +7628,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('./dailyWork').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
   require('../lib/deliveryReceipts').initialize(db);
+  require('../lib/rentalDispatch').initialize(db);
   require('../lib/indentHelp').initialize(db);
   require('./complianceSchema').initializeComplianceSchema(db);
 
@@ -7604,6 +7639,9 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/subcontractorWorkOrders').initialize(db);
   require('../lib/offerLetterScore').initialize(db);
   require('../lib/purchaseBilling').ensurePurchaseBilling(db);
+  require('./vendorTredsSchema').ensureVendorTredsSchema(db);
+  db.prepare("INSERT INTO app_settings(key,value) VALUES('vendor_treds_settings',?) ON CONFLICT(key) DO NOTHING")
+    .run(JSON.stringify(require('../lib/vendorTreds/kpis').getDefaultConfig()));
   return db;
 }
 

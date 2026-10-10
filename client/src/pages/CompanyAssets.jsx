@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Company Assets — laptop / mobile / SIM / monitor / etc. register
 // with issue / return / maintenance / scrap actions and full history.
 // Mam: 'add also system company assets like laptop, sim, phone etc
@@ -197,7 +198,7 @@ export default function CompanyAssets() {
       </div>
 
       <div className="card p-0">
-        <table className="freeze-head">
+        <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head">
           <thead>
             <tr>
               <th>Asset No</th><th>Category</th><th>Name / Model</th>
@@ -257,7 +258,7 @@ export default function CompanyAssets() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...pager} />
 

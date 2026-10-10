@@ -16,6 +16,7 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
 const { getDispatchDocuments } = require('../lib/dispatchDocuments');
+const rentalDispatch = require('../lib/rentalDispatch');
 // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
 const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
 
@@ -96,6 +97,7 @@ const needsApprove = requirePermission('procurement', 'approve');
 // gate settings tables. Every "who may act here" question routes through it.
 const approvalGates = require('../utils/indentToDispatchGates');
 const raiserApproval = require('../lib/indentRaiserApproval');
+try { raiserApproval.migrate(getDb()); } catch (_) {}
 
 // Who may act at an indent gate, as a LIST (2026-07-23).
 //   1. ⚙ Workflow Settings — authoritative the moment anyone is named there.
@@ -907,7 +909,17 @@ router.get('/indents', (req, res) => {
     kpiParams.push(like, like, like, like, like);
   }
 
-  // Specific list filters (status, category)
+  // Use the same canonical values as indent creation; category also scopes
+  // summary counts. Status cards still show each status within this category.
+  const selectedCategory = String(category || 'all').trim().toLowerCase();
+  if (!['all', 'material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental', 'ppe_kit'].includes(selectedCategory)) {
+    return res.status(400).json({ error: 'Invalid indent category' });
+  }
+  if (selectedCategory !== 'all') {
+    kpiConds.push(`LOWER(COALESCE(NULLIF(TRIM(i.indent_category), ''), 'material')) = ?`);
+    kpiParams.push(selectedCategory);
+  }
+  // Specific list filter (status)
   const listConds = [...kpiConds];
   const listParams = [...kpiParams];
 
@@ -918,11 +930,6 @@ router.get('/indents', (req, res) => {
       listConds.push(`i.status = ?`);
       listParams.push(status);
     }
-  }
-
-  if (category && category !== 'all') {
-    listConds.push(`COALESCE(NULLIF(TRIM(i.indent_category), ''), 'material') = ?`);
-    listParams.push(category);
   }
 
   const kpiWhereSql = kpiConds.length ? `WHERE ${kpiConds.join(' AND ')}` : '';
@@ -1002,7 +1009,7 @@ router.get('/indents', (req, res) => {
      LEFT JOIN business_book opb ON opb.id = op.business_book_id
      LEFT JOIN purchase_orders opo ON opo.id = op.po_id
      ${listWhereSql}
-     ORDER BY i.created_at DESC
+     ORDER BY i.created_at DESC, i.id DESC
   `;
 
   let indents;
@@ -1072,7 +1079,17 @@ router.get('/indents', (req, res) => {
 
   const itemsByIndent = new Map();
   const budgetByIndent = new Map();
+  const rentalsByItem = new Map();
+  if (indentIds.length) {
+    for (const rental of db.prepare(`SELECT r.indent_item_id,r.quantity,r.rental_start_date,r.rental_days,r.rental_end_date,dn.document_number
+      FROM rental_dispatch_items r JOIN indent_items ii ON ii.id=r.indent_item_id JOIN delivery_notes dn ON dn.id=r.delivery_note_id
+      WHERE ii.indent_id IN (${indentIds.map(() => '?').join(',')}) ORDER BY r.id`).all(...indentIds)) {
+      if (!rentalsByItem.has(rental.indent_item_id)) rentalsByItem.set(rental.indent_item_id, []);
+      rentalsByItem.get(rental.indent_item_id).push(rental);
+    }
+  }
   for (const it of allItems) {
+    it.rental_dispatches = rentalsByItem.get(it.id) || [];
     if (!itemsByIndent.has(it.indent_id)) itemsByIndent.set(it.indent_id, []);
     itemsByIndent.get(it.indent_id).push(it);
     budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
@@ -1144,9 +1161,11 @@ router.get('/indents', (req, res) => {
     crm: crmList.map(u => u.name).join(', ') || null,
   };
 
+  const isAdminUser = req.user.role === 'admin';
   const rows = indents.map(i => ({
     ...i,
-    can_review_indent: l1List.some(u => u.id === req.user.id) && i.created_by !== req.user.id,
+    indent_category: String(i.indent_category || 'material').trim().toLowerCase() || 'material',
+    can_review_indent: (isAdminUser || l1List.some(u => u.id === req.user.id)) && (isAdminUser || i.created_by !== req.user.id),
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
     budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
@@ -1387,7 +1406,20 @@ router.get('/site-department-status', (req, res) => {
 
 router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
-  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department } = req.body;
+  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department, site_id } = req.body;
+  // SOP-15.1: If site has reached 100% and costs are locked, prevent new cost bookings unless admin override
+  try {
+    const sId = site_id || req.body.site_id;
+    const sName = site_name || req.body.site_name;
+    const lockedSite = db.prepare(`
+      SELECT id, name, cost_locked FROM sites 
+      WHERE ((? IS NOT NULL AND id = ?) OR (? IS NOT NULL AND (name = ? OR LOWER(TRIM(name)) = LOWER(TRIM(?)))))
+        AND cost_locked = 1
+    `).get(sId || null, sId || null, sName || null, sName || '', sName || '');
+    if (lockedSite && req.user?.role !== 'admin') {
+      return res.status(403).json({ error: `Cost booking is locked on site "${lockedSite.name}" under SOP-15.1 (Handover in progress). No new indents allowed.` });
+    }
+  } catch (_) {}
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
@@ -1657,6 +1689,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   // created at raise time and the billable po_items row added on CRM approval
   // are both never created — the material is bought and the revenue side never
   // opens. Unconditional again, as it was from 2026-06-02.
+
   const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
@@ -1801,13 +1834,79 @@ router.put('/indents/:id', (req, res) => {
   if (!workflowRow) return res.status(404).json({ error: 'Indent not found' });
   const raiserFlow = raiserApproval.usesRaiserApproval(workflowRow);
   const crmPending = workflowRow.crm_status === 'pending' && workflowRow.status === 'submitted';
+  const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
+  const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
+  const l1ReviewerList = gateApproverList(db, 'l1', legacyL1Approver);
+  const l1ReviewerIds = l1ReviewerList.map(u => u.id);
   if (raiserFlow && status && !items) {
     const denied = raiserApproval.validateAction(workflowRow, req.user.id,
-      gateApproverList(db, 'l1', legacyL1Approver).map(u => u.id), req.body);
+      l1ReviewerIds, req.body, isAdminActor);
     if (denied) return res.status(denied.code).json({ error: denied.error });
     if (status === 'reviewed') {
-      raiserApproval.markCorrect(db, workflowRow, req.user.id);
+      raiserApproval.markCorrect(db, workflowRow, req.user.id, l1ReviewerIds);
       return res.json({ message: 'Marked correct — awaiting approval by the original raiser', stage: 'review_done' });
+    }
+    if (status === 'rejected') {
+      const r = String(reason || '').trim();
+      const isReviewStage = ['submitted', 'crm_approved'].includes(workflowRow.status);
+      const isRaiserStage = workflowRow.status === 'l1_approved';
+      let originalApproverName = null;
+      if (isReviewStage) {
+        originalApproverName = l1ReviewerList.map(u => u.name).join(', ') || 'Assigned Reviewer';
+        db.prepare(`UPDATE indents SET
+          status = 'rejected',
+          l1_status = 'rejected',
+          l1_by = ?,
+          l1_at = CURRENT_TIMESTAMP,
+          l1_admin_override = 1,
+          l1_assigned_approver = ?,
+          approved_by = NULL,
+          approved_at = NULL,
+          rejected_by = ?,
+          rejected_at = CURRENT_TIMESTAMP,
+          rejection_reason = ?,
+          rejected_admin_override = 1,
+          rejected_assigned_approver = ?
+          WHERE id = ?`
+        ).run(req.user.id, originalApproverName, req.user.id, r, originalApproverName, id);
+        raiserApproval.audit(db, workflowRow, req.user.id, 'admin_override_rejected', {
+          stage: 'l1_review',
+          stage_label: 'Checked correct',
+          action: 'rejected',
+          reason: r,
+          admin_override: true,
+          original_assigned_approver: originalApproverName,
+        });
+      } else if (isRaiserStage) {
+        const raiserUser = db.prepare('SELECT name FROM users WHERE id=?').get(workflowRow.created_by);
+        originalApproverName = raiserUser?.name || workflowRow.raised_by_name || 'Original Raiser';
+        db.prepare(`UPDATE indents SET
+          status = 'rejected',
+          l2_status = 'rejected',
+          l2_by = ?,
+          l2_at = CURRENT_TIMESTAMP,
+          l2_admin_override = 1,
+          l2_assigned_approver = ?,
+          approved_by = NULL,
+          approved_at = NULL,
+          rejected_by = ?,
+          rejected_at = CURRENT_TIMESTAMP,
+          rejection_reason = ?,
+          rejected_admin_override = 1,
+          rejected_assigned_approver = ?
+          WHERE id = ?`
+        ).run(req.user.id, originalApproverName, req.user.id, r, originalApproverName, id);
+        raiserApproval.audit(db, workflowRow, req.user.id, 'admin_override_rejected', {
+          stage: 'raiser_approval',
+          stage_label: 'Raiser approval',
+          action: 'rejected',
+          reason: r,
+          admin_override: true,
+          original_assigned_approver: originalApproverName,
+        });
+      }
+      fireIndent(db, id, 'indent.rejected', { rejected_by: req.user.name || '', reason: r });
+      return res.json({ message: 'Rejected', reason: r });
     }
   }
   if (status === 'reviewed' && !raiserFlow) return res.status(400).json({ error: 'This indent uses the earlier approval flow.' });
@@ -2068,6 +2167,8 @@ router.put('/indents/:id', (req, res) => {
           // automatically" (2026-06-03). Extra indents no longer create or
           // update Sales Funnel leads; that work moves to its own module.
           // Removed block is in this commit's parent.
+          const isCrmOverride = isAdminUser && !approvalGates.isApprover(db, 'crm', actor.id) && !isAssignedCrm && crmPerm.can_view !== 1;
+          const crmWho = approvalGates.approversOf(db, 'crm').map(u => u.name).join(', ') || 'CRM';
           db.prepare(
             `UPDATE indents
                SET crm_status='approved',
@@ -2075,9 +2176,18 @@ router.put('/indents/:id', (req, res) => {
                    crm_at=CURRENT_TIMESTAMP,
                    crm_billable_po_item_id=?,
                    crm_margin_pct=?,
+                   crm_admin_override=?,
+                   crm_assigned_approver=?,
                    status='crm_approved'
              WHERE id=?`
-          ).run(actor.id, billablePoItemId, marginPct, id);
+          ).run(actor.id, billablePoItemId, marginPct, isCrmOverride ? 1 : 0, isCrmOverride ? crmWho : null, id);
+          raiserApproval.audit(db, cur2, actor.id, isCrmOverride ? 'admin_override_approved' : 'crm_approved', {
+            stage: 'crm',
+            stage_label: 'CRM',
+            action: 'approved',
+            admin_override: isCrmOverride,
+            original_assigned_approver: crmWho,
+          });
           fireIndent(db, id, 'indent.crm_approved', { crm_by: actor.name || actor.email || '' });
           return res.json({
             message: 'CRM approved — awaiting L1 sign-off',
@@ -2109,13 +2219,23 @@ router.put('/indents/:id', (req, res) => {
                 error: `You (${actorName}) can't approve ${l2On ? 'L1' : 'this indent'}. ${l2On ? 'L1 a' : 'A'}pprovers: ${whoFor(l1Allowed)}. Set in ⚙ Workflow Settings.`,
               });
             }
+            const isL1Override = isAdminUser && !l1Allowed.some(u => u.id === actor.id);
+            const l1ApproverNames = whoFor(l1Allowed);
             if (l2On) {
               // L2 switch ON — L1 is only the first sign-off. Stamp l1, flip to
               // l1_approved and STOP (awaiting L2). No fall-through.
               db.prepare(
-                `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, status='l1_approved'
+                `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, status='l1_approved',
+                 l1_admin_override=?, l1_assigned_approver=?
                    WHERE id=?`
-              ).run(actor.id, id);
+              ).run(actor.id, isL1Override ? 1 : 0, isL1Override ? l1ApproverNames : null, id);
+              raiserApproval.audit(db, cur2, actor.id, isL1Override ? 'admin_override_approved' : 'l1_approved', {
+                stage: 'l1',
+                stage_label: 'L1',
+                action: 'approved',
+                admin_override: isL1Override,
+                original_assigned_approver: l1ApproverNames,
+              });
               fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
               return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
             }
@@ -2123,9 +2243,17 @@ router.put('/indents/:id', (req, res) => {
             // then FALL THROUGH to the legacy approve path (flips status='approved',
             // applies quantity_overrides + from-store issue).
             db.prepare(
-              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='n/a'
+              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='n/a',
+               l1_admin_override=?, l1_assigned_approver=?
                  WHERE id=?`
-            ).run(actor.id, id);
+            ).run(actor.id, isL1Override ? 1 : 0, isL1Override ? l1ApproverNames : null, id);
+            raiserApproval.audit(db, cur2, actor.id, isL1Override ? 'admin_override_approved' : 'l1_approved', {
+              stage: 'l1',
+              stage_label: 'L1',
+              action: 'approved',
+              admin_override: isL1Override,
+              original_assigned_approver: l1ApproverNames,
+            });
             fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
             // no return — legacy approve path below finalises the indent.
           } else if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
@@ -2141,8 +2269,18 @@ router.put('/indents/:id', (req, res) => {
               if (cur2.l1_by && cur2.l1_by === actor.id && !isAdminUser) {
                 return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
               }
-              db.prepare(`UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?`)
-                .run(actor.id, id);
+              const isL2Override = isAdminUser && !l2Allowed.some(u => u.id === actor.id);
+              const l2ApproverNames = whoFor(l2Allowed);
+              db.prepare(`UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP,
+                l2_admin_override=?, l2_assigned_approver=? WHERE id=?`)
+                .run(actor.id, isL2Override ? 1 : 0, isL2Override ? l2ApproverNames : null, id);
+              raiserApproval.audit(db, cur2, actor.id, isL2Override ? 'admin_override_approved' : 'l2_approved', {
+                stage: 'l2',
+                stage_label: 'L2',
+                action: 'approved',
+                admin_override: isL2Override,
+                original_assigned_approver: l2ApproverNames,
+              });
               // Fall through → legacy approve path flips status='approved'.
             } else {
               // Legacy drain (switch OFF): an indent raised while L2 was ON may
@@ -2178,12 +2316,38 @@ router.put('/indents/:id', (req, res) => {
           if (reasonStr.length < 3) {
             return res.status(400).json({ error: 'Rejection reason is required (at least 3 characters).' });
           }
-          if (cur2.l1_status === 'pending') {
+          if (cur2.approval_policy === 'crm_two_level' && cur2.crm_status === 'pending') {
+            if (!canActCrm) {
+              return res.status(403).json({ error: "You can't reject at CRM stage." });
+            }
+            const isCrmOverride = isAdminUser && !approvalGates.isApprover(db, 'crm', actor.id) && !isAssignedCrm && crmPerm.can_view !== 1;
+            const crmWho = approvalGates.approversOf(db, 'crm').map(u => u.name).join(', ') || 'CRM';
+            db.prepare('UPDATE indents SET crm_status=?, crm_by=?, crm_at=CURRENT_TIMESTAMP, crm_reason=?, crm_admin_override=?, crm_assigned_approver=? WHERE id=?')
+              .run('rejected', actor.id, reasonStr, isCrmOverride ? 1 : 0, isCrmOverride ? crmWho : null, id);
+            raiserApproval.audit(db, cur2, actor.id, isCrmOverride ? 'admin_override_rejected' : 'crm_rejected', {
+              stage: 'crm',
+              stage_label: 'CRM',
+              action: 'rejected',
+              reason: reasonStr,
+              admin_override: isCrmOverride,
+              original_assigned_approver: crmWho,
+            });
+          } else if (cur2.l1_status === 'pending') {
             if (!canActL1) {
               return res.status(403).json({ error: `You can't reject at L1. L1 approvers: ${whoFor(l1Allowed)}.` });
             }
-            db.prepare('UPDATE indents SET l1_status=?, l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?')
-              .run('rejected', actor.id, id);
+            const isL1Override = isAdminUser && !l1Allowed.some(u => u.id === actor.id);
+            const l1ApproverNames = whoFor(l1Allowed);
+            db.prepare('UPDATE indents SET l1_status=?, l1_by=?, l1_at=CURRENT_TIMESTAMP, l1_admin_override=?, l1_assigned_approver=? WHERE id=?')
+              .run('rejected', actor.id, isL1Override ? 1 : 0, isL1Override ? l1ApproverNames : null, id);
+            raiserApproval.audit(db, cur2, actor.id, isL1Override ? 'admin_override_rejected' : 'l1_rejected', {
+              stage: 'l1',
+              stage_label: 'L1',
+              action: 'rejected',
+              reason: reasonStr,
+              admin_override: isL1Override,
+              original_assigned_approver: l1ApproverNames,
+            });
           } else if (cur2.l2_status === 'pending' && cur2.l1_status === 'approved') {
             // Indent parked at l1_approved (Pending L2). When L2 is ON the L2
             // approver rejects; when OFF the L1 approver / admin drains it.
@@ -2192,8 +2356,18 @@ router.put('/indents/:id', (req, res) => {
             if (!canRejectHere) {
               return res.status(403).json({ error: `You can't reject at ${l2On ? 'L2' : 'L1'}. ${l2On ? 'L2' : 'L1'} approvers: ${whoFor(rejList)}.` });
             }
-            db.prepare('UPDATE indents SET l2_status=?, l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?')
-              .run('rejected', actor.id, id);
+            const isL2Override = isAdminUser && !rejList.some(u => u.id === actor.id);
+            const l2ApproverNames = whoFor(rejList);
+            db.prepare('UPDATE indents SET l2_status=?, l2_by=?, l2_at=CURRENT_TIMESTAMP, l2_admin_override=?, l2_assigned_approver=? WHERE id=?')
+              .run('rejected', actor.id, isL2Override ? 1 : 0, isL2Override ? l2ApproverNames : null, id);
+            raiserApproval.audit(db, cur2, actor.id, isL2Override ? 'admin_override_rejected' : 'l2_rejected', {
+              stage: 'l2',
+              stage_label: 'L2',
+              action: 'rejected',
+              reason: reasonStr,
+              admin_override: isL2Override,
+              original_assigned_approver: l2ApproverNames,
+            });
           }
           // (No 'else' branch — admin Re-reject on an already-approved indent
           // skips the L1/L2 tagging entirely and falls straight through to
@@ -2212,6 +2386,7 @@ router.put('/indents/:id', (req, res) => {
         const isAdminUser = actor.role === 'admin';
         const canActHr = isAdminUser || actor.approval_role === 'hr';
         const whoami = () => db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+        const isHrOverride = isAdminUser && actor.approval_role !== 'hr';
         if (status === 'approved') {
           if (cur2.status !== 'submitted') {
             return res.status(400).json({ error: `Cannot approve from status='${cur2.status}'` });
@@ -2221,7 +2396,15 @@ router.put('/indents/:id', (req, res) => {
               error: `RGP indents need HR approval. You're signed in as "${whoami()}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → set Indent Approval Role = HR.`,
             });
           }
-          db.prepare(`UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?`).run(actor.id, id);
+          db.prepare(`UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l1_admin_override=?, l1_assigned_approver=? WHERE id=?`)
+            .run(actor.id, isHrOverride ? 1 : 0, isHrOverride ? 'HR' : null, id);
+          raiserApproval.audit(db, cur2, actor.id, isHrOverride ? 'admin_override_approved' : 'hr_approved', {
+            stage: 'hr',
+            stage_label: 'HR',
+            action: 'approved',
+            admin_override: isHrOverride,
+            original_assigned_approver: 'HR',
+          });
           // fall through → legacy approve path sets status='approved'
         }
         if (status === 'rejected') {
@@ -2232,7 +2415,16 @@ router.put('/indents/:id', (req, res) => {
           if (!canActHr) {
             return res.status(403).json({ error: `RGP indents need HR to reject. You're signed in as "${whoami()}".` });
           }
-          db.prepare(`UPDATE indents SET l1_status='rejected', l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?`).run(actor.id, id);
+          db.prepare(`UPDATE indents SET l1_status='rejected', l1_by=?, l1_at=CURRENT_TIMESTAMP, l1_admin_override=?, l1_assigned_approver=? WHERE id=?`)
+            .run(actor.id, isHrOverride ? 1 : 0, isHrOverride ? 'HR' : null, id);
+          raiserApproval.audit(db, cur2, actor.id, isHrOverride ? 'admin_override_rejected' : 'hr_rejected', {
+            stage: 'hr',
+            stage_label: 'HR',
+            action: 'rejected',
+            reason: reasonStr,
+            admin_override: isHrOverride,
+            original_assigned_approver: 'HR',
+          });
           // fall through → legacy reject path writes rejection_reason + status
         }
       }
@@ -2537,11 +2729,12 @@ router.put('/indents/:id', (req, res) => {
               if (remainProcure <= 0.0001) {
                 // 100% from store — just flip the row's source.
                 convertParent.run(issueNoteId, plan.itemId);
+                plan.dispatchItemId = plan.itemId;
               } else {
                 // Partial — shrink parent to remaining procure qty + add a
                 // store child carrying the from-store qty.
                 updateParent.run(remainProcure, plan.itemId);
-                insertChild.run(
+                const child = insertChild.run(
                   parent.indent_id, parent.description, plan.fromStore,
                   parent.unit, parent.rate, plan.fromStore * (+parent.rate || 0),
                   safeFk(parent.vendor_id, 'vendors'), safeFk(parent.item_master_id, 'item_master'), parent.make,
@@ -2552,6 +2745,11 @@ router.put('/indents/:id', (req, res) => {
                   // "red colour" matters as much at the store as at Purchase.
                   parent.remarks || null,
                 );
+                plan.dispatchItemId = child.lastInsertRowid;
+                if (parent.rental_days != null || parent.rental_rate_per_day != null) {
+                  db.prepare('UPDATE indent_items SET rental_days=?,rental_rate_per_day=? WHERE id=?')
+                    .run(parent.rental_days, parent.rental_rate_per_day, plan.dispatchItemId);
+                }
               }
             }
             // Update the header with rollup + source warehouse (last used).
@@ -2567,6 +2765,7 @@ router.put('/indents/:id', (req, res) => {
             // & Receiving for printing + (billable items) a Sales Bill.
             // sales_bill_pending=1 when any line is a billable PO item.
             const storeItems = storePlans.map(p => ({
+              indent_item_id: p.dispatchItemId, item_master_id: p.masterId,
               description: p.description, specification: p.specification || '', size: p.size || '',
               make: p.make || '', item_code: p.item_code || '', item_name: p.item_name || '',
               qty: p.fromStore, unit: p.unit || '',
@@ -2602,19 +2801,45 @@ router.put('/indents/:id', (req, res) => {
 
           // 3. Flip the indent to approved.
           if (raiserFlow) {
-            db.prepare("UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-            raiserApproval.audit(db, workflowRow, req.user.id, 'raiser_approved');
+            const isRaiserOverride = req.user.id !== workflowRow.created_by;
+            const raiserUser = db.prepare('SELECT name FROM users WHERE id=?').get(workflowRow.created_by);
+            const originalRaiserName = raiserUser?.name || workflowRow.raised_by_name || 'Original Raiser';
+            db.prepare(`UPDATE indents SET
+              l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP,
+              l2_admin_override=?, l2_assigned_approver=?
+              WHERE id=?`).run(
+                req.user.id,
+                isRaiserOverride ? 1 : 0,
+                isRaiserOverride ? originalRaiserName : null,
+                id
+              );
+            const auditDetails = {
+              stage: 'raiser_approval',
+              stage_label: 'Raiser approval',
+              action: 'approved',
+            };
+            if (isRaiserOverride) {
+              auditDetails.admin_override = true;
+              auditDetails.original_assigned_approver = originalRaiserName;
+              auditDetails.original_approver_id = workflowRow.created_by;
+            }
+            raiserApproval.audit(db, workflowRow, req.user.id,
+              isRaiserOverride ? 'admin_override_approved' : 'raiser_approved',
+              auditDetails
+            );
           }
           db.prepare(
             `UPDATE indents
                SET status = 'approved',
                    approved_by = ?,
                    approved_at = CURRENT_TIMESTAMP,
+                   approved_admin_override = ?,
+                   approved_assigned_approver = ?,
                    rejected_by = NULL,
                    rejected_at = NULL,
                    rejection_reason = NULL
              WHERE id = ?`
-          ).run(req.user.id, id);
+          ).run(req.user.id, isAdminActor ? 1 : 0, isAdminActor ? (workflowRow.raised_by_name || 'Assigned Approver') : null, id);
 
           // 4. RGP gate-pass Delivery Challan (mam 2026-06-06: "rgp delivery
           // challan automatically generate, rec. also required"). RGP is
@@ -3130,6 +3355,18 @@ router.delete('/indents/:id', requirePermission('procurement', 'delete'), (req, 
 // Delivery Bill working for ONE indent — the audit print behind the list's
 // Delivery Bill amount (mam 2026-09-11: "show here delivery bill pdf so that i
 // can audit"). Same resolver and same who-can-see rule as GET /indents.
+router.get('/indents/:id/audit', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT ira.*, u.name as actor_name
+    FROM indent_review_audit ira
+    LEFT JOIN users u ON u.id = ira.actor_id
+    WHERE ira.indent_id = ?
+    ORDER BY ira.created_at ASC, ira.id ASC
+  `).all(req.params.id);
+  res.json({ audit_trail: rows });
+});
+
 router.get('/indents/:id/delivery-bill', (req, res) => {
   try {
     const db = getDb();
@@ -6020,6 +6257,25 @@ router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
 
 router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
+  try {
+    const ctx = rentalDispatch.context(getDb(), { poId: Number(b.vendor_po_id) || null });
+    if (ctx.items.length || String(ctx.indent?.indent_category || '').trim().toLowerCase() === 'rental') {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      if (b.document_type !== 'challan') return res.status(400).json({ error: 'Rental dispatch requires a delivery challan' });
+      // Confirm, save item periods, and create rental enquiries in one transaction.
+      const result = rentalDispatch.create(getDb(), +b.vendor_po_id, b, req.user);
+      return res.status(result.existing ? 200 : 201).json(result);
+    }
+    let requestedItems = b.items;
+    if (typeof requestedItems === 'string') { try { requestedItems = JSON.parse(requestedItems); } catch { requestedItems = []; } }
+    if (b.rental_items || (Array.isArray(requestedItems) && requestedItems.some(it => String(it?.item_type || '').toUpperCase() === 'RENTAL'))) {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      return res.status(400).json({ error: 'No linked rental items on this Vendor PO' });
+    }
+  } catch (error) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+    return res.status(error.status || 500).json({ error: error.message });
+  }
   // File is OPTIONAL on create. Mam's flow: ERP generates the document
   // (Delivery Note / Sales Bill PDF via the new print endpoint), staff
   // print it, get it signed at delivery, then upload the signed copy.
@@ -6262,6 +6518,27 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.array('
   }
 });
 
+router.get('/vendor-po/:id/rental-dispatch-items', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const ctx = rentalDispatch.context(getDb(), { poId: +req.params.id });
+    if (!ctx.po) return res.status(404).json({ error: 'Vendor PO not found' });
+    res.json({ items: ctx.items, indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+router.get('/delivery-notes/:id/rental-dispatch', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const ctx = rentalDispatch.context(getDb(), { noteId: +req.params.id });
+    res.json({ items: ctx.items, revision: ctx.note.rental_revision, confirmed_at: ctx.note.rental_confirmed_at,
+      indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name });
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
+router.put('/delivery-notes/:id/rental-dispatch', needsApprove, (req, res) => {
+  try { res.json(rentalDispatch.confirm(getDb(), +req.params.id, req.body, req.user)); }
+  catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+
 router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
   // Partial update: only the fields sent are touched. A notes-only save
   // (Procurement Board popup) must not carry a stale status along and
@@ -6283,6 +6560,7 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
 });
 
 router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
+  if (getDb().prepare('SELECT id FROM rental_dispatch_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(409).json({ error: 'Confirmed rental dispatch history cannot be deleted' });
   if (getDb().prepare('SELECT id FROM delivery_receipts WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This challan has saved receiving history and cannot be deleted.' });
   if (getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);

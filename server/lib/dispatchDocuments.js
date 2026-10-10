@@ -77,7 +77,7 @@ function groupDocuments(rows) {
 function getDispatchDocuments(db) {
   const rows = db.prepare(`SELECT dn.*, u.name AS received_by_user_name,
     vp.po_number AS vendor_po_number, vp.indent_id AS vendor_po_indent_id,
-    v.name AS vendor_name, i.indent_number,
+    v.name AS vendor_name, i.indent_number, i.indent_category,
     COALESCE(NULLIF(TRIM(i.raised_by_name),''), raiser.name) AS raised_by_name,
     COALESCE(NULLIF(TRIM(i.site_name),''), bb.project_name) AS site_name,
     bb.company_name AS company_name, sin.note_number AS stock_issue_number,
@@ -93,9 +93,11 @@ function getDispatchDocuments(db) {
     LEFT JOIN stock_issue_notes sin ON sin.id=dn.stock_issue_note_id
     LEFT JOIN warehouses wh ON wh.id=sin.from_warehouse_id`).all();
   const byPo = new Map();
-  for (const item of db.prepare(`SELECT vpi.vendor_po_id, vpi.id AS vendor_po_item_id, ii.item_type, ii.description,
+  for (const item of db.prepare(`SELECT vpi.vendor_po_id, vpi.id AS vendor_po_item_id,
+    CASE WHEN UPPER(im.type)='RENTAL' THEN 'RENTAL' ELSE ii.item_type END AS item_type, ii.description,
     vpi.quantity AS qty, ii.unit, ii.item_master_id, ii.id AS indent_item_id
-    FROM vendor_po_items vpi LEFT JOIN indent_items ii ON ii.id=vpi.indent_item_id`).all()) {
+    FROM vendor_po_items vpi LEFT JOIN indent_items ii ON ii.id=vpi.indent_item_id
+    LEFT JOIN item_master im ON im.id=ii.item_master_id`).all()) {
     if (!byPo.has(item.vendor_po_id)) byPo.set(item.vendor_po_id, []);
     byPo.get(item.vendor_po_id).push(item);
   }
@@ -114,7 +116,16 @@ function getDispatchDocuments(db) {
     if (!history.has(receipt.delivery_note_id)) history.set(receipt.delivery_note_id, []);
     history.get(receipt.delivery_note_id).push(receipt);
   }
+  const rentals = new Map();
+  for (const item of db.prepare('SELECT * FROM rental_dispatch_items').all()) {
+    if (!rentals.has(item.delivery_note_id)) rentals.set(item.delivery_note_id, []);
+    rentals.get(item.delivery_note_id).push({ ...JSON.parse(item.snapshot), ...item });
+  }
   return groupDocuments(rows.map(row => ({ ...row,
+    rental_items: rentals.get(row.id) || [],
+    has_rental_items: !!rentals.get(row.id)?.length || row.indent_category === 'rental'
+      || (byPo.get(row.vendor_po_id) || []).some(it => type(it.item_type) === 'RENTAL')
+      || items(row.items_json).some(it => type(it.item_type) === 'RENTAL'),
     receipt_state: require('./deliveryReceipts').state(db, row, history.get(row.id) || []),
     item_types: (byPo.get(row.vendor_po_id) || []).map(item => type(item.item_type)),
     po_items: byPo.get(row.vendor_po_id) || [],

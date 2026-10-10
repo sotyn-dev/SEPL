@@ -1,3 +1,4 @@
+import NumberedTable from './NumberedTable';
 // Induction Admin Tab — manage content shown on the /induction page.
 //
 // Mam (2026-05-22 Phase 1 Batch E, module #11): 5 standard sections
@@ -119,7 +120,7 @@ export default function InductionTab() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+        <NumberedTable className="text-sm w-full">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase w-[160px]">Section / Type</th>
@@ -170,7 +171,7 @@ export default function InductionTab() {
               </td></tr>
             )}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal === 'form'} onClose={() => setModal(false)} title={editing ? 'Edit Induction Item' : 'Add Induction Item'} wide>

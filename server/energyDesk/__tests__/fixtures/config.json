@@ -1,0 +1,130 @@
+{
+  "version": "2026-10-05",
+  "_rules": "Every number outside `settings` is either {value, source, verifiedOn} or a \"[[OWNER: …]]\" placeholder. scripts/check-energy-desk-config.mjs fails the build on a bare number. A feature whose inputs are still [[OWNER]] switches itself off and the report says so — no default is invented. See docs/energy-desk-architecture.md §10.",
+  "settings": {
+    "_note": "Engineering and product switches, not facts. erpModuleLive turns on the calls to the ERP module (report storage, no-JS form); leave it false until the ERP deploy has been checked live.",
+    "erpModuleLive": false,
+    "erpApiBase": "https://securederp.in/api/public/energy-desk",
+    "healthTimeoutMs": 3000,
+    "aiExtraction": false,
+    "maxFileMb": 10,
+    "maxFiles": 3
+  },
+  "ai": {
+    "model": "claude-opus-5-5",
+    "dailyCostCapInr": "[[OWNER: daily ₹ cap — AI extraction stays off until set]]"
+  },
+  "retention": {
+    "rawUploadDays": "[[OWNER: retention days for uploaded bills, default proposed 90]]"
+  },
+  "generation": {
+    "withoutPin": {
+      "value": "regional band",
+      "source": "src/lib/solar/assumptions.ts REGIONS (unitsPerKwPerMonth and seasonal shape per region)",
+      "verifiedOn": "2026-10-05"
+    },
+    "pvgis": {
+      "api": "v5_3",
+      "radDatabase": "PVGIS-ERA5",
+      "systemLossPct": "[[OWNER: PVGIS system loss %]]",
+      "slopeDeg": {
+        "rcc": "[[OWNER: mounting angle on RCC roofs]]",
+        "metalShed": "[[OWNER: mounting angle on metal sheds]]"
+      }
+    }
+  },
+  "roof": {
+    "sqftPerKw": {
+      "value": 100,
+      "source": "src/lib/solar/assumptions.ts DEFAULTS.sqftPerKw (shadow-free area per kW)",
+      "verifiedOn": "2026-10-05"
+    },
+    "usableShareOfDrawnArea": "[[OWNER: usable share of a drawn roof outline]]"
+  },
+  "capex": {
+    "pricingEntryId": "solar-ci-rooftop-turnkey-per-kw",
+    "price": {
+      "id": "solar-ci-rooftop-turnkey-per-kw",
+      "version": "2026.10.2",
+      "low": 24000,
+      "high": 32000,
+      "unit": "₹/kW",
+      "taxBasis": "excl-gst",
+      "reviewBy": "2026-12-31"
+    }
+  },
+  "daytimeShare": {
+    "singleShift": "[[OWNER: default daytime share for a single-shift unit]]",
+    "twoShift": "[[OWNER: default daytime share for a two-shift unit]]",
+    "roundTheClock": "[[OWNER: default daytime share for a 24-hour unit]]"
+  },
+  "states": {
+    "Punjab": {
+      "meteringRegime": {
+        "value": "net_metering",
+        "source": "PSERC (Grid Interactive Rooftop Solar Photo Voltaic Systems) Regulations, 2021, reg 4.2(i), as amended by the Third Amendment Regulations, 2026 (Regu.203, notified 7 Apr 2026, in force 11 Apr 2026). Net billing, gross metering and behind-the-meter are also permitted; each consumer picks one.",
+        "url": "https://docs.pspcl.in/docs/cecommercial2620260708132107485.pdf",
+        "evidence": "seo/ludhiana-solar/regulatory-facts-2026-10-04.md §1",
+        "verifiedOn": "2026-10-04"
+      },
+      "netMeteringCapPct": {
+        "value": 100,
+        "source": "PSERC rooftop regulations 2021, reg 4.2(i) as amended 2026: up to 100% of sanctioned load (kW) or contract demand (kVA × 0.9).",
+        "url": "https://docs.pspcl.in/docs/cecommercial2620260708132107485.pdf",
+        "verifiedOn": "2026-10-04"
+      },
+      "capBasis": {
+        "value": "AC inverter rating, against sanctioned load in kW or contract demand in kVA × 0.9",
+        "source": "PSERC rooftop regulations 2021, reg 4.2(i) as amended 2026.",
+        "verifiedOn": "2026-10-04"
+      },
+      "kvaToKw": {
+        "value": 0.9,
+        "source": "PSERC rooftop regulations 2021, reg 4.2(i) as amended 2026: contract demand is counted as kVA × 0.9.",
+        "verifiedOn": "2026-10-04"
+      },
+      "netMeteringMaxKwp": {
+        "value": 500,
+        "source": "PSERC rooftop regulations 2021, reg 4.2(i) as amended 2026: net metering is limited to 500 kWp. Above that a plant uses net billing, gross metering or behind-the-meter (reg 4.2(ii)–(v)).",
+        "verifiedOn": "2026-10-04"
+      },
+      "feederLimitPct": {
+        "value": 80,
+        "source": "PSERC rooftop regulations 2021, reg 5.1: total rooftop solar on one transformer or feeder may not exceed 80% of its rating — a network limit, not a per-consumer one.",
+        "verifiedOn": "2026-10-04"
+      },
+      "yearEndSurplusPctOfFit": {
+        "value": 75,
+        "source": "PSERC rooftop regulations 2021, reg 12.3 as amended 2026: credits left unadjusted at the end of the settlement year (1 Oct–30 Sep) are paid at 75% of the feed-in tariff within 30 days.",
+        "verifiedOn": "2026-10-04"
+      },
+      "todIndustrialAboveKva": {
+        "value": 50,
+        "source": "PSERC Tariff Order FY 2026-27 for PSPCL, Annexure I condition 15: time-of-day tariff applies to all industrial Large Supply (>100 kVA) and Medium Supply (>50–100 kVA) consumers. Under reg 12.3, ToD consumers net solar within each time block first.",
+        "evidence": "seo/ludhiana-solar/regulatory-facts-2026-10-04.md §6",
+        "verifiedOn": "2026-10-04"
+      }
+    },
+    "Haryana": "[[OWNER: metering regime, cap % and its basis, with the order]]",
+    "Delhi NCR": "[[OWNER: metering regime, cap % and its basis, with the order]]",
+    "Uttar Pradesh": "[[OWNER: metering regime, cap % and its basis, with the order]]",
+    "Uttarakhand": "[[OWNER: metering regime, cap % and its basis, with the order]]",
+    "Himachal Pradesh": "[[OWNER: metering regime, cap % and its basis, with the order]]",
+    "Rajasthan": "[[OWNER: metering regime, cap % and its basis, with the order]]"
+  },
+  "detectors": {
+    "pfThreshold": "[[OWNER: power-factor threshold below which APFC is suggested]]",
+    "mdUnderuseShare": "[[OWNER: recorded MD below this share of contract demand suggests a reduction]]",
+    "openAccessMinKw": {
+      "value": 100,
+      "source": "Electricity (Promoting Renewable Energy Through Green Energy Open Access) Rules, 2022 — 100 kW contracted demand, as published on /open-access-solar/. State adoption varies.",
+      "verifiedOn": "2026-10-04"
+    },
+    "highBillInr": "[[OWNER: monthly bill threshold for the high_bill tag]]"
+  },
+  "ppa": {
+    "indicativeTariffInrPerKwh": "[[OWNER: indicative PPA tariff band — leave unset to hide the comparison]]"
+  },
+  "leadScore": "[[OWNER: adopt docs/growth-audit-2026-09/13_LEAD_SCORING_AND_ROUTING_MODEL.md weights as the starting point? Scoring ships in Phase 1b]]",
+  "engineVersion": "1.0.0"
+}

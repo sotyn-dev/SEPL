@@ -1,12 +1,27 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const { getActiveProjectMetric, listActiveProjects } = require('../lib/activeProjects');
 const router = express.Router();
 router.use(authMiddleware);
+
+router.get('/active-projects', (req, res) => {
+  const db = getDb();
+  // Aggregate access matches existing dashboard statistics; names are admin-only.
+  if (req.query.details === '1' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required for project details' });
+  }
+  res.set('Cache-Control', 'no-store');
+  res.json(db.transaction(() => ({
+    ...getActiveProjectMetric(db),
+    ...(req.query.details === '1' ? { projects: listActiveProjects(db) } : {}),
+  }))());
+});
 
 router.get('/', (req, res) => {
   const db = getDb();
   const stats = {
+    activeProjects: getActiveProjectMetric(db),
     leads: {
       total: db.prepare('SELECT COUNT(*) as c FROM leads').get().c,
       new: db.prepare("SELECT COUNT(*) as c FROM leads WHERE status='new'").get().c,

@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -432,7 +433,7 @@ export default function Delegation() {
   // Deadline-slippage light (mam 2026-07-06: "green when task enter date, yellow
   // when user gives a second date but on that date not done, red on the third date").
   // The colour tracks how many times the due date has been PUSHED, not how close it
-  // is. Each approved extension / manual re-date bumps extension_count on the server.
+  // is. Only approved extensions bump extension_count; direct date edits preserve it.
   // Keep the date history even after completion or approval.
   //   GREEN = original date; YELLOW = second date; RED = third date or later.
   const taskHealth = (t) => {
@@ -547,7 +548,7 @@ export default function Delegation() {
             <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is <b>3 tasks/day</b>. <span className="text-red-600 font-semibold">Overloaded</span> = exceeding that limit. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
           </div>
           <div className="card p-0 table-responsive">
-            <table className="text-sm w-full min-w-[750px]">
+            <NumberedTable className="text-sm w-full min-w-[750px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Person</th>
@@ -595,7 +596,7 @@ export default function Delegation() {
                   <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No active delegations yet.</td></tr>
                 )}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </>
       )}

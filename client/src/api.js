@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { chatShareLoginPath } from './lib/chatShareReturn';
 import { getToken, setToken, clearToken } from './lib/tokenStore';
 
 const api = axios.create({ baseURL: '/api' });
@@ -102,7 +103,7 @@ api.interceptors.response.use(
         }
         clearToken();
         delete api.defaults.headers.common.Authorization;
-        window.location.href = '/login';
+        window.location.href = chatShareLoginPath();
       } else if (!isSessionCheck && used && used === current) {
         // A data endpoint rejected the current token. Per mam's standing rule
         // ("automatic logout — very bad"), a single data-endpoint 401 must

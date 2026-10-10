@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // SOP-05 ITEM-WISE register (mam 2026-08-31: "i need item wise system") —
 // one row per BOQ item of the booked orders, each carrying its own stage
 // status: S1 package date → S2/S3 vendor quotes (3-quote rule) → S4/S5
@@ -88,7 +89,7 @@ export default function RatesItems({ embedded = false }) {
       {err && <p className="text-red-600 text-sm">{err}</p>}
       {!data ? <p className="text-gray-400 text-sm p-6 text-center">Loading items…</p> : (
         <div className="card p-0 overflow-x-auto">
-          <table className="w-full text-xs min-w-[1100px]">
+          <NumberedTable className="w-full text-xs min-w-[1100px]">
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase sticky top-0">
               <tr>
                 <th className="text-left p-2">Item</th>
@@ -162,7 +163,7 @@ export default function RatesItems({ embedded = false }) {
               ))}
               {data.rows.length === 0 && <tr><td colSpan={8} className="text-center py-10 text-gray-400">No items found</td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 

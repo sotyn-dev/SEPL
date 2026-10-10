@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -5,7 +6,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2, FiDownload, FiUpload, FiLink, FiPaperclip, FiExternalLink, FiX } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2, FiDownload, FiUpload, FiLink, FiPaperclip, FiExternalLink, FiX, FiSearch, FiTrendingUp } from 'react-icons/fi';
+import MarketRatesModal from '../components/MarketRatesModal';
 
 // Price Required — workflow:
 //   1. Site engineer raises a request for a new item not yet in Item Master.
@@ -38,6 +40,30 @@ export default function PriceRequired() {
 
   const [finalModal, setFinalModal] = useState(null); // grouped row being finalized
   const [finalForm, setFinalForm] = useState({});
+
+  // TSK-0378: Live Market Rates & Price Discovery modal state
+  const [marketModal, setMarketModal] = useState(false);
+  const [marketItem, setMarketItem] = useState(null);
+  const [marketTargetVendor, setMarketTargetVendor] = useState(1);
+
+  const openMarketRates = (item, vendorNum = 1) => {
+    setMarketItem(item);
+    setMarketTargetVendor(vendorNum);
+    setMarketModal(true);
+  };
+
+  const handleApplyMarketRate = (rate, vendorName) => {
+    if (!marketItem) return;
+    const anchorId = marketItem.anchor_id || marketItem.id;
+    if (anchorId) {
+      updateRate(anchorId, {
+        [`vendor${marketTargetVendor}_rate`]: rate,
+        ...(vendorName ? { [`vendor${marketTargetVendor}_name`]: vendorName } : {})
+      });
+      toast.success(`Applied ₹${rate} to Vendor ${marketTargetVendor}`);
+    }
+    setMarketModal(false);
+  };
 
   const load = () => {
     api.get('/price-requests').then(r => setRequests(r.data || [])).catch(() => setRequests([]));
@@ -332,9 +358,20 @@ export default function PriceRequired() {
                         </div>
                       )}
                     </div>
-                    <div className="text-right">
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wide">Quotes filled</div>
-                      <div className={`text-lg font-bold ${filledCount === 3 ? 'text-emerald-700' : 'text-amber-700'}`}>{filledCount} / 3</div>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <div className="text-right">
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wide">Quotes filled</div>
+                        <div className={`text-lg font-bold ${filledCount === 3 ? 'text-emerald-700' : 'text-amber-700'}`}>{filledCount} / 3</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openMarketRates(g, 1)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 rounded shadow-2xs transition-colors"
+                        title="Search Moglix, IndiaMART & past ERP PO prices"
+                      >
+                        <FiSearch size={11} className="text-indigo-600" />
+                        <span>Live Market Rates</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -355,7 +392,17 @@ export default function PriceRequired() {
                       />
                       <div className="grid grid-cols-2 gap-2 mt-2">
                         <div>
-                          <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Rate ₹</label>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <label className="block text-[10px] font-medium text-gray-500">Rate ₹</label>
+                            <button
+                              type="button"
+                              onClick={() => openMarketRates(g, n)}
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5"
+                              title={`Find market rate for Vendor ${n}`}
+                            >
+                              <FiSearch size={9} /> Market
+                            </button>
+                          </div>
                           <input className="input text-sm text-right tabular-nums" type="number" min="0" placeholder="0"
                             defaultValue={g[`vendor${n}_rate`] || ''}
                             onBlur={e => {
@@ -399,7 +446,7 @@ export default function PriceRequired() {
       {/* TAB 2 — All requests (raise / status / personal) */}
       {(tab === 'raise' || !isQuoter) && (
         <div className="card p-0">
-          <table className="text-sm w-full freeze-head">
+          <NumberedTable className="text-sm w-full freeze-head">
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Company</th>
@@ -451,13 +498,22 @@ export default function PriceRequired() {
                   <td className="px-3 py-2 tabular-nums">{r.final_rate ? <><span className="font-semibold">₹ {r.final_rate}</span><div className="text-[10px] text-gray-500">{r.final_vendor_name}</div></> : <span className="text-gray-300">—</span>}</td>
                   <td className="px-3 py-2">{statusBadge(r.status)}</td>
                   <td className="px-3 py-2 text-right">
-                    {r.status !== 'added' && (r.raised_by === user?.id || isAdmin()) && (
-                      <span className="inline-flex gap-1">
-                        <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-amber-600" title="Edit"><FiEdit2 size={14} /></button>
-                        <button onClick={() => remove(r.id)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
-                      </span>
-                    )}
-                    {r.status === 'added' && r.item_master_id && (
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openMarketRates(r, 1)}
+                        className="p-1 text-gray-400 hover:text-indigo-600 transition-colors"
+                        title="Check Live Market Rates (Moglix, IndiaMART & ERP POs)"
+                      >
+                        <FiSearch size={14} />
+                      </button>
+                      {r.status !== 'added' && (r.raised_by === user?.id || isAdmin()) && (
+                        <>
+                          <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-amber-600" title="Edit"><FiEdit2 size={14} /></button>
+                          <button onClick={() => remove(r.id)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
+                        </>
+                      )}
+                      {r.status === 'added' && r.item_master_id && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700" title="Click Item Master in sidebar to view">
                         <FiTag size={10} /> in Master
                         {r.master_item_code && (
@@ -467,6 +523,7 @@ export default function PriceRequired() {
                         )}
                       </span>
                     )}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -474,7 +531,7 @@ export default function PriceRequired() {
                 <tr><td colSpan="8" className="text-center py-8 text-gray-400">No requests yet — click "Raise Price Request" to add one.</td></tr>
               )}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
 
@@ -736,6 +793,14 @@ export default function PriceRequired() {
           </form>
         </Modal>
       )}
+
+      {/* TSK-0378: Live Market Rates & Price Discovery Modal */}
+      <MarketRatesModal
+        isOpen={marketModal}
+        onClose={() => setMarketModal(false)}
+        item={marketItem}
+        onApplyRate={handleApplyMarketRate}
+      />
     </div>
   );
 }

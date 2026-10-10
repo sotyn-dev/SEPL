@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Labour Management System — one page, three tabs.
 //
 //   Dashboard            KPIs across quotations, work orders and labour cost
@@ -131,7 +132,7 @@ function DashboardTab() {
       {r && (
         <div className="card p-0 overflow-x-auto">
           <h3 className="text-sm font-medium px-4 pt-4">Latest HR rate updates</h3>
-          <table className="min-w-full mt-2">
+          <NumberedTable className="min-w-full mt-2">
             <thead><tr className="bg-gray-50 text-xs text-gray-600">
               <th className="px-3 py-2 text-left font-semibold">When</th>
               <th className="px-3 py-2 text-left font-semibold">Category</th>
@@ -161,7 +162,7 @@ function DashboardTab() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       )}
     </div>
@@ -170,7 +171,7 @@ function DashboardTab() {
 
 function QuotationMiniTable({ rows, empty }) {
   return (
-    <table className="min-w-full mt-2">
+    <NumberedTable className="min-w-full mt-2">
       <thead><tr className="bg-gray-50 text-xs text-gray-600">
         <th className="px-3 py-2 text-left font-semibold">Quotation</th>
         <th className="px-3 py-2 text-left font-semibold">Project</th>
@@ -194,7 +195,7 @@ function QuotationMiniTable({ rows, empty }) {
           </tr>
         ))}
       </tbody>
-    </table>
+    </NumberedTable>
   );
 }
 
@@ -374,7 +375,7 @@ function QuotationsTab() {
 
       <div className="card p-0 overflow-hidden">
         <div className="table-responsive">
-        <table className="min-w-[850px]">
+        <NumberedTable className="min-w-[850px]">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-3 text-left font-semibold">Quotation</th>
             <th className="px-3 py-3 text-left font-semibold">Project / Site</th>
@@ -453,7 +454,7 @@ function QuotationsTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
         </div>
       </div>
 
@@ -774,7 +775,7 @@ function RatesTab() {
 
       <div className="card p-0 overflow-hidden">
         <div className="table-responsive">
-        <table className="min-w-[850px]">
+        <NumberedTable className="min-w-[850px]">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-3 text-left font-semibold">Labour Category</th>
             <th className="px-3 py-3 text-left font-semibold">Type / Skill</th>
@@ -837,7 +838,7 @@ function RatesTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
         </div>
       </div>
 
@@ -937,7 +938,7 @@ function RatesTab() {
         {historyFor && (historyFor.rows.length === 0
           ? <p className="text-sm text-gray-500">No changes recorded yet.</p>
           : (
-            <table className="min-w-full">
+            <NumberedTable className="min-w-full">
               <thead><tr className="bg-gray-50 text-xs text-gray-600">
                 <th className="px-3 py-2 text-left font-semibold">When</th>
                 <th className="px-3 py-2 text-left font-semibold">Action</th>
@@ -964,7 +965,7 @@ function RatesTab() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </NumberedTable>
           ))}
       </Modal>
     </div>

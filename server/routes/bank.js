@@ -125,12 +125,21 @@ router.post('/auto-match', requirePermission('cashflow', 'edit'), (req, res) => 
 router.put('/transactions/:id/match', requirePermission('cashflow', 'edit'), (req, res) => {
   const db = getDb();
   const { matched_type, matched_id, note } = req.body || {};
+  const before = db.prepare('SELECT matched_type, matched_id FROM bank_transactions WHERE id=?').get(req.params.id);
+  const reserved = () => res.status(409).json({ error: 'A reconciled TReDS funding credit cannot be unmatched or reassigned', code: 'RECONCILIATION_LOCKED' });
+  if (before?.matched_type === 'vt_funding') {
+    if (matched_type === 'vt_funding' && Number(matched_id) === Number(before.matched_id)) return res.json({ ok: true });
+    return reserved();
+  }
+  if (matched_type === 'vt_funding') return res.status(400).json({ error: 'Reserve a TReDS credit through its funding reconciliation', code: 'FUNDING_RECONCILIATION_REQUIRED' });
   if (!matched_type) {
-    db.prepare('UPDATE bank_transactions SET matched_type=NULL, matched_id=NULL, matched_note=NULL, matched_by=NULL, matched_at=NULL WHERE id=?').run(req.params.id);
+    const result = db.prepare("UPDATE bank_transactions SET matched_type=NULL, matched_id=NULL, matched_note=NULL, matched_by=NULL, matched_at=NULL WHERE id=? AND (matched_type IS NULL OR matched_type <> 'vt_funding')").run(req.params.id);
+    if (!result.changes && db.prepare("SELECT 1 FROM bank_transactions WHERE id=? AND matched_type='vt_funding'").get(req.params.id)) return reserved();
     return res.json({ ok: true, unmatched: true });
   }
-  db.prepare('UPDATE bank_transactions SET matched_type=?, matched_id=?, matched_note=?, matched_by=?, matched_at=CURRENT_TIMESTAMP WHERE id=?')
+  const result = db.prepare("UPDATE bank_transactions SET matched_type=?, matched_id=?, matched_note=?, matched_by=?, matched_at=CURRENT_TIMESTAMP WHERE id=? AND (matched_type IS NULL OR matched_type <> 'vt_funding')")
     .run(String(matched_type).slice(0, 20), +matched_id || null, String(note || '').slice(0, 200) || null, req.user.id, req.params.id);
+  if (!result.changes && db.prepare("SELECT 1 FROM bank_transactions WHERE id=? AND matched_type='vt_funding'").get(req.params.id)) return reserved();
   res.json({ ok: true });
 });
 

@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 // Inventory Management — Phase 1
 //
 // Tabs:
@@ -458,7 +460,7 @@ function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter,
           interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
         <div className="md:hidden space-y-2">
-          {stockPager.pageItems.map(r => {
+          {stockPager.pageItems.map((r, serialIndex) => {
             const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
             const cond = r.latest_condition || '';
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -469,7 +471,7 @@ function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter,
             const eff = +r.effective_rate || 0;
             const value = +r.value || (eff * (+r.quantity || 0));
             return (
-              <div key={r.id} className={`card p-3 space-y-2 ${low ? 'border-l-4 border-amber-500' : ''}`}>
+              <div key={r.id} className={`card p-3 space-y-2 ${low ? 'border-l-4 border-amber-500' : ''}`}><SerialNumber value={(stockPager.page - 1) * stockPager.perPage + serialIndex + 1} />
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-gray-900 text-sm leading-snug">{r.item_name}</div>
@@ -583,7 +585,7 @@ function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter,
       {flatStock.length > 0 && (
         <div className="hidden md:block card p-0">
           <div className="table-responsive">
-            <table className="text-sm w-full freeze-head min-w-[850px]">
+            <NumberedTable start={(stockPager.page - 1) * stockPager.perPage + 1} className="text-sm w-full freeze-head min-w-[850px]">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
@@ -792,7 +794,7 @@ function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter,
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       )}
@@ -1387,7 +1389,7 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
               <span className="text-[11px] text-gray-500">{filledCount} warehouse(s) · total {fmtNum(totalQty)} {selectedItem.uom || 'units'}</span>
             </div>
             <div className="table-responsive">
-              <table className="text-sm w-full min-w-[550px]">
+              <NumberedTable className="text-sm w-full min-w-[550px]">
                 <thead className="bg-gray-50/60">
                   <tr>
                     <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -1444,7 +1446,7 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
                     );
                   })}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           </div>
 
@@ -1864,7 +1866,7 @@ function EquationTab({ warehouses }) {
         : data.rows.length === 0 ? <div className="text-sm text-gray-400 py-6 text-center">Is warehouse mein koi movement nahi hai.</div>
         : (<>
         <div className="table-responsive">
-          <table className="w-full text-xs min-w-[750px]">
+          <NumberedTable start={(eqPager.page - 1) * eqPager.perPage + 1} className="w-full text-xs min-w-[750px]">
             <thead><tr className="text-gray-500 border-b text-left">
               <th className="py-1.5 pr-2">Material</th>
               <th className="py-1.5 px-2 text-right">Opening</th>
@@ -1895,7 +1897,7 @@ function EquationTab({ warehouses }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
         <Pagination {...eqPager} />
       </>)}
@@ -1936,7 +1938,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
       </div>
 
       <div className="card p-0 table-responsive">
-        <table className="text-sm w-full freeze-head min-w-[850px]">
+        <NumberedTable start={(mvmtPager.page - 1) * mvmtPager.perPage + 1} className="text-sm w-full freeze-head min-w-[850px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
@@ -1983,7 +1985,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
       <Pagination {...mvmtPager} />
     </>
@@ -2030,7 +2032,7 @@ function ReportsTab({ summary, warehouses }) {
           <h4 className="font-semibold text-gray-700 flex items-center gap-2"><FiBarChart2 size={14} className="text-red-600" /> Stock Value by Warehouse</h4>
         </div>
         <div className="table-responsive">
-          <table className="text-sm w-full min-w-[650px]">
+          <NumberedTable className="text-sm w-full min-w-[650px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -2063,7 +2065,7 @@ function ReportsTab({ summary, warehouses }) {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
 
@@ -2076,7 +2078,7 @@ function ReportsTab({ summary, warehouses }) {
           <span className="text-[11px] text-amber-700">items at or below their reorder level</span>
         </div>
         <div className="table-responsive">
-          <table className="text-sm w-full min-w-[600px]">
+          <NumberedTable className="text-sm w-full min-w-[600px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -2107,7 +2109,7 @@ function ReportsTab({ summary, warehouses }) {
                 );
               })}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       </div>
     </>
@@ -2140,7 +2142,7 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
         {canCreate && <button onClick={() => open()} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Add Warehouse</button>}
       </div>
       <div className="card p-0 table-responsive">
-        <table className="text-sm w-full freeze-head min-w-[800px]">
+        <NumberedTable className="text-sm w-full freeze-head min-w-[800px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Name</th>
@@ -2184,7 +2186,7 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal?.id ? 'Edit Warehouse' : 'Add Warehouse'}>

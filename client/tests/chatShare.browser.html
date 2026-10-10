@@ -1,0 +1,38 @@
+<!doctype html><html><meta charset="utf-8"><title>Local chat sharing checks</title><body>
+<h1>Local chat sharing checks</h1><p>Synthetic content only. No production data.</p>
+<button id="run">Run draft storage tests</button><pre id="result"></pre>
+<button id="share">Receive sample text + document through share target</button>
+<button data-mode="send">Fail next send response after commit</button><button data-mode="offline">Fail share page connection</button><button data-mode="online">Restore share page connection</button><button data-mode="session">Expire next session check</button>
+<script src="/chat-share-store.js"></script><script>
+const out=document.querySelector('#result');
+document.querySelectorAll('[data-mode]').forEach(button=>button.onclick=async()=>{await fetch('/__simulate/'+button.dataset.mode,{method:'POST'});out.textContent='Ready: '+button.textContent;});
+document.querySelector('#run').onclick=async()=>{
+ const results=[],ids=[];const store=window.SotynChatShares;
+ const check=(ok,label)=>{if(!ok)throw Error(label);results.push('PASS '+label);};
+ try {
+  const d=await store.create({text:'Selected text only',files:[new File(['sample'],'sample.txt',{type:'text/plain'})]});ids.push(d.id);
+  const claimed=await store.claim(d.id,9001);check(claimed.ownerId===9001,'Draft bound to signed-in account');
+  check(await claimed.files[0].file.text()==='sample','File bytes survive IndexedDB round trip');
+  try{await store.claim(d.id,9002);throw Error('wrong account allowed');}catch(e){check(/another account/.test(e.message),'Another account cannot claim saved draft');}
+  const locked={...claimed,groups:[1],locked:true};await store.save(locked);
+  try{await store.save({...locked,groups:[2]});throw Error('changed locked payload');}catch(e){check(/already sending/.test(e.message),'Retry payload cannot change across tabs');}
+  check((await store.claim(d.id,9001)).requestId===d.requestId,'Reload preserves idempotency key');
+  for(const content of [{text:'',files:[]},{text:'x'.repeat(16001),files:[]},{text:'x',files:[new File(['code'],'run.html')]}]) {
+   let rejected=false;try{await store.create(content);}catch{rejected=true;}check(rejected,'Unsupported or empty incoming content rejected');
+  }
+  const old=await store.create({text:'expire',files:[]});ids.push(old.id);const oc=await store.claim(old.id,9001);
+  await store.save({...oc,createdAt:Date.now()-store.TTL-1});
+  try{await store.claim(old.id,9001);throw Error('expired allowed');}catch(e){check(/expired/.test(e.message),'Expired draft cannot resume');}
+  check(!(await store.list(9001)).some(d=>d.id===old.id),'Expired draft cleaned from local storage');
+  out.textContent=results.join('\n');
+ }catch(e){out.textContent=results.join('\n')+'\nFAIL '+e.message;}
+ finally{for(const id of ids)await store.remove(id);}
+};
+document.querySelector('#share').onclick=async()=>{
+ const reg=await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;
+ if(!navigator.serviceWorker.controller){location.reload();return;}
+ const form=new FormData();form.set('text','Please review the attached meeting notes shared from WhatsApp.');
+ form.append('files',new File(['These are synthetic meeting notes for the local sharing test.'],'meeting-notes.txt',{type:'text/plain'}));
+ const res=await fetch('/site-chat/share-target',{method:'POST',body:form});location.assign(res.url);
+};
+</script></body></html>

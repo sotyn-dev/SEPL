@@ -1,3 +1,4 @@
+import NumberedTable from '../../components/NumberedTable';
 // Admin "Location Tracking" — two views:
 //
 //   LIVE     : every user's most recent GPS ping (last 30 min by default)
@@ -586,7 +587,7 @@ export default function Locations() {
                     </div>
                   </div>
                   <div className="overflow-x-auto">
-                    <table className="text-xs w-full">
+                    <NumberedTable className="text-xs w-full">
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-16">Time</th>
@@ -632,7 +633,7 @@ export default function Locations() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                 </div>
               )}

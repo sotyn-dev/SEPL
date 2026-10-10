@@ -1,3 +1,4 @@
+import NumberedTable from '../components/NumberedTable';
 // Labour Management System — Labour Master (Module 3).
 //
 //   Roster          individual worker records (ID/name/mobile/Aadhaar/trade/wage)
@@ -133,7 +134,7 @@ function RosterTab({ sites, canCreate, canEdit, canDelete }) {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">Code</th>
             <th className="px-3 py-2 text-left">Name</th>
@@ -178,7 +179,7 @@ function RosterTab({ sites, canCreate, canEdit, canDelete }) {
             ))}
             {rows.length === 0 && <tr><td colSpan={9} className="text-center py-8 text-gray-400">No workers found</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal === 'add' || modal === 'edit'} onClose={() => setModal(null)} title={modal === 'edit' ? `Edit — ${form.labour_code || ''}` : 'Add Worker'}>
@@ -300,7 +301,7 @@ function AttendanceTab({ sites, canCreate }) {
       </div>
 
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">Code</th>
             <th className="px-3 py-2 text-left">Name</th>
@@ -332,7 +333,7 @@ function AttendanceTab({ sites, canCreate }) {
             })}
             {workers.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-gray-400">No active workers for this site</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );
@@ -364,7 +365,7 @@ function TransfersTab({ sites, canCreate }) {
         {canCreate('labour_master') && <button onClick={() => { setForm({ labour_id: '', to_site_id: '', transfer_date: today(), reason: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-1 text-sm"><FiPlus size={14} /> New Transfer</button>}
       </div>
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">Date</th>
             <th className="px-3 py-2 text-left">Worker</th>
@@ -384,7 +385,7 @@ function TransfersTab({ sites, canCreate }) {
             ))}
             {rows.length === 0 && <tr><td colSpan={5} className="text-center py-8 text-gray-400">No transfers yet</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title="New Transfer">
@@ -440,7 +441,7 @@ function WageTab({ sites }) {
         <a href={`/wage-register-print?from=${from}&to=${to}`} target="_blank" rel="noreferrer" className="btn text-sm ml-auto">Export PDF</a>
       </div>
       <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">Code</th>
             <th className="px-3 py-2 text-left">Name</th>
@@ -472,7 +473,7 @@ function WageTab({ sites }) {
               <td className="px-3 py-2 text-right text-emerald-700">{money(data.total_due)}</td>
             </tr></tfoot>
           )}
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );
@@ -520,7 +521,7 @@ function ProgressTab({ sites, canCreate }) {
         </div>
       )}
       <div className="lg:col-span-2 card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <NumberedTable className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-2 text-left">Date</th>
             <th className="px-3 py-2 text-left">Site</th>
@@ -540,7 +541,7 @@ function ProgressTab({ sites, canCreate }) {
             ))}
             {rows.length === 0 && <tr><td colSpan={5} className="text-center py-8 text-gray-400">No progress logged yet</td></tr>}
           </tbody>
-        </table>
+        </NumberedTable>
       </div>
     </div>
   );

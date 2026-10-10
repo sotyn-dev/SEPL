@@ -1,3 +1,5 @@
+import SerialNumber from '../components/SerialNumber';
+import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import { useSearchParams } from 'react-router-dom';
@@ -7,6 +9,7 @@ import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import DispatchDocuments from '../components/DispatchDocuments';
+import RentalDispatchModal from '../components/RentalDispatchModal';
 import DeliveryReceivingModal from '../components/DeliveryReceivingModal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
@@ -104,7 +107,7 @@ const UNIT_OPTIONS = [
 //   pending                  → amber dot, italic "Pending"
 //   approved                 → green tick + name + short date
 //   rejected                 → red cross + name + truncated reason
-function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }) {
+function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason, override, originalApprover }) {
   const fmt = (d) => {
     if (!d) return '';
     const dt = new Date(d.includes('T') ? d : d.replace(' ', 'T') + 'Z');
@@ -115,24 +118,47 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   if (status === 'approved') {
     return (
       <div className="text-[11px]">
-        <div className="inline-flex items-baseline gap-1 md:flex">
+        <div className="inline-flex items-baseline gap-1 md:flex flex-wrap">
           <span className="text-emerald-600 font-mono w-3">✓</span>
           <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
           <span className="text-emerald-700 font-medium">{name || '—'}</span>
+          {override && (
+            <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium inline-block"
+                  title={originalApprover ? `Admin override · Originally assigned to ${originalApprover}` : 'Admin override'}>
+              Override
+            </span>
+          )}
         </div>
-        <span className="text-[10px] text-gray-500 pl-1 md:pl-4">{fmt(at)}</span>
+        <div className="text-[10px] text-gray-500 pl-1 md:pl-4">
+          <span>{fmt(at)}</span>
+          {override && originalApprover && (
+            <span className="text-gray-400 ml-1">· Assigned: {originalApprover}</span>
+          )}
+        </div>
       </div>
     );
   }
   if (status === 'rejected' || isReject) {
     return (
       <div className="text-[11px]" title={reason || ''}>
-        <div className="inline-flex items-baseline gap-1 md:flex">
+        <div className="inline-flex items-baseline gap-1 md:flex flex-wrap">
           <span className="text-red-600 font-mono w-3">✗</span>
           <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
           <span className="text-red-700 font-medium">{name || '—'}</span>
+          {override && (
+            <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium inline-block"
+                  title={originalApprover ? `Admin override · Originally assigned to ${originalApprover}` : 'Admin override'}>
+              Override
+            </span>
+          )}
         </div>
-        {reason && <span className="pl-1 text-[10px] text-red-500 italic truncate max-w-[100px] md:pl-4">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+        <div className="text-[10px] pl-1 md:pl-4">
+          {at && <span className="text-gray-500">{fmt(at)}</span>}
+          {override && originalApprover && (
+            <span className="text-gray-400 ml-1">· Assigned: {originalApprover}</span>
+          )}
+          {reason && <span className="block text-red-500 italic truncate max-w-[120px]">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+        </div>
       </div>
     );
   }
@@ -478,6 +504,7 @@ export default function Procurement() {
   // SELLING price (what we invoice the client), not vendor cost. Mam can
   // tweak qty / rate / disc % / include flag per row before generating.
   const [dispatchItems, setDispatchItems] = useState([]);
+  const [rentalDispatchTarget, setRentalDispatchTarget] = useState(null);
   const [dispatchItemsLoading, setDispatchItemsLoading] = useState(false);
   const [dispatchItemsSource, setDispatchItemsSource] = useState('po_items'); // 'po_items' | 'vendor_po' | 'empty'
   // Rate-source diagnostic — mam (2026-05-16): "if sales bill we
@@ -946,7 +973,9 @@ export default function Procurement() {
   activeTabRef.current = tab;
 
   // Central paginated loader for indents
+  const indentRequest = useRef(0);
   const fetchIndentsPage = async () => {
+    const request = ++indentRequest.current;
     setIndLoading(true);
     const { page, limit, status, category, from, to, search } = indParamsRef.current;
     try {
@@ -961,6 +990,7 @@ export default function Procurement() {
           q: search ? search.trim() : undefined,
         }
       });
+      if (request !== indentRequest.current) return;
       if (res.data && Array.isArray(res.data.rows)) {
         setIndents(res.data.rows);
         setIndTotal(res.data.total || 0);
@@ -973,10 +1003,11 @@ export default function Procurement() {
       }
     } catch (err) {
       console.error('[fetchIndentsPage] failed:', err);
+      if (request !== indentRequest.current) return;
       setIndents([]);
       setIndTotal(0);
     } finally {
-      setIndLoading(false);
+      if (request === indentRequest.current) setIndLoading(false);
     }
   };
 
@@ -1954,19 +1985,78 @@ export default function Procurement() {
     ? ['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(i.status) && (i.created_by === user?.id || i.can_review_indent || canEdit('procurement') || isAdmin())
     : canEdit('procurement') && i.status !== 'approved');
   const renderRaiserActions = (i) => {
-    if (['submitted', 'crm_approved'].includes(i.status)) return i.can_review_indent ? (
-      <><button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
-        <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button></>
-    ) : <span className="text-xs text-amber-700">Awaiting review: {i.approver_names?.l1}</span>;
-    if (i.status === 'l1_approved') return i.created_by === user?.id ? (
-      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
-    ) : <span className="text-xs text-blue-700">Awaiting raiser: {i.created_by_name || i.raised_by_name}</span>;
+    if (['submitted', 'crm_approved'].includes(i.status)) {
+      if (isAdmin()) {
+        return (
+          <>
+            <button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
+            <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button>
+            <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+          </>
+        );
+      }
+      if (i.can_review_indent) {
+        return (
+          <>
+            <button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
+            <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button>
+          </>
+        );
+      }
+      return <span className="text-xs text-amber-700">Awaiting review: {i.approver_names?.l1}</span>;
+    }
+    if (i.status === 'l1_approved') {
+      if (isAdmin()) {
+        return (
+          <>
+            <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
+            <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+          </>
+        );
+      }
+      if (i.created_by === user?.id) {
+        return (
+          <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
+        );
+      }
+      return <span className="text-xs text-blue-700">Awaiting raiser: {i.created_by_name || i.raised_by_name}</span>;
+    }
     return null;
   };
   const renderRaiserTrail = (i) => <div className="space-y-1 text-xs min-w-[160px]">
-    {i.approval_policy === 'crm_two_level' && <ApprovalLevelRow label="CRM" status={i.crm_status} name={i.crm_by_name} at={i.crm_at} />}
-    <ApprovalLevelRow label="Checked correct" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at} />
-    <ApprovalLevelRow label="Raiser approval" status={i.l2_status || 'pending'} name={i.l2_by_name || i.created_by_name || i.raised_by_name} at={i.l2_at} waiting={i.l1_status !== 'approved'} />
+    {i.approval_policy === 'crm_two_level' && (
+      <ApprovalLevelRow
+        label="CRM"
+        status={i.crm_status}
+        name={i.crm_by_name}
+        at={i.crm_at}
+        override={!!i.crm_admin_override}
+        originalApprover={i.crm_assigned_approver}
+        isReject={i.status === 'rejected' && i.crm_status === 'rejected'}
+        reason={i.crm_reason || i.rejection_reason}
+      />
+    )}
+    <ApprovalLevelRow
+      label="Checked correct"
+      status={i.l1_status}
+      name={i.l1_by_name || i.approver_names?.l1}
+      at={i.l1_at}
+      override={!!i.l1_admin_override}
+      originalApprover={i.l1_assigned_approver}
+      isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
+      reason={i.rejection_reason}
+    />
+    <ApprovalLevelRow
+      label="Raiser approval"
+      status={i.l2_status || 'pending'}
+      name={i.l2_by_name || i.created_by_name || i.raised_by_name}
+      at={i.l2_at}
+      waiting={i.l1_status !== 'approved'}
+      override={!!i.l2_admin_override}
+      originalApprover={i.l2_assigned_approver}
+      isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
+      reason={i.rejection_reason}
+    />
     <span className="text-gray-400">Revision {i.review_revision || 0}</span>
   </div>;
 
@@ -2785,10 +2875,22 @@ export default function Procurement() {
                   .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
                   .filter(r => {
                     if (!rq) return true;
-                    return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
+                    return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.specification || ''} ${r.size || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
                   });
-                exportCsv('vendor-rates', ['Item', 'Make', 'Qty', 'Unit', 'Vendor 1', 'Rate 1', 'Vendor 2', 'Rate 2', 'Vendor 3', 'Rate 3', 'Final'],
-                  rows.map(r => [r.description || r.master_name || '', r.make || '', r.qty ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+                exportCsv('vendor-rates', ['Sub-Item', 'Make', 'Qty', 'Unit', 'Vendor 1', 'Rate 1', 'Vendor 2', 'Rate 2', 'Vendor 3', 'Rate 3', 'Final'],
+                  rows.map(r => [
+                    [r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ') || '',
+                    r.make || '',
+                    r.qty ?? '',
+                    r.unit || '',
+                    r.vendor1_name,
+                    r.vendor1_rate,
+                    r.vendor2_name,
+                    r.vendor2_rate,
+                    r.vendor3_name,
+                    r.vendor3_rate,
+                    r.final_rate
+                  ]));
               }
             }} className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm py-1.5 px-3 shrink-0"><FiDownload size={14} /> Export Excel</button>
             {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
@@ -2864,7 +2966,7 @@ export default function Procurement() {
 
             {/* Desktop */}
             <div className="card p-0 overflow-auto hidden md:block">
-              <table className="table text-sm">
+              <NumberedTable start={pg.from + 1} className="table text-sm">
                 <thead><tr><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th className="text-right">Delivery Bill</th><th>Bill PDF</th><th>Tally Bill</th><th>Status</th></tr></thead>
                 <tbody>
                   {pg.rows.map(i => (
@@ -2904,13 +3006,13 @@ export default function Procurement() {
                     </td></tr>
                   )}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile */}
             <div className="md:hidden space-y-2">
-              {pg.rows.map(i => (
-                <div key={i.id} className="card p-3 space-y-2">
+              {pg.rows.map((i, serialIndex) => (
+                <div key={i.id} className="card p-3 space-y-2"><SerialNumber value={pg.from + serialIndex + 1} />
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-bold text-gray-900">{i.indent_number}</div>
@@ -3221,7 +3323,7 @@ export default function Procurement() {
                   : 'No indents yet'}
               </div>
             )}
-            {indPg.rows.map(i => {
+            {indPg.rows.map((i, serialIndex) => {
               const items = i.items || [];
               const expanded = expandedIndents.has(i.id);
               const visibleItems = expanded ? items : items.slice(0, 3);
@@ -3360,7 +3462,7 @@ export default function Procurement() {
                 };
 
                 return (
-                  <div key={i.id} className="card p-3 space-y-2">
+                  <div key={i.id} className="card p-3 space-y-2"><SerialNumber value={indPg.from + serialIndex + 1} />
                     {/* Header: indent # · date · status */}
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
@@ -3481,10 +3583,12 @@ export default function Procurement() {
                           {isCrmTwoLevel && (
                             <ApprovalLevelRow label="CRM" status={i.crm_status}
                               name={i.crm_by_name} at={i.crm_at}
+                              override={!!i.crm_admin_override} originalApprover={i.crm_assigned_approver}
                               isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
                           )}
                           <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
                             waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
+                            override={!!i.l1_admin_override} originalApprover={i.l1_assigned_approver}
                             isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
                           {/* L2 row shows when the switch is ON, or for a genuinely
                             completed historical L2 (approved/rejected). A stale
@@ -3493,6 +3597,7 @@ export default function Procurement() {
                           {i.l2_status && i.l2_status !== 'n/a' && (i.l2_enabled || i.l2_status === 'approved' || i.l2_status === 'rejected') && (
                             <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name} at={i.l2_at}
                               waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                              override={!!i.l2_admin_override} originalApprover={i.l2_assigned_approver}
                               isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
                           )}
                         </div>
@@ -3501,12 +3606,14 @@ export default function Procurement() {
                           {i.status === 'approved' && (
                             <div className="text-emerald-700 font-medium flex items-center gap-1">
                               <FiCheck size={11} /> {i.approved_by_name || 'approver'}
+                              {i.approved_admin_override ? <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                               {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{fmtIST(i.approved_at, { day: '2-digit', month: 'short' })}</span>}
                             </div>
                           )}
                           {i.status === 'rejected' && (
                             <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason}>
                               <FiX size={11} /> {i.rejected_by_name || 'approver'}
+                              {i.rejected_admin_override ? <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                               {i.rejection_reason && <span className="text-[10px] italic ml-1 truncate">"{i.rejection_reason}"</span>}
                             </div>
                           )}
@@ -3556,7 +3663,7 @@ export default function Procurement() {
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
               to scroll-end-then-back to read row labels).  Hidden on phones
               in favour of the card list above. */}
-            <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col dense-cols">
+            <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><NumberedTable start={indPg.from + 1} className="freeze-head freeze-col dense-cols">
               <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th className="text-right">Delivery Bill<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(billable × del. %)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
               <tbody>
                 {indPg.rows.map(i => {
@@ -3567,7 +3674,7 @@ export default function Procurement() {
                       <tr>
                         <td className="text-center">
                           {items.length > 0 && (
-                            <button onClick={() => toggleIndentRow(i.id)} className="p-1 text-gray-400 hover:text-red-600" title={expanded ? 'Hide items' : 'Show items'}>
+                            <button type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Hide' : 'Show'} items for ${i.indent_number}`} onClick={() => toggleIndentRow(i.id)} className="p-1 text-gray-400 hover:text-red-600" title={expanded ? 'Hide items' : 'Show items'}>
                               {expanded ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
                             </button>
                           )}
@@ -3678,6 +3785,8 @@ export default function Procurement() {
                                   status={i.crm_status}
                                   name={i.crm_by_name}
                                   at={i.crm_at}
+                                  override={!!i.crm_admin_override}
+                                  originalApprover={i.crm_assigned_approver}
                                   isReject={i.status === 'rejected' && i.crm_status === 'rejected'}
                                   reason={i.crm_reason || i.rejection_reason}
                                 />
@@ -3688,6 +3797,8 @@ export default function Procurement() {
                                 name={i.l1_by_name || i.approver_names?.l1}
                                 at={i.l1_at}
                                 waiting={i.approval_policy === 'crm_two_level' && i.crm_status !== 'approved' && i.l1_status === 'pending'}
+                                override={!!i.l1_admin_override}
+                                originalApprover={i.l1_assigned_approver}
                                 isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
                                 reason={i.rejection_reason}
                               />
@@ -3701,6 +3812,8 @@ export default function Procurement() {
                                   name={i.l2_by_name}
                                   at={i.l2_at}
                                   waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                                  override={!!i.l2_admin_override}
+                                  originalApprover={i.l2_assigned_approver}
                                   isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
                                   reason={i.rejection_reason}
                                 />
@@ -3712,6 +3825,7 @@ export default function Procurement() {
                                 <div>
                                   <div className="text-emerald-700 font-medium flex items-center gap-1">
                                     <FiCheck size={12} /> {i.approved_by_name || 'approver'}
+                                    {i.approved_admin_override ? <span className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                                   </div>
                                   {i.approved_at && (
                                     <div className="text-[10px] text-gray-500">
@@ -3724,6 +3838,7 @@ export default function Procurement() {
                                 <div>
                                   <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason || ''}>
                                     <FiX size={12} /> {i.rejected_by_name || 'approver'}
+                                    {i.rejected_admin_override ? <span className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                                   </div>
                                   {i.rejection_reason && (
                                     <div className="text-[10px] text-gray-500 italic max-w-[180px] truncate" title={i.rejection_reason}>
@@ -3789,7 +3904,7 @@ export default function Procurement() {
                                     return (
                                       <>
                                         <button onClick={() => openApproveModal(i)} className="btn text-xs py-1 px-2 bg-purple-600 text-white hover:bg-purple-700">Approve as CRM</button>
-                                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>}
+                                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>
                                       </>
                                     );
                                   }
@@ -3930,9 +4045,9 @@ export default function Procurement() {
                         </td>
                       </tr>
                       {expanded && items.length > 0 && (
-                        <tr className="bg-gray-50">
+                        <tr className="bg-gray-50" data-serial-skip>
                           <td></td>
-                          <td colSpan="13" className="p-3">
+                          <td colSpan="12" className="p-3">
                             <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
                             <table className="text-xs w-full">
                               <thead>
@@ -3995,7 +4110,12 @@ export default function Procurement() {
                                     </td>
                                     <td className="py-1 pr-3 text-right">{it.quantity}</td>
                                     <td className="py-1 pr-3">{it.unit || '—'}</td>
-                                    <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
+                                    <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}
+                                      {it.rental_dispatches?.map(rental => <div key={rental.document_number} className="mt-1 text-[10px] text-cyan-800 min-w-[140px]">
+                                        {rental.document_number} · {rental.quantity} {it.unit}<br />
+                                        {rental.rental_start_date} → {rental.rental_end_date}<br />{rental.rental_days} calendar days
+                                      </div>)}
+                                    </td>
                                     <td className="py-1 pr-3 text-right">
                                       {+it.master_price > 0 ? (
                                         <div className="inline-flex items-center gap-1">
@@ -4060,7 +4180,7 @@ export default function Procurement() {
                   : 'No indents yet'}
               </td></tr>}
             </tbody>
-          </table>
+          </NumberedTable>
           </div>
           {/* Pager OUTSIDE the 70vh scroll box — inside it, Prev/Next only
               appeared after scrolling the box to its very bottom, so users
@@ -4303,7 +4423,7 @@ export default function Procurement() {
                   </div>
                   <p className="text-[11px] text-amber-700">Check each rate against the quotation. Only ticked rows with a rate are saved; you can correct any rate first.</p>
                   <div className="overflow-x-auto border rounded">
-                    <table className="w-full text-xs">
+                    <NumberedTable className="w-full text-xs">
                       <thead>
                         <tr className="bg-gray-50 text-left">
                           <th className="p-2 w-8"></th><th className="p-2">Item</th><th className="p-2">Qty</th>
@@ -4339,7 +4459,7 @@ export default function Procurement() {
                           );
                         })}
                       </tbody>
-                    </table>
+                    </NumberedTable>
                   </div>
                   <div className="flex justify-end gap-2">
                     <button type="button" className="btn btn-secondary text-xs" disabled={bulkApplying} onClick={() => setQuoteReview(null)}>Cancel</button>
@@ -4359,7 +4479,7 @@ export default function Procurement() {
             {/* freeze-2col + explicit --freeze-col-1-w pins Indent + Sub-Item
               while scrolling rate columns horizontally (mam 2026-05-25). */}
             <div className="card p-0 overflow-x-auto hidden lg:block" style={{ '--freeze-col-1-w': '150px' }}>
-              <table className="text-xs freeze-2col" style={{ minWidth: '1400px' }}>
+              <NumberedTable start={ratesPg.from + 1} className="text-xs freeze-2col" style={{ minWidth: '1400px' }}>
                 <thead>
                   <tr className="bg-gray-50">
                     {/* width matches --freeze-col-1-w so the 2nd sticky column
@@ -4521,19 +4641,19 @@ export default function Procurement() {
                   })}
                   {mergedRates.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile card layout — uses the same merged-by-(indent · sub-item)
               data so the same item across multiple BOQs collapses to ONE
               card with the combined qty. */}
             <div className="lg:hidden space-y-2">
-              {ratesPg.rows.map(r => {
+              {ratesPg.rows.map((r, serialIndex) => {
                 const stat = r.rate_status || 'pending';
                 // All 3 vendor quotes (name + rate) required before Finalize (mam 2026-07-21).
                 const threeFilled = [1, 2, 3].every(n => Number(r[`vendor${n}_rate`]) > 0 && String(r[`vendor${n}_name`] || '').trim());
                 return (
-                  <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}>
+                  <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}><SerialNumber value={ratesPg.from + serialIndex + 1} />
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex items-start gap-2">
                         <input type="checkbox" className="mt-1" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} title="Tick for bulk fill" />
@@ -4689,7 +4809,7 @@ export default function Procurement() {
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
-                <table className="text-xs freeze-head">
+                <NumberedTable start={pendingPg.from + 1} className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">Indent</th>
                     <th className="px-2 py-1 text-left">Item</th>
@@ -4735,7 +4855,7 @@ export default function Procurement() {
                       <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
                     )}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
 
               {/* Mobile cards — mam (2026-06-02): "i want mobile view
@@ -4750,11 +4870,11 @@ export default function Procurement() {
                     <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
                   </div>
                 )}
-                {!vpoPendingLoading && pendingPg.rows.map(p => {
+                {!vpoPendingLoading && pendingPg.rows.map((p, serialIndex) => {
                   const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
                   const stat = p.rate_status || 'pending';
                   return (
-                    <div key={p.indent_item_id} className="card p-3 space-y-2">
+                    <div key={p.indent_item_id} className="card p-3 space-y-2"><SerialNumber value={pendingPg.from + serialIndex + 1} />
                       {/* Header: indent # · status */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
@@ -4858,7 +4978,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><NumberedTable start={listPg.from + 1} className="freeze-head freeze-col">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {listPg.rows.map(v => (
@@ -4987,14 +5107,14 @@ export default function Procurement() {
                 {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}
               </td></tr>}
             </tbody>
-            </table></div>
+            </NumberedTable></div>
           {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
           <div className="hidden md:block card p-0"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></div>
 
           {/* Mobile cards — polished pattern matching Indents card. */}
           <div className="md:hidden space-y-3">
-            {listPg.rows.map(v => (
-              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}>
+            {listPg.rows.map((v, serialIndex) => (
+              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}><SerialNumber value={listPg.from + serialIndex + 1} />
                 {/* Header: PO # · status */}
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
@@ -5237,7 +5357,7 @@ export default function Procurement() {
 
             {/* Desktop table (mobile gets card list below — mam 2026-06-02) */}
             <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block">
-              <table className="text-xs freeze-head">
+              <NumberedTable className="text-xs freeze-head">
                 <thead><tr className="bg-gray-50">
                   <th className="px-3 py-2 text-left">PO Number</th>
                   <th className="px-3 py-2 text-left">Indent / Site</th>
@@ -5326,7 +5446,7 @@ export default function Procurement() {
                     </td></tr>
                   )}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
 
             {/* Mobile cards — same polished pattern as Indents (mam). */}
@@ -5550,7 +5670,7 @@ export default function Procurement() {
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
-                <table className="text-xs freeze-head">
+                <NumberedTable start={fuPg.from + 1} className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
                     <th className="px-2 py-1 text-left">Indent</th>
@@ -5611,7 +5731,7 @@ export default function Procurement() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
 
               {/* Mobile cards — polished pattern matching Indents (mam). */}
@@ -5621,7 +5741,7 @@ export default function Procurement() {
                     <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
                   </div>
                 )}
-                {!billsFuLoading && fuPg.rows.map(po => {
+                {!billsFuLoading && fuPg.rows.map((po, serialIndex) => {
                   const d = daysDiff(po.expected_receipt_date);
                   let chip;
                   if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
@@ -5630,7 +5750,7 @@ export default function Procurement() {
                   else if (d <= 3)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-orange-300 bg-orange-50 text-orange-700 uppercase">In {d}d</span>;
                   else              chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50 text-gray-600 uppercase">In {d}d</span>;
                   return (
-                    <div key={po.id} className="card p-3 space-y-2">
+                    <div key={po.id} className="card p-3 space-y-2"><SerialNumber value={fuPg.from + serialIndex + 1} />
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
@@ -5714,7 +5834,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{billsListTotal > 0 ? `${billsListPg.from + 1}–${billsListPg.to}` : 0}</span> of {billsListTotal}
                 </div>
               </div>
-          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><NumberedTable start={billsListPg.from + 1} className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Freight</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListLoading && <tr><td colSpan="11" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
@@ -5755,15 +5875,15 @@ export default function Procurement() {
                 </td></tr>
               )}
             </tbody>
-            </table></div>
+            </NumberedTable></div>
           {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
           <div className="hidden md:block card p-0"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></div>
 
           {/* Mobile cards — polished pattern matching Indents (mam). */}
           <div className="md:hidden space-y-3">
             {billsListLoading && <div className="card p-6 text-center text-gray-500 text-sm"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...</div>}
-            {!billsListLoading && billsListPg.rows.map(b => (
-              <div key={b.id} className="card p-3 space-y-2">
+            {!billsListLoading && billsListPg.rows.map((b, serialIndex) => (
+              <div key={b.id} className="card p-3 space-y-2"><SerialNumber value={billsListPg.from + serialIndex + 1} />
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Bill No</div>
@@ -5875,6 +5995,8 @@ export default function Procurement() {
         };
         const createChallan = async (po) => {
           try {
+            const rental = await api.get(`/procurement/vendor-po/${po.id}/rental-dispatch-items`);
+            if (rental.data.items.length) { setRentalDispatchTarget({ poId: po.id }); return; }
             const fd = new FormData();
             fd.append('vendor_po_id', po.id);
             fd.append('document_type', 'challan');
@@ -5884,6 +6006,8 @@ export default function Procurement() {
         };
         const openReceivePo = async po => {
           try {
+            const rental = await api.get(`/procurement/vendor-po/${po.id}/rental-dispatch-items`);
+            if (rental.data.items.length) { setRentalDispatchTarget({ poId: po.id, receiveAfter: true }); return; }
             const form = new FormData(); form.append('vendor_po_id',po.id); form.append('document_type','challan');
             const created = await api.post('/procurement/delivery-notes',form);
             const result = await api.get('/procurement/delivery-notes');
@@ -5900,7 +6024,12 @@ export default function Procurement() {
             setters[field](value); setDispListPage(1);
           }}
           canUpload={canApprove('procurement') || isAdmin()}
-          onSalesBill={openSalesBillUpload} onReceive={setReceiveTarget}
+          onSalesBill={openSalesBillUpload} onReceive={row => {
+            if (row.has_rental_items && !row.rental_confirmed_at) setRentalDispatchTarget({ noteId: row.id, receiveAfter: true });
+            else setReceiveTarget(row);
+          }}
+          onRental={row => setRentalDispatchTarget({ noteId: row.id })}
+          onAnotherRental={row => setRentalDispatchTarget({ poId: row.vendor_po_id })}
           onPrint={async row => {
             const printWin = window.open('', '_blank');
             try {
@@ -5914,6 +6043,19 @@ export default function Procurement() {
         />;
       })()}
 
+      {rentalDispatchTarget && <RentalDispatchModal target={rentalDispatchTarget} onClose={() => setRentalDispatchTarget(null)} onSaved={async result => {
+        const receiveAfter = rentalDispatchTarget.receiveAfter;
+        setRentalDispatchTarget(null); load();
+        toast.success('Rental dispatch saved in Rental Tools');
+        if (receiveAfter) {
+          try {
+            const response = await api.get('/procurement/delivery-notes');
+            const row = response.data.find(item => item.id === result.id);
+            if (row) setReceiveTarget(row);
+          } catch { toast.error('Dispatch saved. Refresh to upload receiving.'); }
+        }
+      }} />}
+
       {/* ===== Debit Notes tab (mam 2026-06-04 post-PO chart, stage 7) ===== */}
       {tab === 'debitnotes' && (
         <div className="space-y-3">
@@ -5925,7 +6067,7 @@ export default function Procurement() {
             <button onClick={openDnModal} className="btn btn-secondary flex items-center gap-2" title="Most debits are raised automatically on variance — use this only for a manual one"><FiPlus /> Manual Debit Note</button>
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full freeze-head">
+            <NumberedTable className="text-sm w-full freeze-head">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">No.</th>
@@ -5958,7 +6100,7 @@ export default function Procurement() {
                   );
                 })}
               </tbody>
-            </table>
+            </NumberedTable>
           </div>
         </div>
       )}
@@ -7059,7 +7201,7 @@ export default function Procurement() {
                 <div className="p-4 text-center text-sm text-gray-400">Loading items…</div>
               ) : (
                 <div className="overflow-x-auto max-h-[360px]">
-                  <table className="text-xs">
+                  <NumberedTable className="text-xs">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="px-2 py-1.5"></th>
@@ -7136,7 +7278,7 @@ export default function Procurement() {
                       <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
-                  </table>
+                  </NumberedTable>
                 </div>
               )}
             </div>
@@ -7250,7 +7392,7 @@ export default function Procurement() {
                   {!billItems.any_receipt && <span className="text-[10px] text-amber-600 normal-case">No receipt recorded — edit received below</span>}
                 </div>
                 <div className="overflow-x-auto max-h-52">
-                  <table className="text-[11px] w-full">
+                  <NumberedTable className="text-[11px] w-full">
                     <thead className="bg-gray-50 sticky top-0"><tr>
                       <th className="px-2 py-1 text-left">Item</th>
                       <th className="px-2 py-1 text-right">PO Qty</th>
@@ -7277,7 +7419,7 @@ export default function Procurement() {
                         );
                       })}
                     </tbody>
-                  </table>
+                  </NumberedTable>
                 </div>
                 {shortLines.length > 0 && (
                   <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
@@ -7358,7 +7500,7 @@ export default function Procurement() {
             <p className="text-[11px] text-gray-500">Edit how much was actually received per line. Saving updates the Delivery Challan’s quantity.</p>
             <div className="border rounded-lg overflow-hidden">
               <div className="overflow-x-auto max-h-72">
-                <table className="text-[11px] w-full">
+                <NumberedTable className="text-[11px] w-full">
                   <thead className="bg-gray-50 sticky top-0"><tr>
                     <th className="px-2 py-1 text-left">Item</th>
                     <th className="px-2 py-1 text-right">PO Qty</th>
@@ -7383,7 +7525,7 @@ export default function Procurement() {
                       );
                     })}
                   </tbody>
-                </table>
+                </NumberedTable>
               </div>
             </div>
             <div className="flex justify-end gap-3">
@@ -7722,7 +7864,7 @@ export default function Procurement() {
                   );
                 })()}
                 <div className="max-h-56 overflow-y-auto border rounded">
-                  <table className="w-full text-[11px]">
+                  <NumberedTable className="w-full text-[11px]">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr className="text-left text-gray-500">
                         <th className="px-2 py-1 w-8"></th>
@@ -7764,7 +7906,7 @@ export default function Procurement() {
                         </td>
                       </tr>
                     </tfoot>
-                  </table>
+                  </NumberedTable>
                 </div>
               </div>
             )}

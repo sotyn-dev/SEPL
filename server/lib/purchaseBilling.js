@@ -22,7 +22,7 @@ function ensurePurchaseBilling(db) {
       purchase_bill_id INTEGER NOT NULL REFERENCES purchase_bills(id) ON DELETE CASCADE,
       debit_note_id INTEGER NOT NULL UNIQUE REFERENCES debit_notes(id), amount REAL NOT NULL CHECK(amount>0),
       allocated_by INTEGER REFERENCES users(id), PRIMARY KEY(purchase_bill_id,debit_note_id));
-    INSERT OR IGNORE INTO purchase_bill_pos SELECT id,vendor_po_id FROM purchase_bills WHERE vendor_po_id IS NOT NULL;`);
+    INSERT OR IGNORE INTO purchase_bill_pos(purchase_bill_id, vendor_po_id) SELECT id,vendor_po_id FROM purchase_bills WHERE vendor_po_id IS NOT NULL;`);
   db.exec(`CREATE TABLE IF NOT EXISTS purchase_bill_match_reviews (
     id INTEGER PRIMARY KEY, purchase_bill_id INTEGER NOT NULL REFERENCES purchase_bills(id) ON DELETE CASCADE,
     signature TEXT NOT NULL, reason TEXT NOT NULL, reviewed_by INTEGER REFERENCES users(id),

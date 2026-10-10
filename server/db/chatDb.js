@@ -157,6 +157,7 @@ function getChatDb() {
       END;
     `);
   } catch (e) { console.warn('[chat-db] member audit triggers:', e.message); }
+  require('../lib/chatShare').ensureSchema(chatDb);
   return chatDb;
 }
 

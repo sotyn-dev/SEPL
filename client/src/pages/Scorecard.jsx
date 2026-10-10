@@ -1,18 +1,22 @@
+import NumberedTable from '../components/NumberedTable';
 // Per-employee MIS scorecard matching the SEPL Google Sheet format mam
 // shared on 2026-05-04. Three tabs:
 //   - My Scorecard  : current user's MIS for the picked week, editable
 //   - Team Overview : all employees' weekly score (existing dashboard)
 //   - Templates     : admin manages KPI templates per role
-//   - Assign        : admin maps each user to a template
+//   - Assign        : admin maps each user to one or more templates
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useLayoutEffect, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
+import TemplateAssignmentPicker from '../components/TemplateAssignmentPicker';
+import { ScoreMetricSettings, ScoreMetricDates } from '../components/ScoreMetricInputs';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { createLatestScorecardRequest, createScorecardSelection, selectScorecardWeek, selectedScorecard, saveSelectedScorecard } from '../utils/scorecardSelection';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -84,10 +88,11 @@ const scorePill = (s) => {
 // `value` attributes on the <option> elements in the source dropdown.
 const SOURCE_INFO = {
   manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
+  'auto:lead_response_hours': { plan: 'You set the allowed response hours', actual: 'Average hours from Sales Funnel lead creation to its first completed follow-up by this user, for leads created in the week. Older completions without a timestamp are excluded.' },
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
   'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
   'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
-  'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
+  'auto:checklists':            { plan: 'Assigned checklist occurrences due Mon–Sat, following frequency and attendance rules', actual: 'Approved occurrences from that same week, including submissions made by an admin for the assignee' },
   'auto:tickets':               { plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed' },
   'auto:snags':                  { plan: 'Snags raised within the week, assigned to user', actual: 'Of those, status = Approved (whenever approved)' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
@@ -114,6 +119,9 @@ const SOURCE_INFO = {
   'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
   'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
   'auto:dpr_cost_by_user':      { plan: 'DPRs submitted',                     actual: 'DPRs approved' },
+  'auto:dpr_actual_cost_all':   { scope: 'All sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) across all sites’ submitted Daily Reports dated Mon–Sat; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_sites': { scope: 'Assigned sites', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) for the employee’s assigned sites, by report date Mon–Sat, regardless of uploader; planned-only reports are excluded' },
+  'auto:dpr_actual_cost_by_user': { scope: 'Employee uploads', plan: 'You set the weekly amount', actual: 'Sum of Actual Cost (B-actual) from Daily Reports submitted by this employee, by report date Mon–Sat; planned-only reports are excluded' },
   // Sales / CRM
   'auto:leads_created':         { plan: 'You set',                            actual: 'Leads assigned to user this week' },
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
@@ -194,6 +202,12 @@ const SOURCE_INFO = {
   'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
 };
 const sourceInfoFor = (src) => {
+  if (src?.startsWith('auto:raci_step:indent_to_dispatch:')) {
+    return {
+      plan: 'Whole module: completed this week + pending work that reached this step this week',
+      actual: 'Whole module: this step completed during the selected week. Previous pending / done shows older work and how much was completed this week.',
+    };
+  }
   // Per-step RACI sources are dynamic (auto:raci_step:<module>:<step>) — one hint covers them all.
   if (src && src.startsWith('auto:raci_step:')) {
     // Kept in step with raciUserWeek(): Planned is now week-scoped on BOTH
@@ -213,7 +227,12 @@ export default function Scorecard() {
   const [tab, setTab] = useUrlTab(['my', 'assign', 'overview', 'templates', 'view'], 'my');
   const [weekStart, setWeekStart] = useState(lastMonday(0));
   const [viewUserId, setViewUserId] = useState(user?.id);
+  const [currentSelection] = useState(() => createScorecardSelection({ userId: viewUserId, weekStart }));
   const [scorecard, setScorecard] = useState(null);
+  const [weeklyRequests] = useState(() => createLatestScorecardRequest(
+      url => api.get(url).then(response => response.data), setScorecard,
+      error => toast.error(error.response?.data?.error || 'Failed to load scorecard'),
+  ));
   const [savingKpi, setSavingKpi] = useState(null);
   const [templates, setTemplates] = useState([]);
   // Inline rename of the open template's heading (mam 2026-08-22 "rename title").
@@ -241,6 +260,22 @@ export default function Scorecard() {
       setRenameSaving(false);
     }
   };
+  const [teamSummary, setTeamSummary] = useState(null);
+  const [overviewGroupMode, setOverviewGroupMode] = useState('flat'); // 'flat' | 'by_leader'
+
+  // TSK-0914: Load direct reports' team summary for the viewed user/week
+  useEffect(() => {
+    if (tab !== 'my' && tab !== 'view') {
+      setTeamSummary(null);
+      return;
+    }
+    let on = true;
+    api.get(`/scoring/team-summary?leader_id=${viewUserId}&week_start=${weekStart}`)
+      .then(r => { if (on) setTeamSummary(r.data); })
+      .catch(() => { if (on) setTeamSummary(null); });
+    return () => { on = false; };
+  }, [tab, viewUserId, weekStart]);
+
   const [overview, setOverview] = useState(null);
   // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
   // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
@@ -258,10 +293,8 @@ export default function Scorecard() {
   }, [viewUserId, weekStart]);
 
   const loadScorecard = useCallback(() => {
-    api.get(`/scoring/scorecard?user_id=${viewUserId}&week_start=${weekStart}`)
-      .then(r => setScorecard(r.data))
-      .catch(err => toast.error(err.response?.data?.error || 'Failed'));
-  }, [viewUserId, weekStart]);
+    return weeklyRequests.load(`/scoring/scorecard?user_id=${viewUserId}&week_start=${weekStart}`);
+  }, [viewUserId, weekStart, weeklyRequests]);
 
   const loadOverview = useCallback(() => {
     api.get(`/scoring/weekly?week_start=${weekStart}`)
@@ -284,16 +317,20 @@ export default function Scorecard() {
   const saveEntry = async (kpi, patch) => {
     setSavingKpi(kpi.kpi_id);
     try {
-      await api.put('/scoring/scorecard/entry', {
-        user_id: viewUserId,
-        kpi_id: kpi.kpi_id,
-        week_start: weekStart,
-        ...patch,
+      await saveSelectedScorecard({ userId: viewUserId, weekStart }, () => api.put('/scoring/scorecard/entry', {
+        user_id: viewUserId, kpi_id: kpi.kpi_id, week_start: weekStart, ...patch,
+      }), () => currentSelection.get(), current => {
+        const loads = [weeklyRequests.load(`/scoring/scorecard?user_id=${current.userId}&week_start=${current.weekStart}`)];
+        if (current.rangeApplied) {
+          setPeriodCard(null);
+          loads.push(periodRequests.load(`/scoring/scorecard-range?user_id=${current.userId}&from=${current.rangeApplied.from}&to=${current.rangeApplied.to}`));
+        }
+        return Promise.all(loads);
       });
-      // Reload to get fresh totals
-      loadScorecard();
+      return true;
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
+      return false;
     } finally {
       setSavingKpi(null);
     }
@@ -330,18 +367,36 @@ export default function Scorecard() {
   // longer triggers a half-picked calculation; the score computes only when
   // Apply is pressed (rangeApplied snapshots the dates at that moment).
   const [rangeApplied, setRangeApplied] = useState(null);
+  useLayoutEffect(() => {
+    currentSelection.set({ userId: viewUserId, weekStart, rangeApplied });
+  }, [viewUserId, weekStart, rangeApplied, currentSelection]);
   const [rangeStat, setRangeStat] = useState(null);
   // The FULL scorecard aggregated over the applied period — when set, the MIS
   // table shows these summed values instead of the single week (read-only).
   const [periodCard, setPeriodCard] = useState(null);
+  const [periodRequests] = useState(() => createLatestScorecardRequest(
+      url => api.get(url).then(response => response.data), setPeriodCard,
+      () => setPeriodCard(null),
+  ));
+  const chooseWeek = week => {
+    if (!week) return;
+    const selectedWeek = selectScorecardWeek(week, {
+      weekly: weeklyRequests, period: periodRequests,
+      setScorecard, setPeriodCard, setRangeApplied, setRangeStat, setWeekStart,
+    });
+    // Re-selecting the same week also exits period mode and refreshes its data.
+    if (selectedWeek === weekStart) loadScorecard();
+  };
   useEffect(() => {
     if (!rangeApplied) { setPeriodCard(null); return; }
-    let on = true;
-    api.get(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`)
-      .then(r => { if (on) setPeriodCard(r.data); })
-      .catch(() => { if (on) setPeriodCard(null); });
-    return () => { on = false; };
-  }, [rangeApplied, viewUserId]);
+    setPeriodCard(null);
+    periodRequests.load(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`);
+    return () => periodRequests.invalidate();
+  }, [rangeApplied, viewUserId, periodRequests]);
+  useEffect(() => () => {
+    weeklyRequests.invalidate();
+    periodRequests.invalidate();
+  }, [weeklyRequests, periodRequests]);
   useEffect(() => {
     if (!rangeApplied) { setRangeStat(null); return; }
     let from = mondayOf(rangeApplied.from), to = mondayOf(rangeApplied.to);
@@ -365,14 +420,15 @@ export default function Scorecard() {
 
   // Period mode: the applied From→To aggregate replaces the weekly card in the
   // table + banner (read-only — entries/commitments are per-week concepts).
-  const displayCard = periodCard || scorecard;
+  const displayCard = selectedScorecard({ scorecard, periodCard, rangeApplied, viewUserId, weekStart });
+  const periodMode = !!rangeApplied;
   // Whose scorecard is on screen — comes from the API (admin can switch to any
   // employee), falling back to the logged-in user so the export filename and
   // the print letterhead are never blank.
   const cardOwnerName = displayCard?.user?.name || scorecard?.user?.name
     || (viewUserId === user?.id ? (user?.name || '') : '');
   const grouped = (displayCard?.kpis || []).reduce((acc, k) => {
-    const g = k.group_name || 'Other';
+    const g = (displayCard?.templates?.length > 1 ? `${k.template_name} · ` : '') + (k.group_name || 'Other');
     if (!acc[g]) acc[g] = [];
     acc[g].push(k);
     return acc;
@@ -431,18 +487,18 @@ export default function Scorecard() {
           <FiCalendar className="text-gray-400" />
           <div>
             <label className="label">Week starting (Monday)</label>
-            <input type="date" className="input" value={weekStart} onChange={e => setWeekStart(e.target.value)} />
+            <input type="date" className="input" value={weekStart} onChange={e => chooseWeek(e.target.value)} />
           </div>
           <div className="flex gap-1 flex-wrap items-center">
-            <button onClick={() => setWeekStart(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
-            <button onClick={() => setWeekStart(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
-            <button onClick={() => setWeekStart(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
+            <button onClick={() => chooseWeek(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
+            <button onClick={() => chooseWeek(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
+            <button onClick={() => chooseWeek(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
             {/* Mam 2026-08-17: "add with two weeks last 6 months also" — jump
                 to any week of the last 6 months without date-picker gymnastics. */}
             <select
               className="input text-xs w-auto py-1.5"
               value={Array.from({ length: 26 }, (_, i) => lastMonday(i)).includes(weekStart) ? weekStart : ''}
-              onChange={e => e.target.value && setWeekStart(e.target.value)}>
+              onChange={e => e.target.value && chooseWeek(e.target.value)}>
               <option value="" disabled>Last 6 months…</option>
               {Array.from({ length: 26 }, (_, i) => {
                 const m = lastMonday(i);
@@ -477,10 +533,9 @@ export default function Scorecard() {
               )}
             </div>
           </div>
-          {/* Admin-only employee switcher — pick anyone to inspect their MIS
-              without leaving the My Scorecard tab. */}
-          {(tab === 'my' || tab === 'view') && isAdmin() && (
-            <EmployeeSwitcher value={viewUserId} onChange={setViewUserId} />
+          {/* Admin & Team Leader employee switcher (TSK-0914) */}
+          {(tab === 'my' || tab === 'view') && (
+            <EmployeeSwitcher value={viewUserId} onChange={setViewUserId} currentUserId={user?.id} />
           )}
           <div className="ml-auto text-sm text-gray-700">
             <span className="font-semibold">{fmtRange(weekStart)}</span>
@@ -489,25 +544,42 @@ export default function Scorecard() {
       )}
 
       {/* MY SCORECARD */}
-      {(tab === 'my' || tab === 'view') && scorecard && (
+      {(tab === 'my' || tab === 'view') && !displayCard && <div className="card p-4 text-sm text-gray-500">Loading scorecard…</div>}
+      {(tab === 'my' || tab === 'view') && displayCard && (
         <div id="scorecard-print-area" className="space-y-6">
+          {/* Active view indicator for team leader / admin viewing another user */}
+          {viewUserId !== user?.id && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 flex items-center justify-between text-xs text-blue-800 print:hidden shadow-sm">
+              <span className="flex items-center gap-1.5 font-medium">
+                <FiUser size={14} className="text-blue-600" /> Viewing <b>{cardOwnerName}</b>&apos;s scorecard (Read Only)
+              </span>
+              <button
+                type="button"
+                onClick={() => { setViewUserId(user?.id); setTab('my'); }}
+                className="btn btn-secondary text-xs py-1 px-2.5 bg-white hover:bg-gray-50 text-blue-700 border-blue-200"
+              >
+                ← Back to My Scorecard
+              </button>
+            </div>
+          )}
           {/* Letterhead — appears only on the printed sheet */}
           <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
             <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
-            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
+            <div className="text-sm font-semibold mt-1">{periodMode ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
             <div className="text-xs text-gray-600">
-              {periodCard ? `${fmtRange(periodCard.from)} → ${fmtRange(periodCard.to)} (${periodCard.weeks_counted} weeks)` : fmtRange(weekStart)}
+              {periodMode ? `${fmtRange(displayCard.from)} → ${fmtRange(displayCard.to)} (${displayCard.weeks_counted} weeks)` : fmtRange(weekStart)}
               {' '}· Template: {displayCard.template?.name || '—'}
             </div>
           </div>
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-50 to-blue-50">
             <div>
-              <p className="text-xs text-gray-500">Template</p>
+              <p className="text-xs text-gray-500">{displayCard.templates?.length > 1 ? `${displayCard.templates.length} templates` : 'Template'}</p>
               <p className="text-lg font-bold">{displayCard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
+              {displayCard.templates?.length > 1 && <p className="text-xs text-gray-500 mt-1">Combined score uses the KPI weights across all selected templates. Matching KPI names remain separate by template.</p>}
               {displayCard.template?.description && <p className="text-xs text-gray-500">{displayCard.template.description}</p>}
-              {periodCard && (
+              {periodMode && (
                 <span className="inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
-                  PERIOD {fmtRange(periodCard.from).replace(/ \d{4}$/, '')} → {fmtRange(periodCard.to)} · {periodCard.weeks_counted} wks
+                  PERIOD {fmtRange(displayCard.from).replace(/ \d{4}$/, '')} → {fmtRange(displayCard.to)} · {displayCard.weeks_counted} wks
                 </span>
               )}
             </div>
@@ -515,14 +587,14 @@ export default function Scorecard() {
               {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button
                   onClick={() => exportCsv(
-                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
+                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodMode ? `${displayCard.from}_to_${displayCard.to}` : weekStart}`,
+                    ['Employee', 'Template', 'Group', 'Team / Person', 'Weight %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
+                      k.template_name || '',
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
-                      vsPlan(k.last_week_pct) ?? '',
                       k.planned ?? 0,
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
@@ -538,14 +610,14 @@ export default function Scorecard() {
                   title="Download this scorecard as CSV (opens in Excel)"
                 ><FiDownload size={14} /> Export Excel</button>
               )}
-              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+              {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button onClick={printScorecard}
                   className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
                   title="Print this scorecard (or save as PDF)"
                 ><FiPrinter size={14} /> Print</button>
               )}
               <div className="text-right">
-                <p className="text-xs text-gray-500">{periodCard ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
+                <p className="text-xs text-gray-500">{periodMode ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
                 {(() => {
                   // Headline = variance from plan (achievement% − 100), 2 decimals:
                   // 0% = on plan, negative = behind, positive = ahead (mam 2026-07-04).
@@ -606,35 +678,35 @@ export default function Scorecard() {
           {displayCard.template && Object.keys(grouped).map(groupName => (
             <div key={groupName} className="card p-0 overflow-x-auto">
               <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 font-bold text-amber-800 text-sm">{groupName}</div>
-              <table className="w-full text-xs">
+              <NumberedTable className="w-full text-xs">
                 <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
                   <tr>
                     <th className="text-left p-2 w-[260px]">Team / Person</th>
                     <th className="text-center p-2 w-16">Weight %</th>
-                    <th className="text-center p-2 w-20">Last Week %</th>
                     <th className="text-center p-2 w-24">Planned</th>
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
                     <th className="text-center p-2 w-24">Previous<br />Pending / Done</th>
-                    <th className="text-left p-2">Commitment</th>
+                    <th className="text-left p-2 w-40">Commitment</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {grouped[groupName].map(k => {
+                  {grouped[groupName].map((k, index) => {
                     const isRaci = k.data_source === 'auto:raci_steps_done';
                     return (
                       <Fragment key={k.kpi_id}>
                         <KpiRow
+                          serialNumber={index + 1}
                           kpi={k}
                           saving={savingKpi === k.kpi_id}
                           onSave={(patch) => saveEntry(k, patch)}
-                          readOnly={!!periodCard || (viewUserId !== user.id && !isAdmin())}
-                          onStepWise={isRaci && !periodCard ? toggleRaci : null}
-                          stepWiseOpen={isRaci && !periodCard && raci.open}
+                          readOnly={periodMode || (viewUserId !== user.id && !isAdmin())}
+                          onStepWise={isRaci && !periodMode ? toggleRaci : null}
+                          stepWiseOpen={isRaci && !periodMode && raci.open}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
-                            <td colSpan={8} className="p-3">
+                            <td colSpan={7} className="p-3">
                               {raci.loading
                                 ? <p className="text-sm text-gray-500">Loading step-wise…</p>
                                 : <RaciBreakdown data={raci.data} />}
@@ -645,15 +717,134 @@ export default function Scorecard() {
                     );
                   })}
                 </tbody>
-              </table>
+              </NumberedTable>
             </div>
           ))}
+          {/* TEAM LEADER'S TEAM SCORING (TSK-0914) */}
+          {teamSummary?.has_team && (
+            <div className="card p-0 overflow-hidden border border-indigo-200 print:hidden mt-6 shadow-sm">
+              <div className="bg-gradient-to-r from-indigo-50 to-blue-50 p-4 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-sm">
+                      <FiUsers size={16} />
+                    </span>
+                    <h3 className="font-bold text-base text-gray-800">
+                      Team Performance · {teamSummary.leader.name}&apos;s Team
+                    </h3>
+                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">
+                      {teamSummary.team_count} direct report{teamSummary.team_count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Weekly scoring for employees reporting to this team leader. Click &ldquo;Open MIS&rdquo; to inspect any team member&apos;s scorecard.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="text-right bg-white px-3 py-1.5 rounded-lg border border-indigo-100 shadow-sm">
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wide">Team Average</p>
+                    <p className={`text-xl font-bold ${vsClr(teamSummary.team_average_score)}`}>
+                      {fmtVs(teamSummary.team_average_score)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b border-gray-200">
+                    <tr>
+                      <th className="p-2 text-left w-12">#</th>
+                      <th className="p-2 text-left">Team Member</th>
+                      <th className="p-2 text-left">Role / Template</th>
+                      <th className="p-2 text-center">Delegations</th>
+                      <th className="p-2 text-center">PMS Tasks</th>
+                      <th className="p-2 text-center">Checklists</th>
+                      <th className="p-2 text-center">Tickets</th>
+                      <th className="p-2 text-right">Weekly Score</th>
+                      <th className="p-2 text-center w-24">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {teamSummary.members.map((m, idx) => (
+                      <tr key={m.user_id} className="hover:bg-blue-50/40 transition">
+                        <td className="p-2 font-bold text-gray-400">#{idx + 1}</td>
+                        <td className="p-2">
+                          <div className="font-semibold text-gray-900">{m.name}</div>
+                          <div className="text-[10px] text-gray-400">{m.department || '—'}</div>
+                        </td>
+                        <td className="p-2">
+                          <span className="text-gray-700">{m.template_name || m.role || '—'}</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.delegations.done === m.delegations.given && m.delegations.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.delegations.done}/{m.delegations.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.pms.done === m.pms.given && m.pms.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.pms.done}/{m.pms.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.checklists.done === m.checklists.given && m.checklists.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.checklists.done}/{m.checklists.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <span className={m.tickets.done === m.tickets.given && m.tickets.given > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-600'}>
+                            {m.tickets.done}/{m.tickets.given}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${scorePill(m.variance)}`}>
+                            {fmtVs(m.score)}
+                          </span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => { setViewUserId(m.user_id); setTab('view'); }}
+                            className="btn btn-secondary text-[11px] py-1 px-2.5 font-medium hover:bg-indigo-50 hover:text-indigo-600"
+                          >
+                            Open MIS
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* TEAM OVERVIEW (existing weekly aggregator) */}
+      {/* TEAM OVERVIEW (existing weekly aggregator + TSK-0914 Group by Leader) */}
       {tab === 'overview' && overview && (
         <div className="card p-0 overflow-x-auto">
+          <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50 border-b border-gray-200">
+            <div className="text-xs text-gray-500">
+              <b>{overview.users.length}</b> employees scored for week {fmtRange(weekStart)}.
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setOverviewGroupMode('flat')}
+                className={`px-2.5 py-1 rounded font-medium transition ${overviewGroupMode === 'flat' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border text-gray-700 hover:bg-gray-100'}`}
+              >
+                All Employees (Ranked)
+              </button>
+              <button
+                type="button"
+                onClick={() => setOverviewGroupMode('by_leader')}
+                className={`px-2.5 py-1 rounded font-medium transition ${overviewGroupMode === 'by_leader' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border text-gray-700 hover:bg-gray-100'}`}
+              >
+                Group by Team Leader
+              </button>
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
@@ -669,23 +860,69 @@ export default function Scorecard() {
               </tr>
             </thead>
             <tbody>
-              {overview.users.map((u, i) => (
-                <tr key={u.user_id}>
-                  <td className="text-gray-400 font-bold">#{i + 1}</td>
-                  <td className="font-medium">{u.name}</td>
-                  <td className="text-xs text-gray-500">{u.department || u.role}</td>
-                  <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
-                  <td className="text-center">{u.pms.done}/{u.pms.given}</td>
-                  <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
-                  <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
-                  <td className="text-right">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
-                  </td>
-                  <td>
-                    <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
-                  </td>
-                </tr>
-              ))}
+              {overviewGroupMode === 'flat' ? (
+                overview.users.map((u, i) => (
+                  <tr key={u.user_id}>
+                    <td className="text-gray-400 font-bold">#{i + 1}</td>
+                    <td className="font-medium">{u.name}</td>
+                    <td className="text-xs text-gray-500">{u.department || u.role}</td>
+                    <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
+                    <td className="text-center">{u.pms.done}/{u.pms.given}</td>
+                    <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
+                    <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
+                    <td className="text-right">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
+                    </td>
+                    <td>
+                      <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                (() => {
+                  const groups = {};
+                  overview.users.forEach(u => {
+                    const grp = u.manager_name ? `${u.manager_name}'s Team` : 'Other / Direct Reports';
+                    if (!groups[grp]) groups[grp] = [];
+                    groups[grp].push(u);
+                  });
+                  return Object.entries(groups).map(([groupTitle, groupMembers]) => {
+                    const avg = groupMembers.reduce((s, m) => s + (m.score || 0), 0) / groupMembers.length;
+                    return (
+                      <Fragment key={groupTitle}>
+                        <tr className="bg-indigo-50/70 border-y border-indigo-100">
+                          <td colSpan={7} className="py-2 px-3 font-bold text-xs text-indigo-900">
+                            👥 {groupTitle} ({groupMembers.length} member{groupMembers.length === 1 ? '' : 's'})
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${scorePill(avg - 100)}`}>
+                              Avg: {fmtVs(avg)}
+                            </span>
+                          </td>
+                          <td></td>
+                        </tr>
+                        {groupMembers.map((u, i) => (
+                          <tr key={u.user_id} className="hover:bg-gray-50/50">
+                            <td className="text-gray-400 font-bold pl-5">↳ #{i + 1}</td>
+                            <td className="font-medium">{u.name}</td>
+                            <td className="text-xs text-gray-500">{u.department || u.role}</td>
+                            <td className="text-center">{u.delegations.done}/{u.delegations.given}</td>
+                            <td className="text-center">{u.pms.done}/{u.pms.given}</td>
+                            <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
+                            <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
+                            <td className="text-right">
+                              <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
+                            </td>
+                            <td>
+                              <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  });
+                })()
+              )}
             </tbody>
           </table>
         </div>
@@ -698,7 +935,11 @@ export default function Scorecard() {
 
       {/* ASSIGN (admin) */}
       {tab === 'assign' && (
-        <AssignTemplates assignments={assignments} templates={templates} reload={() => api.get('/scoring/assignments').then(r => setAssignments(r.data))} />
+        <AssignTemplates assignments={assignments} templates={templates} onSaved={(userId, selected) => {
+          setAssignments(previous => previous.map(a => a.user_id !== userId ? a : { ...a,
+            templates: selected, template_ids: selected.map(t => t.id),
+            template_id: selected[0]?.id ?? null, template_name: selected.map(t => t.name).join(' + ') || null }));
+        }} />
       )}
 
       {/* Template detail modal. The heading doubles as an inline rename (mam
@@ -982,7 +1223,7 @@ function RaciBreakdown({ data }) {
       {Object.entries(byMod).map(([mod, list]) => (
         <div key={mod} className="border rounded overflow-hidden">
           <div className="px-3 py-1.5 bg-amber-50 border-b border-amber-200 font-semibold text-amber-800 text-sm">{mod}</div>
-          <table className="w-full text-xs">
+          <NumberedTable className="w-full text-xs">
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
               <tr>
                 <th className="text-left p-2">Step</th>
@@ -1024,26 +1265,29 @@ function RaciBreakdown({ data }) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </NumberedTable>
         </div>
       ))}
     </div>
   );
 }
 
-// ---------- Employee Switcher (admin) ----------
+// ---------- Employee Switcher (TSK-0914: Admin & Team Leader) ----------
 function EmployeeSwitcher({ value, onChange }) {
-  const [users, setUsers] = useState([]);
+  const [viewable, setViewable] = useState({ is_admin: false, is_leader: false, users: [] });
   useEffect(() => {
-    api.get('/scoring/assignments').then(r => setUsers(r.data || [])).catch(() => {});
+    api.get('/scoring/viewable-users').then(r => setViewable(r.data || { users: [] })).catch(() => {});
   }, []);
+
+  if (!viewable.users || viewable.users.length <= 1) return null;
+
   return (
     <div>
-      <label className="label">View as</label>
-      <select className="select" value={value || ''} onChange={e => onChange(+e.target.value)}>
-        {users.map(u => (
+      <label className="label">{viewable.is_admin ? 'View as' : 'Team Member'}</label>
+      <select className="select text-xs py-1.5" value={value || ''} onChange={e => onChange(+e.target.value)}>
+        {viewable.users.map(u => (
           <option key={u.user_id} value={u.user_id}>
-            {u.name} {u.template_name ? `— ${u.template_name}` : '(no template)'}
+            {u.is_self ? `👤 ${u.name} (Me)` : u.name} {u.template_name ? `— ${u.template_name}` : ''}
           </option>
         ))}
       </select>
@@ -1052,7 +1296,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
+function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -1072,16 +1316,17 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     setTotalUp(kpi.total_uptodate ?? '');
   }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.commitment_prev, kpi.total_uptodate]);
 
-  const flush = () => {
+  const flush = (extra = {}) => {
     if (readOnly) return;
-    onSave({
+    return onSave({
       planned: Number(planned) || 0,
       actual: Number(actual) || 0,
       pending_uptodate: pendingUp === '' ? null : Number(pendingUp),
       pending_work: pendingWork === '' ? null : Number(pendingWork),
       total_uptodate: totalUp === '' ? null : Number(totalUp),
-      commitment: commitment || null,
-      commitment_prev: commitmentPrev || null,
+      ...(String(commitment ?? '') !== String(kpi.commitment ?? '') ? { commitment } : {}),
+      ...(String(commitmentPrev ?? '') !== String(kpi.commitment_prev ?? '') ? { commitment_prev: commitmentPrev } : {}),
+      ...(extra?.nativeEvent ? {} : extra),
     });
   };
 
@@ -1095,15 +1340,25 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const prevDoneN = +(kpi.pending_auto ? kpi.pending_work : pendingWork) || 0;
   const prevAch = prevPend > 0 ? (prevDoneN / prevPend) * 100 : 100;
   const isAuto = kpi.is_auto;
+  const actualAuto = kpi.actual_auto ?? isAuto;
+  const plannedEditable = kpi.planned_editable ?? !isAuto;
+  const calculatedHours = kpi.actual_mode === 'dates';
+  const unit = kpi.metric_type === 'hours' ? 'hrs' : kpi.metric_type === 'amount' ? 'amount' : '';
 
   return (
     <tr className={`border-t ${saving ? 'bg-amber-50' : ''}`}>
+      <td className="serial-number-cell">{serialNumber}</td>
       <td className="p-2">
         <div className="font-medium">{kpi.metric_name}</div>
+        {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
+        {actualAuto && SOURCE_INFO[kpi.data_source]?.scope && <div className="text-[10px] text-gray-500" title={SOURCE_INFO[kpi.data_source].actual}>B-actual · {SOURCE_INFO[kpi.data_source].scope}</div>}
+        <ScoreMetricDates kpi={kpi} readOnly={readOnly} onSave={flush} />
         <div className="text-[10px] text-gray-500">
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
           {kpi.direction !== 'lower_better' && <span className="text-emerald-600">↑ higher better</span>}
-          {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
+          {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">{plannedEditable || !actualAuto ? 'MIXED' : 'AUTO'}</span>}
+          {calculatedHours && <span className="ml-2 text-blue-700">Date/time → hours</span>}
+          {kpi.data_source?.startsWith('auto:raci_step:indent_to_dispatch:') && <span className="ml-2 text-[9px] text-slate-500" title="Counts all Indent to Dispatch records for the selected step, regardless of employee RACI assignment">Whole module</span>}
           {onStepWise && (
             <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">
               {stepWiseOpen ? '▾ hide steps' : '▸ step-wise'}
@@ -1112,17 +1367,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         </div>
       </td>
       <td className="text-center p-2">{kpi.weightage}%</td>
-      <td className="text-center p-2">
-        {kpi.last_week_pct != null ? <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span> : <span className="text-gray-300">—</span>}
-      </td>
       {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
           pendency shows ONLY in the Pending column (up), not added here. */}
       <td className="text-center p-2">
-        {isAuto ? (
+        {!plannedEditable ? (
           <span className="text-gray-700 cursor-help"
-                title={kpi.target_auto
-                  ? 'Counted live by the ERP — what was given this week'
-                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`}>
+                title={(kpi.target_auto
+                  ? sourceInfoFor(kpi.data_source).plan
+                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`)}>
             {planned}
             {!kpi.target_auto && (
               <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
@@ -1131,12 +1383,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
             )}
           </span>
         ) : (
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />
+          <input aria-label={`Planned ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
         )}
       </td>
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{actual}</span> :
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
+        {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
+          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
+        {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
+        {kpi.observations != null && <span className="block text-[9px] text-gray-500">{kpi.observations} response{kpi.observations === 1 ? '' : 's'}</span>}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
       {/* Total Up-to-date column removed (mam 2026-09-14: "no need here").
@@ -1171,23 +1425,38 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           {fmtVs(prevAch)}
         </div>
       </td>
-      <td className="p-2">
+      <td className="p-2 w-40">
         {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
             pending tasks, and the CURRENT week's commitment. */}
         <div className="space-y-1">
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment on the previous pending tasks — when will the backlog be cleared?">Prev</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="previous pending — by when…"
-              value={commitmentPrev} onChange={e => setCommitmentPrev(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment for previous pending tasks (%)">Prev</span>
+            <KpiCommitmentInput label={`Previous commitment ${kpi.metric_name}`} value={commitmentPrev} onChange={setCommitmentPrev} onSave={flush} disabled={readOnly || saving} />
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for the current week's work">Now</span>
-            <input type="text" className="input text-xs w-full py-1" placeholder="current commitment…"
-              value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for current work (%) — carried into the following week">Now</span>
+            <KpiCommitmentInput label={`Current commitment ${kpi.metric_name}`} value={commitment} onChange={setCommitment} onSave={flush} disabled={readOnly || saving} />
           </div>
+          {kpi.commitment_inherited && String(commitment ?? '') === String(kpi.commitment ?? '') && <p className="text-[9px] text-gray-400 pl-10" title={`Commitment entered for week starting ${kpi.commitment_from_week}`}>From last week</p>}
         </div>
       </td>
     </tr>
+  );
+}
+
+function KpiCommitmentInput({ label, value, onChange, onSave, disabled }) {
+  const text = String(value ?? '');
+  const isNumber = text.trim() !== '' && Number.isFinite(Number(text));
+  const legacyNote = text.trim() !== '' && !isNumber;
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <input type="number" step="any" className="input text-center text-xs !w-20 py-1" aria-label={label} placeholder="—"
+          value={isNumber ? text : ''} onChange={e => onChange(e.target.value)} onBlur={() => onSave()} disabled={disabled} />
+        <span className="text-[10px] text-gray-400">%</span>
+      </div>
+      {legacyNote && <p className="max-w-40 truncate text-[9px] text-gray-500" title={text}>{text}</p>}
+    </div>
   );
 }
 
@@ -1251,12 +1520,19 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 // ---------- Template KPI Editor ----------
 // Per-step RACI <optgroup>s for the template editor's source pickers — one group
 // per module, each step an option whose value is "auto:raci_step:<module>:<step>".
-// Lets mam tie a KPI to ONE specific step, scored for whoever she names Responsible
-// in RACI (mam 2026-06-27: "in template pick step-wise which person I select in RACI").
+// Indent to Dispatch sources count the whole module; other steps use personal RACI.
+function DprActualCostOptions() {
+  return <>
+    <option value="auto:dpr_actual_cost_all">DPR Actual Cost (B-actual) — all sites</option>
+    <option value="auto:dpr_actual_cost_sites">DPR Actual Cost (B-actual) — assigned sites</option>
+    <option value="auto:dpr_actual_cost_by_user">DPR Actual Cost (B-actual) — submitted by employee</option>
+  </>;
+}
+
 function RaciStepOptions({ modules }) {
   if (!modules || !modules.length) return null;
   return modules.map(m => (
-    <optgroup key={m.key} label={`RACI step · ${m.label}`}>
+    <optgroup key={m.key} label={`${m.key === 'indent_to_dispatch' ? 'Whole module step' : 'RACI step'} · ${m.label}`}>
       {(m.steps || []).map(s => (
         <option key={s.key} value={`auto:raci_step:${m.key}:${s.key}`}>{s.label}</option>
       ))}
@@ -1266,8 +1542,10 @@ function RaciStepOptions({ modules }) {
 
 function TemplateKpiEditor({ templateId, onChange }) {
   const [tpl, setTpl] = useState(null);
+  const [expandedMetric, setExpandedMetric] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+  const emptyForm = { group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0, planned_mode: 'source', actual_mode: 'source', metric_type: 'number', time_basis: 'elapsed' };
+  const [form, setForm] = useState(emptyForm);
   // Module + step catalogue for the per-step RACI source options (one fetch).
   const [raciModules, setRaciModules] = useState([]);
   useEffect(() => { api.get('/raci/modules').then(r => setRaciModules(r.data || [])).catch(() => {}); }, []);
@@ -1292,7 +1570,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
   // mam doesn't have to pick before seeing data.
   useEffect(() => {
     api.get('/scoring/assignments').then(r => {
-      const onThis = (r.data || []).filter(a => a.template_id === templateId);
+      const onThis = (r.data || []).filter(a => (a.template_ids || [a.template_id]).includes(templateId));
       setPreviewUsers(onThis);
       if (onThis.length > 0 && !previewUserId) setPreviewUserId(onThis[0].user_id);
     }).catch(() => setPreviewUsers([]));
@@ -1316,7 +1594,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
       })
       .catch(() => setPreviewKpis({}))
       .finally(() => setPreviewLoading(false));
-  }, [previewUserId, templateId, me?.id]);
+  }, [previewUserId, templateId, me?.id, tpl]);
 
   // Per-user KPI overrides — mam (2026-06-02): "every person different
   // KPIs" (Option B).  Three things mam can override per user:
@@ -1386,7 +1664,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
     e.preventDefault();
     try {
       await api.post(`/scoring/templates/${templateId}/kpis`, form);
-      setForm({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+      setForm(emptyForm);
       setAdding(false);
       load(); onChange?.();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -1447,7 +1725,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
           </>
         )}
       </div>
-      <table className="w-full text-xs">
+      <NumberedTable className="w-full text-xs">
         <thead className="bg-gray-50">
           <tr>
             <th className="text-left p-2">Group</th>
@@ -1470,7 +1748,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
             const userWeight = userRow?.weight_override;
             const hasWeightOverride = userWeight != null;
             return (
-            <tr key={k.id} className={`border-t ${previewUserId && !userEnabled ? 'opacity-40 line-through' : ''}`}>
+            <Fragment key={k.id}>
+            <tr className={`border-t ${previewUserId && !userEnabled ? 'opacity-40 line-through' : ''}`}>
               <td className="p-2">
                 <div className="flex items-center gap-2">
                   {/* Mam (2026-06-02): per-user enable toggle.  When a
@@ -1547,7 +1826,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   // every auto source was locked as "auto" even where the
                   // description said "You set" — 49 sources with no box.
                   const live = previewKpis[k.id];
-                  const autoLocksTarget = isAuto && (live
+                  const autoLocksTarget = isAuto && k.planned_mode !== 'manual' && (live
                     ? !!live.target_auto
                     : !/^you set/i.test(sourceInfoFor(k.data_source)?.plan || ''));
                   const youSetHint = (
@@ -1615,14 +1894,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
                 })()}
               </td>
               <td className="p-2">
-                <select className="select text-xs" defaultValue={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
+                <select className="select text-xs" value={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
                   <option value="higher_better">↑ higher</option>
                   <option value="lower_better">↓ lower</option>
                 </select>
               </td>
               <td className="p-2">
-                <select key={`src-${k.id}-${raciModules.length}`} className="select text-xs" defaultValue={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value })}>
+                <select aria-label={`Source for ${k.metric_name}`} key={`src-${k.id}-${raciModules.length}`} className="select text-xs" value={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value, ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' } : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' } : {}) })}>
                   <option value="manual">manual entry</option>
+                  <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
                   <optgroup label="Tasks & Tickets">
                     <option value="auto:delegations">delegations (assigned/done)</option>
                     <option value="auto:pms">pms tasks (assigned/done)</option>
@@ -1653,6 +1933,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:sysflow_progress_pct">ERP implementation progress % (at week end)</option>
                   </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
+                    <DprActualCostOptions />
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
                     <option value="auto:dpr_by_user">DPR submitted BY user (count)</option>
@@ -1752,6 +2033,9 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:vendors_added">vendors added</option>
                   </optgroup>
                 </select>
+                <button type="button" aria-expanded={expandedMetric === k.id} onClick={() => setExpandedMetric(expandedMetric === k.id ? null : k.id)} className="mt-2 rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[10px] font-semibold text-blue-700">
+                  Plan / Actual options
+                </button>
                 {/* Mam (2026-06-02): "how plan actual say in template that
                     pick from here".  Plain-English mapping so admin sees
                     exactly which DB field feeds Plan vs Actual for this
@@ -1763,11 +2047,11 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <div className="mt-1 space-y-0.5 text-[9px] leading-tight">
                       <div className="flex items-start gap-1">
                         <span className="font-bold text-blue-700 whitespace-nowrap">Plan:</span>
-                        <span className="text-gray-600">{info.plan}</span>
+                        <span className="text-gray-600">{k.planned_mode === 'manual' ? 'You enter the weekly plan; template target is the default' : info.plan}</span>
                       </div>
                       <div className="flex items-start gap-1">
                         <span className="font-bold text-emerald-700 whitespace-nowrap">Actual:</span>
-                        <span className="text-gray-600">{info.actual}</span>
+                        <span className="text-gray-600">{k.actual_mode === 'manual' ? 'You enter the weekly value manually' : k.actual_mode === 'dates' ? 'You enter both date/times manually; SOTYN calculates hours (IST)' : info.actual}</span>
                       </div>
                     </div>
                   );
@@ -1785,7 +2069,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   const row = previewKpis[k.id];
                   if (!row) return <span className="text-gray-300 text-[10px]">no data</span>;
                   const actual = row.actual ?? row.actual_value ?? null;
-                  const isAuto = k.data_source && k.data_source.startsWith('auto:');
+                  const isAuto = row.actual_auto;
                   let cls = 'bg-gray-100 text-gray-500';
                   if (actual !== null && actual !== undefined && actual !== 0) {
                     cls = 'bg-emerald-100 text-emerald-800';
@@ -1805,10 +2089,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>
             </tr>
+            {expandedMetric === k.id && <tr className="bg-blue-50/40"><td colSpan={8} className="p-3">
+              <div className="mb-2 font-semibold text-blue-800">{k.metric_name} · Plan / Actual settings</div>
+              <ScoreMetricSettings value={k} onChange={patch => updateKpi(k, patch)} />
+            </td></tr>}
+            </Fragment>
             );
           })}
         </tbody>
-      </table>
+      </NumberedTable>
 
       {adding && (
         <form onSubmit={addKpi} className="border-t pt-3 grid grid-cols-2 gap-2">
@@ -1820,13 +2109,21 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="higher_better">↑ higher better</option>
             <option value="lower_better">↓ lower better</option>
           </select>
-          <select className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value }))}>
+          <select aria-label="New metric source" className="select text-sm col-span-2" value={form.data_source} onChange={e => setForm(f => ({ ...f, data_source: e.target.value,
+            ...(e.target.value === 'auto:lead_response_hours' ? { metric_type: 'hours', direction: 'lower_better', planned_mode: 'manual', actual_mode: 'source' }
+              : e.target.value.startsWith('auto:dpr_actual_cost_') ? { metric_type: 'amount', planned_mode: 'manual', actual_mode: 'source' }
+              : e.target.value.startsWith('auto:amount_received') ? { metric_type: 'amount', actual_mode: 'source' } : {}),
+          }))}>
             <option value="manual">manual entry</option>
+            <option value="auto:lead_response_hours">Lead response — first completed response (hours)</option>
+            <option value="auto:amount_received">Amount received (by user)</option>
+            <option value="auto:amount_received_all">Amount received (all)</option>
             <option value="auto:delegations">auto: delegations</option>
             <option value="auto:pms">auto: pms tasks</option>
             <option value="auto:checklists">auto: checklists</option>
             <option value="auto:tickets">auto: tickets</option>
             <option value="auto:snags">auto: snag list</option>
+            <optgroup label="DPR Actual Cost (B-actual)"><DprActualCostOptions /></optgroup>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
             <optgroup label="Procurement">
@@ -1843,6 +2140,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <option value="auto:sysflow_progress_pct">auto: ERP implementation progress %</option>
             </optgroup>
           </select>
+          <div className="col-span-2 rounded-lg border bg-blue-50/40 p-3"><ScoreMetricSettings value={form} onChange={patch => setForm(f => ({ ...f, ...patch }))} /></div>
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="btn btn-secondary text-sm">Cancel</button>
             <button type="submit" className="btn btn-primary text-sm">Add</button>
@@ -1854,32 +2152,40 @@ function TemplateKpiEditor({ templateId, onChange }) {
 }
 
 // ---------- Assign Templates ----------
-function AssignTemplates({ assignments, templates, reload }) {
-  const setTpl = async (uid, tid) => {
-    try { await api.put(`/scoring/assignments/${uid}`, { template_id: tid || null }); reload(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
+function AssignTemplates({ assignments, templates, onSaved }) {
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState('');
+  const visible = assignments.filter(a => `${a.name} ${a.department || ''} ${a.template_name || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
   return (
-    <div className="card p-0 overflow-x-auto">
-      <table>
-        <thead><tr><th>Employee</th><th>Dept</th><th>Role</th><th>Template</th></tr></thead>
+    <div className="card p-0">
+      <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3">
+        <div><p className="font-semibold">Assign templates</p><p className="text-xs text-gray-500 mt-1">Choose multiple templates for employees handling more than one role.</p></div>
+        <input className="input text-sm w-full sm:w-64" aria-label="Search employees" placeholder="Search employee or template…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      <div className="overflow-x-auto"><NumberedTable>
+        <thead><tr><th>Employee</th><th>Dept</th><th>Role</th><th>Assigned templates</th></tr></thead>
         <tbody>
-          {assignments.map(a => (
+          {visible.map(a => (
             <tr key={a.user_id}>
               <td className="font-medium">{a.name}</td>
               <td className="text-xs text-gray-500">{a.department || '-'}</td>
               <td className="text-xs text-gray-500">{a.role}</td>
               <td>
-                <select className="select text-sm" value={a.template_id || ''} onChange={e => setTpl(a.user_id, e.target.value ? +e.target.value : null)}>
-                  <option value="">— None —</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
+                <button type="button" onClick={() => setEditing(a)} aria-label={`Select templates for ${a.name}`}
+                  className="w-full min-w-[240px] rounded-lg border border-gray-200 hover:border-blue-400 p-2.5 text-left flex items-center gap-3">
+                  <span className="flex flex-wrap gap-1.5 flex-1">
+                    {(a.templates || []).map(t => <span key={t.id} className="rounded-md bg-blue-50 text-blue-800 px-2 py-1 text-xs">{t.name}{t.active === 0 ? ' (inactive)' : ''}</span>)}
+                    {!a.templates?.length && <span className="text-sm text-gray-400">Select templates…</span>}
+                  </span>
+                  <FiEdit2 className="text-gray-400 shrink-0" size={14} />
+                </button>
               </td>
             </tr>
           ))}
+          {!visible.length && <tr><td colSpan={4} className="text-center text-gray-400 py-6">No employees found.</td></tr>}
         </tbody>
-      </table>
+      </NumberedTable></div>
+      {editing && <TemplateAssignmentPicker key={editing.user_id} employee={editing} templates={templates} onSaved={onSaved} onClose={() => setEditing(null)} />}
     </div>
   );
 }
