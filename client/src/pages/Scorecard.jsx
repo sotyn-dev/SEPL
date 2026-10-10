@@ -127,7 +127,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'All active projects × active checkpoints across all 3 stages (regardless of CRM owner)', actual: 'Cells with a nonblank latest response (Yes, No, Partially or N/A) — cumulative, all 3 stages' },
+  'auto:crm_kitting':           { plan: 'All active checkpoints across active stages per project (stages disabled for a project are deducted)', actual: 'Cells with a nonblank latest response across active stages (Yes, No, Partially or N/A)' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },

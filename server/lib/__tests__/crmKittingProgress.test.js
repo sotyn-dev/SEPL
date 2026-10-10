@@ -23,5 +23,16 @@ assert.deepEqual(kittingProgress(db, [...keys, 'A']), kittingProgress(db, keys))
 assert.deepEqual(kittingProgress(db, []), { projects: 0, checkpoints: 4, given: 0, done: 0 });
 db.exec("UPDATE crm_kitting_project_meta SET removed_at=NULL WHERE project_key='Removed'");
 assert.deepEqual(kittingProgress(db, kittingAllProjects(db)), { projects: 4, checkpoints: 4, given: 16, done: 6 });
+
+// Test stage-disabling deduction from plan (given) and actual (done):
+db.exec("ALTER TABLE crm_kitting_project_meta ADD COLUMN stage1_disabled_at DATETIME");
+db.exec("ALTER TABLE crm_kitting_project_meta ADD COLUMN stage2_disabled_at DATETIME");
+db.exec("ALTER TABLE crm_kitting_project_meta ADD COLUMN stage3_disabled_at DATETIME");
+db.exec("UPDATE crm_kitting_project_meta SET stage1_disabled_at=CURRENT_TIMESTAMP WHERE project_key='A'");
+// Project A has stage 1 disabled (1 checkpoint in stage 1).
+// Plan drops from 16 to 15 (16 - 1 = 15).
+// Done drops from 6 to 5 (checkpoint 1 on project A was in stage 1).
+assert.deepEqual(kittingProgress(db, kittingAllProjects(db)), { projects: 4, checkpoints: 4, given: 15, done: 5 });
+
 db.close();
 console.log('Full-Kitting performance checks passed');

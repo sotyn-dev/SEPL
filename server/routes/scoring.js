@@ -907,7 +907,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // Full-Kitting uses all active projects and filled cells across all three stages, independent of CRM owner.
+      // Full-Kitting uses active projects and checkpoints across active stages (stages disabled for a project are deducted from plan).
       if (source === 'auto:crm_kitting') {
         try {
           const { kittingAllProjects, kittingProgress } = require('../lib/crmKittingProgress');
