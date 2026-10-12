@@ -595,6 +595,7 @@ try {
   console.warn('[push] VAPID init failed (web-push package may need npm install):', e.message);
 }
 app.use('/api/delegations', require('./routes/delegations'));
+app.use('/api/daily-standup', require('./routes/dailyStandup'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/market-rates', require('./routes/marketRates'));

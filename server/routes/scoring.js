@@ -2286,6 +2286,20 @@ router.get('/weekly/detail', (req, res) => {
   }
 });
 
+// ---------- /scoring/engagement/users ----------
+// Returns active vs inactive users for a given week (for auto:daily_active_users audit)
+router.get('/engagement/users', (req, res) => {
+  try {
+    const { start, end } = weekRange(req);
+    const db = getDb();
+    const data = require('../lib/userEngagement').dailyActiveUsersDetail(db, start, end);
+    res.json(data);
+  } catch (err) {
+    console.error('engagement users detail error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- /scoring/team-summary (TSK-0914) ----------
 // Returns a team leader's direct reports and their weekly scores under the leader
 router.get('/team-summary', requirePermission('scoring', 'view'), (req, res) => {
