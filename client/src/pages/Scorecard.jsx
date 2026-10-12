@@ -282,6 +282,39 @@ export default function Scorecard() {
   const [raci, setRaci] = useState({ open: false, loading: false, data: null });
   // Collapse + drop stale data whenever the viewed user or week changes.
   useEffect(() => { setRaci({ open: false, loading: false, data: null }); }, [viewUserId, weekStart]);
+
+  // Task Drilldown Modal for Planned / Actual / Previous Pending / Done
+  const [drilldown, setDrilldown] = useState(null);
+  const handleDrilldown = useCallback((kpi, type) => {
+    const modMap = {
+      'auto:delegations': 'delegations',
+      'auto:pms': 'pms',
+      'auto:tickets': 'tickets',
+      'auto:checklists': 'checklists',
+    };
+    const mod = modMap[kpi.data_source];
+    if (!mod) return;
+    const typeLabels = {
+      planned: 'Planned Tasks (Due this week)',
+      actual: 'Approved Tasks (This week)',
+      prev_pending: 'Carryover Pending Backlog (Due before this week)',
+      prev_done: 'Previous Backlog Approved This Week',
+    };
+    setDrilldown({
+      open: true,
+      loading: true,
+      title: `${kpi.metric_name} — ${typeLabels[type] || 'Tasks'} (${fmtRange(weekStart)})`,
+      rows: [],
+      module: mod,
+      type,
+    });
+    api.get(`/scoring/weekly/detail?user_id=${viewUserId}&module=${mod}&type=${type}&week_start=${weekStart}`)
+      .then(res => setDrilldown(prev => ({ ...prev, loading: false, rows: res.data?.rows || [] })))
+      .catch(err => {
+        toast.error(err.response?.data?.error || 'Failed to load task details');
+        setDrilldown(null);
+      });
+  }, [viewUserId, weekStart]);
   const toggleRaci = useCallback(() => {
     setRaci(r => {
       if (r.open) return { ...r, open: false };          // collapse
@@ -703,6 +736,7 @@ export default function Scorecard() {
                           readOnly={periodMode || (viewUserId !== user.id && !isAdmin())}
                           onStepWise={isRaci && !periodMode ? toggleRaci : null}
                           stepWiseOpen={isRaci && !periodMode && raci.open}
+                          onDrilldown={handleDrilldown}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
@@ -987,6 +1021,74 @@ export default function Scorecard() {
         }
       >
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
+      </Modal>
+
+      {/* Task Drilldown Modal for Planned / Actual / Previous Pending / Done */}
+      <Modal
+        isOpen={!!drilldown?.open}
+        onClose={() => setDrilldown(null)}
+        title={drilldown?.title || 'Task Details'}
+        wide
+      >
+        {drilldown?.loading ? (
+          <div className="p-8 text-center text-sm text-gray-500">Loading tasks…</div>
+        ) : !drilldown?.rows?.length ? (
+          <div className="p-8 text-center text-sm text-gray-400">
+            No tasks found in this category.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="text-xs text-gray-500 font-medium px-1">
+              Showing <b>{drilldown.rows.length}</b> task{drilldown.rows.length === 1 ? '' : 's'}:
+            </div>
+            <div className="overflow-x-auto max-h-[60vh] border rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                  <tr>
+                    <th className="p-2 text-left w-20">Task ID</th>
+                    <th className="p-2 text-left">Description</th>
+                    {drilldown.module === 'pms' && <th className="p-2 text-left">Project</th>}
+                    <th className="p-2 text-left">Assigned By</th>
+                    <th className="p-2 text-center w-24">Due Date</th>
+                    <th className="p-2 text-center w-24">Approved At</th>
+                    <th className="p-2 text-center w-20">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {drilldown.rows.map(row => (
+                    <tr key={row.id} className="hover:bg-blue-50/40">
+                      <td className="p-2 font-mono font-bold text-red-700">
+                        <a
+                          href={drilldown.module === 'pms' ? `/pms-tasks?open=${row.id}` : `/delegations?open=${row.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="hover:underline flex items-center gap-1"
+                          title="Open task in new tab"
+                        >
+                          {drilldown.module === 'pms' ? `PMS-${String(row.id).padStart(4, '0')}` : `TSK-${String(row.id).padStart(4, '0')}`}
+                        </a>
+                      </td>
+                      <td className="p-2 text-gray-800 whitespace-pre-wrap max-w-sm">{row.description || row.title || row.subject || '—'}</td>
+                      {drilldown.module === 'pms' && <td className="p-2 text-gray-600">{row.project_name || '—'}</td>}
+                      <td className="p-2 text-gray-600">{row.assigned_by_name || row.raised_by_name || '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{row.due_date || row.deadline_date || '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{row.reviewed_at ? row.reviewed_at.slice(0, 10) : '—'}</td>
+                      <td className="p-2 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          row.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                          row.status === 'submitted' ? 'bg-blue-100 text-blue-800' :
+                          row.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -1296,7 +1398,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
+function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen, onDrilldown }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -1344,6 +1446,7 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
   const plannedEditable = kpi.planned_editable ?? !isAuto;
   const calculatedHours = kpi.actual_mode === 'dates';
   const unit = kpi.metric_type === 'hours' ? 'hrs' : kpi.metric_type === 'amount' ? 'amount' : '';
+  const canDrill = ['auto:delegations', 'auto:pms', 'auto:tickets', 'auto:checklists'].includes(kpi.data_source);
 
   return (
     <tr className={`border-t ${saving ? 'bg-amber-50' : ''}`}>
@@ -1375,7 +1478,16 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
                 title={(kpi.target_auto
                   ? sourceInfoFor(kpi.data_source).plan
                   : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`)}>
-            {planned}
+            {canDrill && onDrilldown ? (
+              <button
+                type="button"
+                onClick={() => onDrilldown(kpi, 'planned')}
+                className="font-bold text-indigo-600 hover:underline hover:text-indigo-800"
+                title="Click to view planned tasks due this week"
+              >
+                {planned}
+              </button>
+            ) : planned}
             {!kpi.target_auto && (
               <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                 {+planned === 0 && +actual > 0 ? 'no target set' : 'target set'}
@@ -1387,8 +1499,24 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
         )}
       </td>
       <td className="text-center p-2">
-        {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
-          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
+        {actualAuto || calculatedHours ? (
+          <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>
+            {kpi.actual == null ? '—' : (
+              canDrill && onDrilldown ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'actual')}
+                  className={`font-bold hover:underline ${+actual > 0 ? 'text-emerald-700 hover:text-emerald-900' : 'text-gray-600 hover:text-gray-800'}`}
+                  title="Click to view approved tasks for this week"
+                >
+                  {`${actual}${unit === 'hrs' ? ' hrs' : ''}`}
+                </button>
+              ) : `${actual}${unit === 'hrs' ? ' hrs' : ''}`
+            )}
+          </span>
+        ) : (
+          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
+        )}
         {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
         {kpi.observations != null && <span className="block text-[9px] text-gray-500">{kpi.observations} response{kpi.observations === 1 ? '' : 's'}</span>}
       </td>
@@ -1404,12 +1532,34 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
           <div className="flex items-start justify-center gap-2 font-semibold leading-tight"
             title={`Previous (due before this week): ${kpi.pending_uptodate || 0} carried in — ${Math.max(0, (+kpi.pending_uptodate || 0) - (+kpi.pending_work || 0))} still pending, ${kpi.pending_work || 0} done this week`}>
             <div className="text-center">
-              <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+              {canDrill && onDrilldown && (+kpi.pending_uptodate > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'prev_pending')}
+                  className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
+                  title="Click to view carryover pending tasks due before this week"
+                >
+                  {kpi.pending_uptodate || 0}
+                </button>
+              ) : (
+                <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+              )}
               <div className="text-[9px] font-normal text-gray-400">pending</div>
             </div>
             <span className="text-gray-300">/</span>
             <div className="text-center">
-              <div className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work || 0}</div>
+              {canDrill && onDrilldown && (+kpi.pending_work > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'prev_done')}
+                  className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                  title="Click to view older backlog tasks completed this week"
+                >
+                  {kpi.pending_work || 0}
+                </button>
+              ) : (
+                <div className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work || 0}</div>
+              )}
               <div className="text-[9px] font-normal text-gray-400">done</div>
             </div>
           </div>

@@ -10,6 +10,9 @@ const {
 const router = express.Router();
 router.use(authMiddleware);
 
+// SOP-16 Collection Engine Pipeline sub-router
+router.use('/sop16', require('./collectionEngine').router);
+
 // Auto-raise a PMS Task from a collection remark so EVERY remark becomes a tracked
 // action item for the finance executive (mam 2026-07-06: "all remarks automatically
 // go to PMS task … this follow-up is of finance executive Aanchal"). Used by BOTH
@@ -88,7 +91,7 @@ router.get('/', (req, res) => {
   if (ids.length > 0) {
     const placeholders = ids.map(() => '?').join(',');
     const allPayments = getDb().prepare(
-      `SELECT receivable_id, amount, collection_date, payment_mode, transaction_ref, notes
+      `SELECT id, receivable_id, amount, collection_date, payment_mode, transaction_ref, notes
          FROM collections
         WHERE receivable_id IN (${placeholders})
         ORDER BY collection_date DESC, id DESC`

@@ -56,6 +56,7 @@ export default function PMSTasks() {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [dateBasis, setDateBasis] = useState('due'); // 'due' | 'approved' | 'created'
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -134,6 +135,7 @@ export default function PMSTasks() {
     if (statusFilter.length) params.set('status', statusFilter.join(','));
     if (crmFilter) params.set('crm_id', crmFilter);
     if (assigneeFilter) params.set('assignee_id', assigneeFilter);
+    if (dateBasis && dateBasis !== 'due') params.set('date_basis', dateBasis);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     api.get(`/pms-tasks?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
@@ -142,7 +144,7 @@ export default function PMSTasks() {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
     api.get('/pms-tasks/projects').then(r => setProjects(r.data || [])).catch(() => setProjects([]));
-  }, [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo]);
+  }, [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo, dateBasis]);
 
   const openCreate = () => {
     setForm({
@@ -319,7 +321,7 @@ export default function PMSTasks() {
   // Numbered pagination over the server-filtered task list (scope/status/
   // CRM/assignee/date filters all apply before this, and changing any of them
   // resets to page 1). Export keeps `tasks`.
-  const pager = usePagination(tasks, { resetKey: [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo] });
+  const pager = usePagination(tasks, { resetKey: [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo, dateBasis] });
 
   const projectOptions = projects.map(p => ({
     ...p,
@@ -335,8 +337,8 @@ export default function PMSTasks() {
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => exportCsv('pms-tasks',
-            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
-            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Approved At','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.reviewed_at ? fmtDate(t.reviewed_at) : '', t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
@@ -392,15 +394,23 @@ export default function PMSTasks() {
           </select>
         </div>
         <div>
-          <label className="label">Due From</label>
+          <label className="label">Date Type</label>
+          <select className="select text-sm w-36" value={dateBasis} onChange={e => setDateBasis(e.target.value)}>
+            <option value="due">Due Date</option>
+            <option value="approved">Approved Date</option>
+            <option value="created">Created Date</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">{dateBasis === 'approved' ? 'Approved From' : dateBasis === 'created' ? 'Created From' : 'Due From'}</label>
           <input type="date" className="input text-sm" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
         </div>
         <div>
-          <label className="label">Due To</label>
+          <label className="label">{dateBasis === 'approved' ? 'Approved To' : dateBasis === 'created' ? 'Created To' : 'Due To'}</label>
           <input type="date" className="input text-sm" value={dateTo} onChange={e => setDateTo(e.target.value)} min={dateFrom || undefined} />
         </div>
-        {(crmFilter || assigneeFilter || dateFrom || dateTo) && (
-          <button onClick={() => { setCrmFilter(''); setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }}
+        {(crmFilter || assigneeFilter || dateFrom || dateTo || dateBasis !== 'due') && (
+          <button onClick={() => { setCrmFilter(''); setAssigneeFilter(''); setDateFrom(''); setDateTo(''); setDateBasis('due'); }}
                   className="text-[11px] text-red-600 hover:underline self-end pb-2">Clear filters</button>
         )}
         <div className="ml-auto text-[11px] text-gray-500 self-end pb-2">

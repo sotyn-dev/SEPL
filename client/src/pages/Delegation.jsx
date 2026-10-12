@@ -65,6 +65,7 @@ export default function Delegation() {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [dateBasis, setDateBasis] = useState('due'); // 'due' | 'approved' | 'created'
   // Free-text search across Task ID and Description (mam, 2026-05-15:
   // "give option to filter for search option for example if i wtite
   // task or task id").  Applied client-side over the already-filtered
@@ -109,6 +110,7 @@ export default function Delegation() {
     const params = new URLSearchParams({ scope });
     if (statusFilter.length) params.set('status', statusFilter.join(','));
     if (assigneeFilter) params.set('assignee_id', assigneeFilter);
+    if (dateBasis && dateBasis !== 'due') params.set('date_basis', dateBasis);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     api.get(`/delegations?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
@@ -144,7 +146,7 @@ export default function Delegation() {
       }
       setProjects(list.sort((a, b) => a.name.localeCompare(b.name)));
     }).catch(() => setProjects([]));
-  }, [scope, statusFilter, assigneeFilter, dateFrom, dateTo]);
+  }, [scope, statusFilter, assigneeFilter, dateFrom, dateTo, dateBasis]);
 
   // Per-person workload aggregates — only loaded when the dashboard view
   // is active. Refreshes when the user toggles back to it after changes.
@@ -676,12 +678,17 @@ export default function Delegation() {
         {/* Date range — useful for everyone (filter MY tasks by date too).
             Mam: 'user can also filter date from to'. */}
         <div className="flex items-center gap-1 text-xs text-gray-500">
+          <select className="select py-1 text-xs w-28" value={dateBasis} onChange={e => setDateBasis(e.target.value)}>
+            <option value="due">Due Date</option>
+            <option value="approved">Approved</option>
+            <option value="created">Created</option>
+          </select>
           <span>From</span>
           <input type="date" className="input py-1 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
           <span>To</span>
           <input type="date" className="input py-1 text-xs w-36" value={dateTo} onChange={e => setDateTo(e.target.value)} min={dateFrom || undefined} />
-          {(dateFrom || dateTo || assigneeFilter) && (
-            <button onClick={() => { setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }} className="text-[11px] text-red-600 hover:underline ml-1">Clear</button>
+          {(dateFrom || dateTo || assigneeFilter || dateBasis !== 'due') && (
+            <button onClick={() => { setAssigneeFilter(''); setDateFrom(''); setDateTo(''); setDateBasis('due'); }} className="text-[11px] text-red-600 hover:underline ml-1">Clear</button>
           )}
         </div>
       </div>
