@@ -3096,6 +3096,13 @@ function initializeDatabase() {
     console.warn('[handover_snags] migrations skipped (non-fatal):', e.message);
   }
 
+  try {
+    const { runCollectionEngineMigrations } = require('./collectionEngineSchema');
+    runCollectionEngineMigrations(db);
+  } catch (e) {
+    console.warn('[collection_engine] migrations skipped (non-fatal):', e.message);
+  }
+
   require('../lib/scoreTemplateAssignments').initialize(db);
 
   // Safe schema migrations for columns added after initial release

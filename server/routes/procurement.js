@@ -1652,6 +1652,19 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
     if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
     if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master)` });
   }
+
+  // SOP-16.5: 60-Day Overdue Material Supply Stop Guard
+  try {
+    const { checkSiteMaterialBlock } = require('./collectionEngine');
+    const siteObj = db.prepare('SELECT id FROM sites WHERE name=?').get(site_name);
+    if (siteObj?.id) {
+      const blockCheck = checkSiteMaterialBlock(db, siteObj.id);
+      if (blockCheck.blocked) {
+        return res.status(409).json({ error: blockCheck.reason });
+      }
+    }
+  } catch (_) { /* non-fatal check */ }
+
   const { nextSequence } = require('../db/nextSequence');
   const indentNum = nextSequence(db, 'indents', 'indent_number', 'IND-', { startFrom: 0, pad: 4 });
   // Resolve planning_id from business_book_id if one exists (for downstream
