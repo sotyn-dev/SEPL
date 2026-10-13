@@ -28,6 +28,13 @@ function quarantineUrls(urls) {
 
 // ── access helpers ──────────────────────────────────────────────────────────
 const isAppAdmin = (req) => req.user.role === 'admin';
+const getActiveUserIds = () => {
+  try {
+    return new Set(getDb().prepare('SELECT id FROM users WHERE active=1 AND COALESCE(archived,0)=0').all().map(u => u.id));
+  } catch (_) {
+    return new Set();
+  }
+};
 // Super-viewer: MAX(can_see_all) on the sotyn_flow module across the user's roles.
 function hasSeeAll(uid) {
   try {
@@ -144,14 +151,19 @@ router.get('/', (req, res) => {
     ? db.prepare(`SELECT * FROM boards WHERE ${arch} ORDER BY datetime(created_at) DESC, id DESC`).all()
     : db.prepare(`SELECT b.* FROM boards b JOIN board_members m ON m.board_id=b.id AND m.user_id=? WHERE b.${arch} ORDER BY datetime(b.created_at) DESC, b.id DESC`).all(uid);
   if (q) boards = boards.filter(b => (b.name || '').toLowerCase().includes(q) || (b.description || '').toLowerCase().includes(q));
-  const boardsOut = boards.map(b => ({
-    id: b.id, name: b.name, description: b.description, labels: parseJson(b.labels, []), archived_at: b.archived_at || null,
-    member_count: db.prepare('SELECT COUNT(*) c FROM board_members WHERE board_id=?').get(b.id).c,
-    card_count: db.prepare('SELECT COUNT(*) c FROM board_cards WHERE board_id=?').get(b.id).c,
-    column_count: db.prepare('SELECT COUNT(*) c FROM board_columns WHERE board_id=?').get(b.id).c,
-    my_role: myRole(db, b.id, uid),
-    members: db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name LIMIT 8").all(b.id),
-  }));
+  const activeIds = getActiveUserIds();
+  const boardsOut = boards.map(b => {
+    const rawMembers = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b.id);
+    const activeMembers = rawMembers.filter(m => activeIds.has(m.user_id));
+    return {
+      id: b.id, name: b.name, description: b.description, labels: parseJson(b.labels, []), archived_at: b.archived_at || null,
+      member_count: activeMembers.length,
+      card_count: db.prepare('SELECT COUNT(*) c FROM board_cards WHERE board_id=?').get(b.id).c,
+      column_count: db.prepare('SELECT COUNT(*) c FROM board_columns WHERE board_id=?').get(b.id).c,
+      my_role: myRole(db, b.id, uid),
+      members: activeMembers.slice(0, 8),
+    };
+  });
   res.json({ boards: boardsOut, can_see_all: seeAll });
 });
 
@@ -184,7 +196,9 @@ router.get('/:id', (req, res) => {
   const customs = normalizeBoardLabels(db, b);   // purge legacy + remap cards BEFORE we read cards
   const columns = db.prepare('SELECT id, title, position FROM board_columns WHERE board_id=? ORDER BY position, id').all(b);
   const cards = db.prepare('SELECT * FROM board_cards WHERE board_id=? ORDER BY position, id').all(b).map(c => enrichCard(db, c));
-  const members = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b);
+  const activeIds = getActiveUserIds();
+  const rawMembers = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b);
+  const members = rawMembers.filter(m => activeIds.has(m.user_id));
   res.json({
     board: { id: board.id, name: board.name, description: board.description, labels: [...PRIORITY_LABELS, ...customs], my_role: myRole(db, b, req.user.id), archived_at: board.archived_at || null },
     columns, cards, members,
@@ -247,7 +261,9 @@ router.delete('/:id', (req, res) => {
 router.get('/:id/members', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id;
   if (!canAccess(db, req, b)) return res.status(403).json({ error: 'Not a member' });
-  res.json(db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b));
+  const activeIds = getActiveUserIds();
+  const rawMembers = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b);
+  res.json(rawMembers.filter(m => activeIds.has(m.user_id)));
 });
 
 router.post('/:id/members', (req, res) => {

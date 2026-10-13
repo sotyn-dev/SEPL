@@ -293,6 +293,319 @@ router.get('/my-history', (req, res) => {
   res.json(rows);
 });
 
+// Full Day-by-Day Attendance Muster for a User across date range.
+// Merges punches, approved leave requests, weekly offs (Sundays), absent days, and future dates.
+function computeUserMuster(db, userId, dateFrom, dateTo) {
+  const targetUser = db.prepare(`
+    SELECT u.id, u.name, u.email, u.department, u.phone, u.staff_type, u.avatar_url,
+           (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+           (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),'')) FROM employees e WHERE e.user_id = u.id) AS hr_department,
+           (SELECT roster FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1) AS roster
+      FROM users u WHERE u.id = ?
+  `).get(userId);
+
+  if (!targetUser) return null;
+
+  const todayStr = istTodayStr();
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  let from = ok(dateFrom) ? dateFrom : `${todayStr.slice(0, 7)}-01`;
+  let to = ok(dateTo) ? dateTo : todayStr;
+  if (from > to) { const t = from; from = to; to = t; }
+
+  const startDate = new Date(from);
+  const endDate = new Date(to);
+  const diffDays = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+  const safeDays = Math.min(Math.max(diffDays, 1), 93);
+
+  const attendanceRows = db.prepare(`
+    SELECT id, user_id, date, status, punch_in_time, punch_out_time, punch_in_photo, punch_out_photo,
+           total_hours, site_name, auto_punched_in, auto_punched_out, admin_marked, marked_by, remarks
+      FROM attendance
+     WHERE user_id = ? AND date BETWEEN ? AND ?
+     ORDER BY date ASC, punch_in_time ASC
+  `).all(userId, from, to);
+
+  const attByDate = new Map();
+  for (const a of attendanceRows) {
+    attByDate.set(a.date, a);
+  }
+
+  const leaves = db.prepare(`
+    SELECT id, leave_type, from_date, to_date, from_time, to_time, hours, status, reason
+      FROM leave_requests
+     WHERE user_id = ? AND status = 'approved'
+       AND NOT (to_date < ? OR from_date > ?)
+  `).all(userId, from, to);
+
+  let lateCutoffMin = 9 * 60 + 46;
+  try {
+    const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
+    const eff = rosterCutoffs(ps || {}, targetUser.roster);
+    if (eff.late_after_time) {
+      const [h, m] = eff.late_after_time.split(':').map(Number);
+      lateCutoffMin = h * 60 + (m || 0);
+    }
+  } catch {}
+
+  const days = [];
+  const summary = {
+    total_days: 0,
+    working_days: 0,
+    present: 0,
+    late: 0,
+    half_day: 0,
+    absent: 0,
+    on_leave: 0,
+    week_offs: 0,
+    total_hours: 0,
+    missed_punch_out: 0,
+    auto_punched_in: 0,
+    auto_punched_out: 0,
+  };
+
+  const curDate = new Date(startDate);
+  for (let i = 0; i < safeDays; i++) {
+    const pad = n => String(n).padStart(2, '0');
+    const dStr = `${curDate.getFullYear()}-${pad(curDate.getMonth() + 1)}-${pad(curDate.getDate())}`;
+    if (dStr > to) break;
+
+    const dow = curDate.getDay();
+    const isSunday = dow === 0;
+    const isFuture = dStr > todayStr;
+    const att = attByDate.get(dStr);
+    const dayLeave = leaves.find(l => dStr >= l.from_date && dStr <= l.to_date);
+
+    let status = '';
+    let isLate = false;
+    let lateMin = 0;
+    let missedPunchOut = false;
+
+    if (att) {
+      status = String(att.status || 'present').toLowerCase();
+      summary.total_hours += +att.total_hours || 0;
+      if (att.auto_punched_in) summary.auto_punched_in++;
+      if (att.auto_punched_out) summary.auto_punched_out++;
+
+      if (att.punch_in_time) {
+        const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 3600 * 1000);
+        if (!isNaN(piIst)) {
+          const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
+          if (piMin >= lateCutoffMin) {
+            isLate = true;
+            status = 'late';
+            lateMin = Math.max(0, piMin - lateCutoffMin + 1);
+          }
+        }
+      }
+      if (status === 'late') isLate = true;
+
+      if (att.punch_in_time && !att.punch_out_time && dStr < todayStr) {
+        missedPunchOut = true;
+        summary.missed_punch_out++;
+      }
+    } else if (dayLeave && dayLeave.leave_type !== 'short_leave') {
+      status = 'on_leave';
+    } else if (isSunday) {
+      status = 'weekend';
+    } else if (isFuture) {
+      status = 'future';
+    } else {
+      status = 'absent';
+    }
+
+    summary.total_days++;
+    if (!isSunday) summary.working_days++;
+
+    if (status === 'present' || status === 'late' || (isSunday && att)) {
+      summary.present++;
+      if (isLate) summary.late++;
+    } else if (status === 'half_day') {
+      summary.half_day++;
+      summary.present += 0.5;
+    } else if (status === 'on_leave') {
+      summary.on_leave++;
+    } else if (status === 'weekend') {
+      summary.week_offs++;
+    } else if (status === 'absent') {
+      summary.absent++;
+    }
+
+    days.push({
+      date: dStr,
+      day: curDate.getDate(),
+      dow,
+      day_name: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dow],
+      is_sunday: isSunday,
+      is_future: isFuture,
+      status,
+      is_late: isLate,
+      late_minutes: lateMin,
+      missed_punch_out: missedPunchOut,
+      punch_in_time: att?.punch_in_time || null,
+      punch_out_time: att?.punch_out_time || null,
+      punch_in_photo: att?.punch_in_photo || null,
+      punch_out_photo: att?.punch_out_photo || null,
+      total_hours: att?.total_hours != null ? +att.total_hours : null,
+      site_name: att?.site_name || null,
+      auto_punched_in: !!att?.auto_punched_in,
+      auto_punched_out: !!att?.auto_punched_out,
+      admin_marked: !!att?.admin_marked,
+      remarks: att?.remarks || null,
+      attendance_id: att?.id || null,
+      leave: dayLeave ? {
+        id: dayLeave.id,
+        leave_type: dayLeave.leave_type,
+        hours: dayLeave.hours || null,
+        reason: dayLeave.reason || null,
+        from_time: dayLeave.from_time || null,
+        to_time: dayLeave.to_time || null
+      } : null
+    });
+
+    curDate.setDate(curDate.getDate() + 1);
+  }
+
+  summary.total_hours = Math.round(summary.total_hours * 100) / 100;
+  summary.avg_hours = summary.present > 0 ? +(summary.total_hours / Math.ceil(summary.present)).toFixed(1) : 0;
+  summary.attendance_rate = summary.working_days > 0 ? Math.round((summary.present / summary.working_days) * 100) : 0;
+
+  return {
+    user: targetUser,
+    from,
+    to,
+    summary,
+    days
+  };
+}
+
+// GET /attendance/user-muster — day-by-day complete muster for admin By User view
+router.get('/user-muster', requirePermission('attendance', 'view'), (req, res) => {
+  const db = getDb();
+  const userId = parseInt(req.query.user_id, 10);
+  if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+  const muster = computeUserMuster(db, userId, req.query.date_from, req.query.date_to);
+  if (!muster) return res.status(404).json({ error: 'User not found' });
+  res.json(muster);
+});
+
+// GET /attendance/user-muster/export.xlsx — export individual employee attendance muster
+router.get('/user-muster/export.xlsx', requirePermission('attendance', 'view'), async (req, res) => {
+  const db = getDb();
+  const userId = parseInt(req.query.user_id, 10);
+  if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+  const muster = computeUserMuster(db, userId, req.query.date_from, req.query.date_to);
+  if (!muster) return res.status(404).json({ error: 'User not found' });
+
+  try {
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Secured Engineers Pvt Ltd';
+    const cleanName = muster.user.name.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 25);
+    const ws = wb.addWorksheet(cleanName || 'Attendance');
+
+    ws.mergeCells('A1:H1');
+    ws.getCell('A1').value = `ATTENDANCE MUSTER: ${muster.user.name.toUpperCase()}`;
+    ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF1E3A8A' } };
+    ws.getCell('A1').alignment = { vertical: 'middle' };
+
+    ws.mergeCells('A2:H2');
+    ws.getCell('A2').value = `Period: ${muster.from} to ${muster.to}  |  Department: ${muster.user.hr_department || muster.user.department || '—'}  |  Designation: ${muster.user.hr_designation || '—'}`;
+    ws.getCell('A2').font = { size: 10, italic: true, color: { argb: 'FF4B5563' } };
+
+    ws.addRow([]);
+    const kpiRow = ws.addRow([
+      `Working Days: ${muster.summary.working_days}`,
+      `Present: ${muster.summary.present}`,
+      `Late: ${muster.summary.late}`,
+      `Absent: ${muster.summary.absent}`,
+      `Leaves: ${muster.summary.on_leave}`,
+      `Week-Offs: ${muster.summary.week_offs}`,
+      `Total Hours: ${muster.summary.total_hours}`,
+      `Attendance: ${muster.summary.attendance_rate}%`
+    ]);
+    kpiRow.font = { bold: true, size: 9 };
+    kpiRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+      cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    ws.addRow([]);
+
+    const headerRow = ws.addRow(['Date', 'Day', 'Status', 'In Time', 'Out Time', 'Hours', 'Site / Location', 'Remarks / Leave']);
+    headerRow.height = 20;
+    headerRow.eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    const STATUS_COLORS = {
+      present: 'FFDCFCE7',
+      late: 'FFFEF3C7',
+      half_day: 'FFFFEDD5',
+      on_leave: 'FFEDE9FE',
+      weekend: 'FFEEF2FF',
+      absent: 'FFFEE2E2',
+      future: 'FFF9FAFB',
+    };
+
+    muster.days.forEach(d => {
+      const inTime = d.punch_in_time ? new Date(new Date(d.punch_in_time).getTime() + 5.5 * 3600 * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+      const outTime = d.punch_out_time ? new Date(new Date(d.punch_out_time).getTime() + 5.5 * 3600 * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : (d.missed_punch_out ? 'Missed Out' : '—');
+      const statusLabel = d.status === 'present' ? 'Present' :
+                          d.status === 'late' ? `Late (${d.late_minutes}m)` :
+                          d.status === 'half_day' ? 'Half Day' :
+                          d.status === 'on_leave' ? `Leave: ${d.leave?.leave_type || 'Approved'}` :
+                          d.status === 'weekend' ? 'Week-Off' :
+                          d.status === 'absent' ? 'Absent' :
+                          d.status === 'future' ? 'Upcoming' : d.status;
+
+      const row = ws.addRow([
+        d.date,
+        d.day_name,
+        statusLabel,
+        inTime,
+        outTime,
+        d.total_hours != null ? d.total_hours : '—',
+        d.site_name || '—',
+        d.leave ? `Leave (${d.leave.leave_type}): ${d.leave.reason || ''}` : (d.remarks || (d.admin_marked ? 'Admin marked' : '—'))
+      ]);
+
+      const fillColor = STATUS_COLORS[d.status] || 'FFFFFFFF';
+      row.getCell(3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+      row.getCell(3).font = { bold: true };
+      row.alignment = { vertical: 'middle' };
+      row.getCell(1).alignment = { horizontal: 'center' };
+      row.getCell(2).alignment = { horizontal: 'center' };
+      row.getCell(3).alignment = { horizontal: 'center' };
+      row.getCell(4).alignment = { horizontal: 'center' };
+      row.getCell(5).alignment = { horizontal: 'center' };
+      row.getCell(6).alignment = { horizontal: 'center' };
+    });
+
+    ws.columns = [
+      { width: 14 },
+      { width: 8 },
+      { width: 18 },
+      { width: 14 },
+      { width: 14 },
+      { width: 10 },
+      { width: 22 },
+      { width: 32 }
+    ];
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance-${muster.user.name.replace(/[^a-zA-Z0-9]/g, '_')}-${muster.from}-to-${muster.to}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('[user-muster export] error:', err);
+    res.status(500).json({ error: 'Failed to export excel: ' + err.message });
+  }
+});
+
 // GET attendance list (admin view) with filters
 router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   const { date, user_id, status, date_from, date_to } = req.query;
@@ -328,7 +641,12 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
 // admin dashboard so we don't need a cron.
 function syncAutoMarkPresent(db, today, byUserId) {
   try {
-    const list = db.prepare("SELECT id FROM users WHERE active=1 AND COALESCE(auto_mark_present,0)=1").all();
+    const list = db.prepare(`
+      SELECT u.id FROM users u
+      LEFT JOIN employees e ON e.user_id = u.id
+      WHERE u.active = 1 AND COALESCE(u.auto_mark_present, 0) = 1
+        AND COALESCE(e.status, 'active') NOT IN ('inactive', 'terminated')
+    `).all();
     if (!list.length) return;
     const exists = db.prepare('SELECT 1 FROM attendance WHERE user_id=? AND date=?');
     const insert = db.prepare(
@@ -404,10 +722,13 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   for (const r of todayRecords) r.bucket = Number.isInteger(r.user_id) ? bucketOf(r.user_id) : 'guest';
   for (const u of notPunched) u.bucket = bucketOf(u.id);
 
+  // Strictly exclude terminated/inactive employees from Not Punched In list so they never appear to mark present
+  const activeNotPunched = notPunched.filter(u => u.bucket !== 'terminated');
+
   res.json({
     totalUsers: totalUsers.c, present: presentToday.c, absent: absentToday, late: lateToday.c, onLeave: onLeave.c,
     strength,
-    todayRecords, notPunched, geofences
+    todayRecords, notPunched: activeNotPunched, geofences
   });
 });
 

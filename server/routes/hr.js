@@ -15,6 +15,7 @@ const { authMiddleware, requirePermission, getUserPermissions, adminOnly } = req
 const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
+const { onUserDeactivatedOrArchived } = require('../lib/userStatusSync');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -1080,14 +1081,22 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     try {
       const want = (st === 'inactive' || st === 'terminated') ? 0 : 1;
       const target = db.prepare('SELECT id, name, active, archived FROM users WHERE id=?').get(linkedUserId);
-      const needsFlip = target && target.active !== want && !(want === 1 && target.archived === 1);
+      const isTerminated = st === 'terminated';
+      const needsFlip = target && (target.active !== want || (isTerminated && target.archived !== 1));
       if (needsFlip) {
-        db.prepare('UPDATE users SET active=? WHERE id=?').run(want, linkedUserId);
+        if (isTerminated) {
+          db.prepare('UPDATE users SET active=0, archived=1 WHERE id=?').run(linkedUserId);
+        } else {
+          db.prepare('UPDATE users SET active=? WHERE id=?').run(want, linkedUserId);
+        }
+        if (want === 0) {
+          onUserDeactivatedOrArchived(linkedUserId, isTerminated);
+        }
         logAuditEvent({
           user: req.user, action: 'UPDATE', entity_type: 'users',
           entity_id: linkedUserId, entity_label: target.name,
           method: 'PUT', path: `/api/hr/employees/${req.params.id}`,
-          before: { active: target.active }, after: { active: want },
+          before: { active: target.active, archived: target.archived }, after: { active: want, archived: isTerminated ? 1 : 0 },
           body: { reason: `employee status → ${st}` },
         });
       }
@@ -1128,7 +1137,15 @@ router.post('/employees/bulk-status', requirePermission('employees', 'edit'), (r
       // Same login active-sync as the single PUT — a terminated employee's
       // login goes inactive so they stop inflating attendance strength.
       if (emp.user_id) {
-        try { db.prepare('UPDATE users SET active=0 WHERE id=? AND active=1').run(emp.user_id); } catch (_) {}
+        try {
+          const isTerm = status === 'terminated';
+          if (isTerm) {
+            db.prepare('UPDATE users SET active=0, archived=1 WHERE id=?').run(emp.user_id);
+          } else {
+            db.prepare('UPDATE users SET active=0 WHERE id=?').run(emp.user_id);
+          }
+          onUserDeactivatedOrArchived(emp.user_id, isTerm);
+        } catch (_) {}
       }
       changed.push({ id, name: emp.name, from: emp.status });
     }

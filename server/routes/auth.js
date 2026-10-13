@@ -7,6 +7,7 @@ const { generateToken, generatePendingToken, getSecret, authMiddleware, adminOnl
         revokeUserSessions, clearSessionCache } = require('../middleware/auth');
 const totp = require('../db/userTotp');
 const { STAFF_TYPES, normalizeStaffType } = require('../lib/staffType');
+const { onUserDeactivatedOrArchived } = require('../lib/userStatusSync');
 const router = express.Router();
 
 router.post('/engagement', authMiddleware, (req, res) => {
@@ -310,14 +311,19 @@ router.put('/users/:id/manager', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/users', authMiddleware, (req, res) => {
   const db = getDb();
-  // Mam (2026-05-22): "I NEED DATA NOT DELETE PREVIOUS BUT IN FUTURE
-  // WHEN I ENTRY SHOW THIS NAME TO ASSIGN IN DATA WHICH IS INACTIVE"
-  // — ex-employees should NOT appear in assignment pickers but their
-  // historical records must stay intact.  Caller passes ?active_only=1
-  // to get only currently-active users.  User Management page (admin)
-  // omits the param so it can still see + manage inactives.
-  const activeOnly = req.query.active_only === '1';
-  const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
+  // Ex-employees / inactive accounts should NOT appear in assignment pickers,
+  // delegations, chats, tasks, etc., but historical records stay intact.
+  // Defaults to ACTIVE users only. Caller passes ?include_inactive=1 or ?all=1
+  // (e.g. User Management admin screen) to see all accounts.
+  const includeInactive = req.query.include_inactive === '1' || req.query.all === '1' || req.query.active_only === '0';
+  let whereClause = '';
+  if (!includeInactive) {
+    whereClause = `WHERE u.active = 1 AND COALESCE(u.archived, 0) = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM employees e 
+        WHERE e.user_id = u.id AND LOWER(TRIM(COALESCE(e.status, ''))) IN ('terminated', 'inactive')
+      )`;
+  }
   // HR (records): department + designation resolved from the linked employee(s) via the
   // existing employees.user_id link — DISPLAY ONLY, alongside the untouched u.department.
   // Correlated subqueries (not a JOIN) so they never multiply the GROUP_CONCAT(role) rows;
@@ -364,8 +370,12 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
   const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
   if (!target) return res.status(404).json({ error: 'User not found' });
   const arch = req.body?.archived ? 1 : 0;
-  if (arch) db.prepare('UPDATE users SET archived=1, active=0 WHERE id=?').run(id);
-  else db.prepare('UPDATE users SET archived=0 WHERE id=?').run(id);
+  if (arch) {
+    db.prepare('UPDATE users SET archived=1, active=0 WHERE id=?').run(id);
+    onUserDeactivatedOrArchived(id, true);
+  } else {
+    db.prepare('UPDATE users SET archived=0 WHERE id=?').run(id);
+  }
   // Archiving is meant to BLOCK login. Before session revocation existed it
   // only blocked NEW logins — an already-open session sailed on. End it.
   if (arch) revokeUserSessions(id, db);
@@ -450,6 +460,13 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
   // drop the cache in that case and the new role lands on the next request.
   const nowActive = active ? 1 : 0;
   const lockedOut = prev.active === 1 && nowActive === 0;
+  if (nowActive === 0) {
+    onUserDeactivatedOrArchived(req.params.id, false);
+  } else if (prev.active === 0 && nowActive === 1) {
+    try {
+      db.prepare("UPDATE employees SET status = 'active' WHERE user_id = ? AND status = 'inactive'").run(req.params.id);
+    } catch (_) {}
+  }
   const demoted = prev.role === 'admin' && role && role !== 'admin';
   if (lockedOut || demoted || password) revokeUserSessions(req.params.id, db);
   else clearSessionCache(req.params.id);
