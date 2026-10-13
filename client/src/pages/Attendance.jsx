@@ -1653,9 +1653,21 @@ export default function Attendance() {
                                 {d.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
                                 {d.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
                                 {d.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                                {d.regularized_at && (
+                                  <span
+                                    className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 cursor-help"
+                                    title={
+                                      d.regularized_by_name
+                                        ? `Regularized by ${d.regularized_by_name}${d.remarks ? ` — ${d.remarks}` : ''}`
+                                        : (d.remarks ? `Regularized: ${d.remarks}` : 'Regularized with admin approval')
+                                    }
+                                  >
+                                    REG
+                                  </span>
+                                )}
                               </td>
                               <td className="px-2 py-2">
-                                <div className="flex gap-1 justify-center">
+                                <div className="flex gap-1 justify-center items-center">
                                   {d.punch_in_photo && (
                                     <img
                                       src={d.punch_in_photo}
@@ -1673,6 +1685,17 @@ export default function Attendance() {
                                       className="w-7 h-7 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
                                       title="Punch Out Photo"
                                     />
+                                  )}
+                                  {d.proof_url && (
+                                    <a
+                                      href={d.proof_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="w-7 h-7 rounded bg-blue-50 border border-blue-200 flex items-center justify-center text-[10px] text-blue-600 font-bold hover:bg-blue-100"
+                                      title="View attached proof document"
+                                    >
+                                      Doc
+                                    </a>
                                   )}
                                 </div>
                               </td>
@@ -1711,7 +1734,8 @@ export default function Attendance() {
                                         status: d.status,
                                         punch_in: isoToTimeInput(d.punch_in_time),
                                         punch_out: isoToTimeInput(d.punch_out_time),
-                                        remarks: d.remarks || ''
+                                        remarks: d.remarks || '',
+                                        proof_url: d.proof_url || null
                                       });
                                       setModal('admin-mark');
                                     }}
@@ -2162,7 +2186,7 @@ export default function Attendance() {
               punch_out: fillOnly === 'punch_in' ? null : (form.punch_out || null),
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
-            toast.success(/punch/i.test(res.data?.message || '')
+            toast.success(/regularized|punch/i.test(res.data?.message || '')
               ? `${who} · ${res.data.message} (${form.date})`
               : `${who} marked ${sentStatus.replace('_', ' ')} for ${form.date}`);
             setModal(null); load(); loadUserMuster();
@@ -2237,13 +2261,18 @@ export default function Attendance() {
           </div>
           {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
             <div>
-              <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
+              <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date or regularize a worked day)</span></label>
               <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
                 onChange={e => setForm({ ...form, _proofFile: e.target.files?.[0] || null })} />
               {form._proofFile && <p className="text-[11px] text-emerald-600 mt-1">Attached: {form._proofFile.name}</p>}
+              {form.proof_url && !form._proofFile && (
+                <p className="text-[11px] text-blue-600 mt-1">
+                  Attached file: <a href={form.proof_url} target="_blank" rel="noreferrer" className="underline font-medium">View current proof</a> (upload above to replace)
+                </p>
+              )}
             </div>
           )}
-          <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
+          <p className="text-[11px] text-gray-500 italic">Admin regularization updates attendance status and hours with an audit trail while preserving physical punch timestamps and photos.</p>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>

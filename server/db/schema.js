@@ -3288,6 +3288,13 @@ function initializeDatabase() {
     // delegations/checklists); marked_at stamps WHEN the backdate was done.
     ['attendance', 'proof_url TEXT'],
     ['attendance', 'marked_at DATETIME'],
+    // Attendance regularization (Option 1): allows admin to correct punch times/status
+    // with justification & proof, while retaining original physical punch timestamps for audit
+    ['attendance', 'original_punch_in DATETIME'],
+    ['attendance', 'original_punch_out DATETIME'],
+    ['attendance', 'original_status TEXT'],
+    ['attendance', 'regularized_at DATETIME'],
+    ['attendance', 'regularized_by INTEGER REFERENCES users(id)'],
     // Auto-mark-present allow-list. Users with this flag set get an
     // admin_marked='present' row created automatically every day so
     // they don't show up in the 'Not Punched In Today' panel. Mam's

@@ -318,11 +318,16 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
   const safeDays = Math.min(Math.max(diffDays, 1), 93);
 
   const attendanceRows = db.prepare(`
-    SELECT id, user_id, date, status, punch_in_time, punch_out_time, punch_in_photo, punch_out_photo,
-           total_hours, site_name, auto_punched_in, auto_punched_out, admin_marked, marked_by, remarks
-      FROM attendance
-     WHERE user_id = ? AND date BETWEEN ? AND ?
-     ORDER BY date ASC, punch_in_time ASC
+    SELECT a.id, a.user_id, a.date, a.status, a.punch_in_time, a.punch_out_time, a.punch_in_photo, a.punch_out_photo,
+           a.total_hours, a.site_name, a.auto_punched_in, a.auto_punched_out, a.admin_marked, a.marked_by, a.remarks,
+           a.proof_url, a.regularized_at, a.regularized_by, a.original_punch_in, a.original_punch_out, a.original_status,
+           u_reg.name AS regularized_by_name,
+           u_mark.name AS marked_by_name
+      FROM attendance a
+      LEFT JOIN users u_reg ON u_reg.id = a.regularized_by
+      LEFT JOIN users u_mark ON u_mark.id = a.marked_by
+     WHERE a.user_id = ? AND a.date BETWEEN ? AND ?
+     ORDER BY a.date ASC, a.punch_in_time ASC
   `).all(userId, from, to);
 
   const attByDate = new Map();
@@ -386,13 +391,22 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       if (att.auto_punched_in) summary.auto_punched_in++;
       if (att.auto_punched_out) summary.auto_punched_out++;
 
-      if (att.punch_in_time) {
+      if (att.punch_in_time && !att.admin_marked && !att.regularized_at) {
         const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 3600 * 1000);
         if (!isNaN(piIst)) {
           const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
           if (piMin >= lateCutoffMin) {
             isLate = true;
             status = 'late';
+            lateMin = Math.max(0, piMin - lateCutoffMin + 1);
+          }
+        }
+      } else if (att.punch_in_time && att.regularized_at && status !== 'present') {
+        const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 3600 * 1000);
+        if (!isNaN(piIst)) {
+          const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
+          if (piMin >= lateCutoffMin) {
+            isLate = true;
             lateMin = Math.max(0, piMin - lateCutoffMin + 1);
           }
         }
@@ -450,6 +464,14 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       auto_punched_in: !!att?.auto_punched_in,
       auto_punched_out: !!att?.auto_punched_out,
       admin_marked: !!att?.admin_marked,
+      regularized_at: att?.regularized_at || null,
+      regularized_by: att?.regularized_by || null,
+      regularized_by_name: att?.regularized_by_name || null,
+      marked_by_name: att?.marked_by_name || null,
+      original_punch_in: att?.original_punch_in || null,
+      original_punch_out: att?.original_punch_out || null,
+      original_status: att?.original_status || null,
+      proof_url: att?.proof_url || null,
       remarks: att?.remarks || null,
       attendance_id: att?.id || null,
       leave: dayLeave ? {
@@ -794,23 +816,91 @@ router.post('/admin-mark', (req, res) => {
   // management reinstates the rule. (P-all / admin-mark-bulk still requires
   // proof — separate endpoint, unchanged.)
 
-  // If a real attendance row already exists (user actually punched), don't
-  // overwrite it. Admin-mark is meant for the missing-row case only.
+  // If a real attendance row already exists (user actually punched):
   const existing = db.prepare(
-    'SELECT id, admin_marked, punch_in_time, punch_out_time, total_hours, status FROM attendance WHERE user_id=? AND date=?'
+    `SELECT id, admin_marked, punch_in_time, punch_out_time, total_hours, status, remarks, proof_url,
+            original_punch_in, original_punch_out, original_status
+       FROM attendance WHERE user_id=? AND date=?`
   ).get(user_id, date);
   if (existing && !existing.admin_marked) {
-    // A REAL punch row. Still the missed-punch case mam asked for: fill the
-    // side the employee never punched, and never touch the side they did.
+    // Check if filling a single missed punch or performing admin regularization:
     const fillIn = piIso && !existing.punch_in_time ? piIso : null;
     const fillOut = poIso && !existing.punch_out_time ? poIso : null;
+
     if (!fillIn && !fillOut) {
-      return res.status(400).json({
-        error: (piIso || poIso)
-          ? 'That punch is already recorded — an existing punch time is never overwritten.'
-          : 'User already has an attendance record for this date',
+      // Option 1: Admin Regularization with full audit trail.
+      // An existing completed punch row is regularized with reason and approval proof.
+      // The original physical timestamps and status are permanently preserved in audit columns.
+      const origIn = existing.original_punch_in || existing.punch_in_time;
+      const origOut = existing.original_punch_out || existing.punch_out_time;
+      const origStatus = existing.original_status || existing.status;
+
+      const newIn = piIso || existing.punch_in_time;
+      const newOut = poIso || existing.punch_out_time;
+      const hrs = newIn && newOut
+        ? punchHours(newIn, newOut)
+        : (finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : (existing.total_hours || 0));
+
+      db.prepare(`
+        UPDATE attendance
+           SET punch_in_time = ?,
+               punch_out_time = ?,
+               total_hours = ?,
+               status = ?,
+               remarks = COALESCE(NULLIF(?, ''), remarks),
+               marked_by = ?,
+               marked_at = CURRENT_TIMESTAMP,
+               proof_url = COALESCE(?, proof_url),
+               original_punch_in = ?,
+               original_punch_out = ?,
+               original_status = ?,
+               regularized_at = CURRENT_TIMESTAMP,
+               regularized_by = ?,
+               admin_marked = 1
+         WHERE id = ?
+      `).run(
+        newIn,
+        newOut,
+        hrs,
+        finalStatus,
+        remarks || '',
+        req.user.id,
+        proof_url || null,
+        origIn,
+        origOut,
+        origStatus,
+        req.user.id,
+        existing.id
+      );
+
+      try {
+        const { logAuditEvent } = require('../middleware/audit');
+        logAuditEvent({
+          user: req.user,
+          action: 'REGULARIZE',
+          entity_type: 'attendance',
+          entity_id: existing.id,
+          entity_label: `${date} (User ID ${user_id})`,
+          details: {
+            previous_status: origStatus,
+            new_status: finalStatus,
+            previous_punch_in: origIn,
+            new_punch_in: newIn,
+            previous_punch_out: origOut,
+            new_punch_out: newOut,
+            total_hours: hrs,
+            remarks: remarks || '',
+            proof_url: proof_url || null
+          }
+        });
+      } catch (_) {}
+
+      return res.json({
+        id: existing.id,
+        message: `Attendance regularized by admin: ${finalStatus.replace('_', ' ')}${hrs ? ` (${hrs} h)` : ''}`,
       });
     }
+
     const newIn = fillIn || existing.punch_in_time;
     const newOut = fillOut || existing.punch_out_time;
     const hrs = newIn && newOut ? punchHours(newIn, newOut) : (existing.total_hours || 0);
@@ -818,9 +908,10 @@ router.post('/admin-mark', (req, res) => {
     const newStatus = (newIn && newOut && hrs < 4) ? 'half_day' : existing.status;
     db.prepare(
       `UPDATE attendance SET punch_in_time=?, punch_out_time=?, total_hours=?, status=?,
-              remarks=COALESCE(NULLIF(?, ''), remarks), marked_by=?, marked_at=CURRENT_TIMESTAMP
+              remarks=COALESCE(NULLIF(?, ''), remarks), marked_by=?, marked_at=CURRENT_TIMESTAMP,
+              proof_url=COALESCE(?, proof_url)
          WHERE id=?`
-    ).run(newIn, newOut, hrs, newStatus, remarks || '', req.user.id, existing.id);
+    ).run(newIn, newOut, hrs, newStatus, remarks || '', req.user.id, proof_url || null, existing.id);
     return res.json({
       id: existing.id,
       message: `Missing punch ${fillIn && fillOut ? 'times' : fillIn ? 'in' : 'out'} filled${newIn && newOut ? ` — ${hrs} h` : ''}`,
