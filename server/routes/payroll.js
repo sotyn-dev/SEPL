@@ -236,7 +236,7 @@ function calculateForEmployee(db, settings, employee, month) {
   const startDate = `${month}-01`;
   const endDate = `${month}-${pad(totalDays)}`;
   const attRows = userId
-    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status, admin_marked
+    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status, admin_marked, regularized_at
                   FROM attendance WHERE user_id = ? AND date BETWEEN ? AND ?`).all(userId, startDate, endDate)
     : [];
   const attByDate = {};
@@ -313,7 +313,7 @@ function calculateForEmployee(db, settings, employee, month) {
     const isHoliday = !!holidayByDate[dateStr];
 
     const hasPunch = !!(att && att.punch_in_time);
-    const adminAttStatus = !!(att && att.admin_marked && ['present', 'late', 'half_day', 'short_day'].includes(String(att.status || '').toLowerCase()));
+    const adminAttStatus = !!(att && (att.admin_marked || att.regularized_at) && ['present', 'late', 'half_day', 'short_day'].includes(String(att.status || '').toLowerCase()));
     const hasAttended = hasPunch || adminAttStatus;
 
     // Sunday (when employee did NOT work/attend)
@@ -405,7 +405,7 @@ function calculateForEmployee(db, settings, employee, month) {
     // it absent). When an admin manually marks a day, honour that status
     // directly — this is what makes "admin updates present/absent" flow
     // through to the payroll counts. Wins over the punch logic.
-    if (att && att.admin_marked) {
+    if (att && (att.admin_marked || att.regularized_at)) {
       const s = String(att.status || '').toLowerCase();
       if (s === 'present' || s === 'late') {
         dayPay = 1;
