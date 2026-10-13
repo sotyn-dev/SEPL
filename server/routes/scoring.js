@@ -907,7 +907,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // Full-Kitting uses all active projects and filled cells across all three stages, independent of CRM owner.
+      // Full-Kitting uses active projects and checkpoints across active stages (stages disabled for a project are deducted from plan).
       if (source === 'auto:crm_kitting') {
         try {
           const { kittingAllProjects, kittingProgress } = require('../lib/crmKittingProgress');
@@ -2210,37 +2210,60 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
 // ---------- /scoring/weekly/detail ----------
 //   List the actual rows that fed a single (user, module) cell so admin
-//   can see what was given vs what was done.
-router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) => {
+//   can see what was given vs what was done, or inspect planned/actual/pending subsets.
+router.get('/weekly/detail', (req, res) => {
   try {
-    const userId = parseInt(req.query.user_id, 10);
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const isSelf = req.user.id === userId;
+    const db = getDb();
+    if (!isSelf && req.user.role !== 'admin') {
+      const allowed = db.prepare(
+        `SELECT MAX(rp.can_view) as allowed
+         FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+         WHERE ur.user_id = ? AND rp.module = 'scoring'`
+      ).get(req.user.id)?.allowed;
+      if (!allowed) return res.status(403).json({ error: 'Permission denied' });
+    }
+
     const moduleName = req.query.module;
     if (!userId || !moduleName) return res.status(400).json({ error: 'user_id and module required' });
+    const type = req.query.type || 'all'; // 'all' | 'planned' | 'actual' | 'prev_pending' | 'prev_done'
     const { start, end } = weekRange(req);
     const startTs = `${start} 00:00:00`;
     const endTs = `${end} 23:59:59`;
-    const db = getDb();
 
     let rows = [];
     if (moduleName === 'delegations') {
-      rows = db.prepare(
-        `SELECT d.id, d.title, d.description, d.status, d.due_date, d.created_at,
-                d.submitted_at, d.reviewed_at, ab.name as assigned_by_name
-         FROM delegations d
-         LEFT JOIN users ab ON ab.id = d.assigned_by
-         WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ?
-         ORDER BY d.due_date DESC, d.created_at DESC`
-      ).all(userId, start, end);
+      const baseSql = `SELECT d.id, d.title, d.description, d.status, d.due_date, d.created_at,
+                              d.submitted_at, d.reviewed_at, ab.name as assigned_by_name
+                       FROM delegations d
+                       LEFT JOIN users ab ON ab.id = d.assigned_by `;
+      if (type === 'actual') {
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ? AND d.status = 'approved' ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, end);
+      } else if (type === 'prev_pending') {
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND (d.status != 'approved' OR (d.reviewed_at IS NOT NULL AND datetime(d.reviewed_at) >= ?)) ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, startTs);
+      } else if (type === 'prev_done') {
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND d.status = 'approved' AND datetime(d.reviewed_at) BETWEEN ? AND ? ORDER BY d.reviewed_at DESC, d.due_date DESC`).all(userId, start, startTs, endTs);
+      } else {
+        // 'planned' or 'all'
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ? ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, end);
+      }
     } else if (moduleName === 'pms') {
-      rows = db.prepare(
-        `SELECT p.id, p.title, p.description, p.status, p.due_date, p.created_at,
-                p.submitted_at, p.reviewed_at, ab.name as assigned_by_name,
-                p.project_name_snapshot as project_name
-         FROM pms_tasks p
-         LEFT JOIN users ab ON ab.id = p.assigned_by
-         WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ?
-         ORDER BY p.due_date DESC, p.created_at DESC`
-      ).all(userId, start, end);
+      const baseSql = `SELECT p.id, p.title, p.description, p.status, p.due_date, p.created_at,
+                              p.submitted_at, p.reviewed_at, ab.name as assigned_by_name,
+                              p.project_name_snapshot as project_name
+                       FROM pms_tasks p
+                       LEFT JOIN users ab ON ab.id = p.assigned_by `;
+      if (type === 'actual') {
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ? AND p.status = 'approved' ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, end);
+      } else if (type === 'prev_pending') {
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND (p.status != 'approved' OR (p.reviewed_at IS NOT NULL AND datetime(p.reviewed_at) >= ?)) ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, startTs);
+      } else if (type === 'prev_done') {
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND p.status = 'approved' AND datetime(p.reviewed_at) BETWEEN ? AND ? ORDER BY p.reviewed_at DESC, p.due_date DESC`).all(userId, start, startTs, endTs);
+      } else {
+        // 'planned' or 'all'
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ? ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, end);
+      }
     } else if (moduleName === 'checklists') {
       rows = require('../lib/checklistWeekScore').checklistWeekScore(db, userId, start).rows;
     } else if (moduleName === 'tickets') {
@@ -2256,9 +2279,23 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
       return res.status(400).json({ error: 'Unknown module' });
     }
 
-    res.json({ user_id: userId, module: moduleName, week_start: start, week_end: end, rows });
+    res.json({ user_id: userId, module: moduleName, type, week_start: start, week_end: end, rows });
   } catch (err) {
     console.error('scoring detail error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- /scoring/engagement/users ----------
+// Returns active vs inactive users for a given week (for auto:daily_active_users audit)
+router.get('/engagement/users', (req, res) => {
+  try {
+    const { start, end } = weekRange(req);
+    const db = getDb();
+    const data = require('../lib/userEngagement').dailyActiveUsersDetail(db, start, end);
+    res.json(data);
+  } catch (err) {
+    console.error('engagement users detail error', err);
     res.status(500).json({ error: err.message });
   }
 });

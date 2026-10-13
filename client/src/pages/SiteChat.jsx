@@ -5,6 +5,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, mem
 import { io } from 'socket.io-client';
 import api from '../api';
 import ChatSharedAttachment from '../components/ChatSharedAttachment';
+import ChatShareStatusModal from '../components/ChatShareStatusModal';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
@@ -378,6 +379,7 @@ export default function SiteChat() {
   const [recording, setRecording] = useState(false);
   const [recTime, setRecTime] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  const [shareSetupOpen, setShareSetupOpen] = useState(false);
   const [mention, setMention] = useState(null);    // @-tag autocomplete: { query, start } or null
   const [groupsHasMore, setGroupsHasMore] = useState(false); // more groups exist beyond the loaded page (perf pass)
   const [loadingGroups, setLoadingGroups] = useState(false); // drives the group-list "loading more…" spinner
@@ -1057,7 +1059,12 @@ export default function SiteChat() {
       <div className="hidden md:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><BiMessageRoundedCheck className="text-blue-900" /> SOTYN Chat</h1>
-          <a href="/site-chat/share" className="text-xs text-blue-700 underline">Share content / resume draft</a>
+          <div className="flex items-center gap-3 mt-0.5">
+            <a href="/site-chat/share" className="text-xs text-blue-700 underline font-medium">Share content / resume draft</a>
+            <button type="button" onClick={() => setShareSetupOpen(true)} className="text-xs text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded flex items-center gap-1 font-medium transition-colors" title="WhatsApp & Media share setup">
+              📲 WhatsApp Share Setup
+            </button>
+          </div>
           <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
         </div>
         {/* Your profile photo — tap to upload (mam 2026-06-19). */}
@@ -1080,6 +1087,9 @@ export default function SiteChat() {
               <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#1e3a8a]">✎</span>
             </button>
             <BiMessageRoundedCheck className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
+            <button type="button" onClick={() => setShareSetupOpen(true)} className="md:hidden p-1.5 rounded hover:bg-white/15 text-white/90" title="WhatsApp Share Setup" aria-label="WhatsApp Share Setup">
+              <span className="text-[11px] font-medium border border-white/30 rounded px-1.5 py-0.5">📲 Setup</span>
+            </button>
             <a href="/site-chat/share" className="md:hidden p-1.5 rounded hover:bg-white/15" title="Share content / resume draft" aria-label="Share content / resume draft"><FiPaperclip size={18} /></a>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
@@ -1576,6 +1586,7 @@ export default function SiteChat() {
           </Modal>
         );
       })()}
+      <ChatShareStatusModal isOpen={shareSetupOpen} onClose={() => setShareSetupOpen(false)} />
     </div>
   );
 }

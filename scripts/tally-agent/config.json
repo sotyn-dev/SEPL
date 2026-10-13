@@ -1,0 +1,7 @@
+{
+  "tallyUrl": "http://localhost:9000",
+  "erpBaseUrl": "https://securederp.in/api/tally-sync",
+  "apiToken": "REPLACE_WITH_YOUR_SYNC_TOKEN",
+  "companyName": "SEPL",
+  "syncIntervalSeconds": 120
+}

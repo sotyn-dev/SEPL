@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api';
+import ChatShareStatusModal from '../components/ChatShareStatusModal';
 import { useAuth } from '../context/AuthContext';
 import { chatShareLoginPath } from '../lib/chatShareReturn';
 
@@ -44,6 +45,7 @@ export default function ChatShare() {
   const [busy,setBusy]=useState(false),[progress,setProgress]=useState(''),[sent,setSent]=useState(null);
   const [online,setOnline]=useState(navigator.onLine),[newText,setNewText]=useState(''),[newFiles,setNewFiles]=useState([]);
   const [needsLogin,setNeedsLogin]=useState(false);
+  const [helpOpen,setHelpOpen]=useState(false);
   const running=useRef(false), generation=useRef(0);
   useEffect(()=>{
     let active=true;
@@ -135,7 +137,12 @@ export default function ChatShare() {
     <div className="max-w-3xl mx-auto space-y-5">
       <header className="flex items-start justify-between gap-3"><div><p className="text-blue-700 text-xs font-semibold">SOTYN CHAT</p>
         <h1 className="text-2xl font-bold mt-1">Share to conversations</h1><p className="text-sm text-slate-500 mt-1">Sending as {user.name}. Choose chats, review, then send.</p></div>
-        <Link to="/site-chat" className="text-sm text-blue-700 underline">Open Chat</Link></header>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={()=>setHelpOpen(true)} className="text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1.5 font-medium transition-colors">
+            📲 WhatsApp Setup
+          </button>
+          <Link to="/site-chat" className="text-sm text-blue-700 underline">Open Chat</Link>
+        </div></header>
       {!online && <p role="status" className="p-3 rounded-lg bg-amber-50 border border-amber-200">You’re offline. Your draft stays on this device for 24 hours. Reconnect, then press Send.</p>}
       {error && <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700">{error}
         {needsLogin && <button onClick={signInAgain} className="block underline mt-2">Sign in and resume</button>}</div>}
@@ -173,5 +180,6 @@ export default function ChatShare() {
           <button onClick={createDraft} className="block bg-blue-700 text-white rounded-xl px-5 py-2">Preview and choose chats</button>
         </section> : !error && <p>Loading shared content…</p>}
     </div>
+    <ChatShareStatusModal isOpen={helpOpen} onClose={()=>setHelpOpen(false)} />
   </main>;
 }

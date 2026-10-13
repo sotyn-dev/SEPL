@@ -107,7 +107,7 @@ const UNIT_OPTIONS = [
 //   pending                  → amber dot, italic "Pending"
 //   approved                 → green tick + name + short date
 //   rejected                 → red cross + name + truncated reason
-function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }) {
+function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason, override, originalApprover }) {
   const fmt = (d) => {
     if (!d) return '';
     const dt = new Date(d.includes('T') ? d : d.replace(' ', 'T') + 'Z');
@@ -118,24 +118,47 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   if (status === 'approved') {
     return (
       <div className="text-[11px]">
-        <div className="inline-flex items-baseline gap-1 md:flex">
+        <div className="inline-flex items-baseline gap-1 md:flex flex-wrap">
           <span className="text-emerald-600 font-mono w-3">✓</span>
           <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
           <span className="text-emerald-700 font-medium">{name || '—'}</span>
+          {override && (
+            <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium inline-block"
+                  title={originalApprover ? `Admin override · Originally assigned to ${originalApprover}` : 'Admin override'}>
+              Override
+            </span>
+          )}
         </div>
-        <span className="text-[10px] text-gray-500 pl-1 md:pl-4">{fmt(at)}</span>
+        <div className="text-[10px] text-gray-500 pl-1 md:pl-4">
+          <span>{fmt(at)}</span>
+          {override && originalApprover && (
+            <span className="text-gray-400 ml-1">· Assigned: {originalApprover}</span>
+          )}
+        </div>
       </div>
     );
   }
   if (status === 'rejected' || isReject) {
     return (
       <div className="text-[11px]" title={reason || ''}>
-        <div className="inline-flex items-baseline gap-1 md:flex">
+        <div className="inline-flex items-baseline gap-1 md:flex flex-wrap">
           <span className="text-red-600 font-mono w-3">✗</span>
           <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
           <span className="text-red-700 font-medium">{name || '—'}</span>
+          {override && (
+            <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium inline-block"
+                  title={originalApprover ? `Admin override · Originally assigned to ${originalApprover}` : 'Admin override'}>
+              Override
+            </span>
+          )}
         </div>
-        {reason && <span className="pl-1 text-[10px] text-red-500 italic truncate max-w-[100px] md:pl-4">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+        <div className="text-[10px] pl-1 md:pl-4">
+          {at && <span className="text-gray-500">{fmt(at)}</span>}
+          {override && originalApprover && (
+            <span className="text-gray-400 ml-1">· Assigned: {originalApprover}</span>
+          )}
+          {reason && <span className="block text-red-500 italic truncate max-w-[120px]">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+        </div>
       </div>
     );
   }
@@ -1962,19 +1985,78 @@ export default function Procurement() {
     ? ['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(i.status) && (i.created_by === user?.id || i.can_review_indent || canEdit('procurement') || isAdmin())
     : canEdit('procurement') && i.status !== 'approved');
   const renderRaiserActions = (i) => {
-    if (['submitted', 'crm_approved'].includes(i.status)) return i.can_review_indent ? (
-      <><button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
-        <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button></>
-    ) : <span className="text-xs text-amber-700">Awaiting review: {i.approver_names?.l1}</span>;
-    if (i.status === 'l1_approved') return i.created_by === user?.id ? (
-      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
-    ) : <span className="text-xs text-blue-700">Awaiting raiser: {i.created_by_name || i.raised_by_name}</span>;
+    if (['submitted', 'crm_approved'].includes(i.status)) {
+      if (isAdmin()) {
+        return (
+          <>
+            <button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
+            <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button>
+            <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+          </>
+        );
+      }
+      if (i.can_review_indent) {
+        return (
+          <>
+            <button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
+            <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button>
+          </>
+        );
+      }
+      return <span className="text-xs text-amber-700">Awaiting review: {i.approver_names?.l1}</span>;
+    }
+    if (i.status === 'l1_approved') {
+      if (isAdmin()) {
+        return (
+          <>
+            <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
+            <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+          </>
+        );
+      }
+      if (i.created_by === user?.id) {
+        return (
+          <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
+        );
+      }
+      return <span className="text-xs text-blue-700">Awaiting raiser: {i.created_by_name || i.raised_by_name}</span>;
+    }
     return null;
   };
   const renderRaiserTrail = (i) => <div className="space-y-1 text-xs min-w-[160px]">
-    {i.approval_policy === 'crm_two_level' && <ApprovalLevelRow label="CRM" status={i.crm_status} name={i.crm_by_name} at={i.crm_at} />}
-    <ApprovalLevelRow label="Checked correct" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at} />
-    <ApprovalLevelRow label="Raiser approval" status={i.l2_status || 'pending'} name={i.l2_by_name || i.created_by_name || i.raised_by_name} at={i.l2_at} waiting={i.l1_status !== 'approved'} />
+    {i.approval_policy === 'crm_two_level' && (
+      <ApprovalLevelRow
+        label="CRM"
+        status={i.crm_status}
+        name={i.crm_by_name}
+        at={i.crm_at}
+        override={!!i.crm_admin_override}
+        originalApprover={i.crm_assigned_approver}
+        isReject={i.status === 'rejected' && i.crm_status === 'rejected'}
+        reason={i.crm_reason || i.rejection_reason}
+      />
+    )}
+    <ApprovalLevelRow
+      label="Checked correct"
+      status={i.l1_status}
+      name={i.l1_by_name || i.approver_names?.l1}
+      at={i.l1_at}
+      override={!!i.l1_admin_override}
+      originalApprover={i.l1_assigned_approver}
+      isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
+      reason={i.rejection_reason}
+    />
+    <ApprovalLevelRow
+      label="Raiser approval"
+      status={i.l2_status || 'pending'}
+      name={i.l2_by_name || i.created_by_name || i.raised_by_name}
+      at={i.l2_at}
+      waiting={i.l1_status !== 'approved'}
+      override={!!i.l2_admin_override}
+      originalApprover={i.l2_assigned_approver}
+      isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
+      reason={i.rejection_reason}
+    />
     <span className="text-gray-400">Revision {i.review_revision || 0}</span>
   </div>;
 
@@ -3501,10 +3583,12 @@ export default function Procurement() {
                           {isCrmTwoLevel && (
                             <ApprovalLevelRow label="CRM" status={i.crm_status}
                               name={i.crm_by_name} at={i.crm_at}
+                              override={!!i.crm_admin_override} originalApprover={i.crm_assigned_approver}
                               isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
                           )}
                           <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
                             waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
+                            override={!!i.l1_admin_override} originalApprover={i.l1_assigned_approver}
                             isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
                           {/* L2 row shows when the switch is ON, or for a genuinely
                             completed historical L2 (approved/rejected). A stale
@@ -3513,6 +3597,7 @@ export default function Procurement() {
                           {i.l2_status && i.l2_status !== 'n/a' && (i.l2_enabled || i.l2_status === 'approved' || i.l2_status === 'rejected') && (
                             <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name} at={i.l2_at}
                               waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                              override={!!i.l2_admin_override} originalApprover={i.l2_assigned_approver}
                               isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
                           )}
                         </div>
@@ -3521,12 +3606,14 @@ export default function Procurement() {
                           {i.status === 'approved' && (
                             <div className="text-emerald-700 font-medium flex items-center gap-1">
                               <FiCheck size={11} /> {i.approved_by_name || 'approver'}
+                              {i.approved_admin_override ? <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                               {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{fmtIST(i.approved_at, { day: '2-digit', month: 'short' })}</span>}
                             </div>
                           )}
                           {i.status === 'rejected' && (
                             <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason}>
                               <FiX size={11} /> {i.rejected_by_name || 'approver'}
+                              {i.rejected_admin_override ? <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                               {i.rejection_reason && <span className="text-[10px] italic ml-1 truncate">"{i.rejection_reason}"</span>}
                             </div>
                           )}
@@ -3698,6 +3785,8 @@ export default function Procurement() {
                                   status={i.crm_status}
                                   name={i.crm_by_name}
                                   at={i.crm_at}
+                                  override={!!i.crm_admin_override}
+                                  originalApprover={i.crm_assigned_approver}
                                   isReject={i.status === 'rejected' && i.crm_status === 'rejected'}
                                   reason={i.crm_reason || i.rejection_reason}
                                 />
@@ -3708,6 +3797,8 @@ export default function Procurement() {
                                 name={i.l1_by_name || i.approver_names?.l1}
                                 at={i.l1_at}
                                 waiting={i.approval_policy === 'crm_two_level' && i.crm_status !== 'approved' && i.l1_status === 'pending'}
+                                override={!!i.l1_admin_override}
+                                originalApprover={i.l1_assigned_approver}
                                 isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
                                 reason={i.rejection_reason}
                               />
@@ -3721,6 +3812,8 @@ export default function Procurement() {
                                   name={i.l2_by_name}
                                   at={i.l2_at}
                                   waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                                  override={!!i.l2_admin_override}
+                                  originalApprover={i.l2_assigned_approver}
                                   isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
                                   reason={i.rejection_reason}
                                 />
@@ -3732,6 +3825,7 @@ export default function Procurement() {
                                 <div>
                                   <div className="text-emerald-700 font-medium flex items-center gap-1">
                                     <FiCheck size={12} /> {i.approved_by_name || 'approver'}
+                                    {i.approved_admin_override ? <span className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                                   </div>
                                   {i.approved_at && (
                                     <div className="text-[10px] text-gray-500">
@@ -3744,6 +3838,7 @@ export default function Procurement() {
                                 <div>
                                   <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason || ''}>
                                     <FiX size={12} /> {i.rejected_by_name || 'approver'}
+                                    {i.rejected_admin_override ? <span className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">Override</span> : null}
                                   </div>
                                   {i.rejection_reason && (
                                     <div className="text-[10px] text-gray-500 italic max-w-[180px] truncate" title={i.rejection_reason}>
@@ -3809,7 +3904,7 @@ export default function Procurement() {
                                     return (
                                       <>
                                         <button onClick={() => openApproveModal(i)} className="btn text-xs py-1 px-2 bg-purple-600 text-white hover:bg-purple-700">Approve as CRM</button>
-                                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>}
+                                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>
                                       </>
                                     );
                                   }

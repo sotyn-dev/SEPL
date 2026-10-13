@@ -595,11 +595,13 @@ try {
   console.warn('[push] VAPID init failed (web-push package may need npm install):', e.message);
 }
 app.use('/api/delegations', require('./routes/delegations'));
+app.use('/api/daily-standup', require('./routes/dailyStandup'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/market-rates', require('./routes/marketRates'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/tally-bills', require('./routes/tallyBills'));
+app.use('/api/tally-sync', require('./routes/tallySync'));
 app.use('/api/module-videos', require('./routes/moduleVideos'));
 app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/perf', require('./routes/perf'));         // Admin ▸ Performance (hang audit 2026-09-05)

@@ -312,8 +312,12 @@ function calculateForEmployee(db, settings, employee, month) {
 
     const isHoliday = !!holidayByDate[dateStr];
 
-    // Sunday
-    if (sun && !leaveType && !att) {
+    const hasPunch = !!(att && att.punch_in_time);
+    const adminAttStatus = !!(att && att.admin_marked && ['present', 'late', 'half_day', 'short_day'].includes(String(att.status || '').toLowerCase()));
+    const hasAttended = hasPunch || adminAttStatus;
+
+    // Sunday (when employee did NOT work/attend)
+    if (sun && !hasAttended) {
       if (settings.sundays_paid) {
         dayPay = 1;
         sundayCount += 1;
@@ -328,7 +332,14 @@ function calculateForEmployee(db, settings, employee, month) {
       } else {
         dayLabel = 'sunday_unpaid';
       }
-      breakdown.push({ date: dateStr, day: 'Sun', label: dayLabel, pay: dayPay, holiday_name: isHoliday ? holidayByDate[dateStr] : undefined });
+      breakdown.push({
+        date: dateStr,
+        day: 'Sun',
+        label: dayLabel,
+        pay: dayPay,
+        holiday_name: isHoliday ? holidayByDate[dateStr] : undefined,
+        ...(leaveType ? { applied_leave: leaveType } : {}),
+      });
       paidDays += dayPay;
       continue;
     }
@@ -361,8 +372,10 @@ function calculateForEmployee(db, settings, employee, month) {
       continue;
     }
 
-    // Approved leave that day
-    if (leaveType) {
+    // Approved leave that day (only when employee did NOT attend/work)
+    // If an employee applied for leave but came to work (punched in or marked present),
+    // attendance takes precedence and leave balance is NOT consumed.
+    if (leaveType && !hasAttended) {
       let paid = false;
       if (leaveType === 'casual') {
         // 1 paid casual leave per month per staff (mam 2026-06-09).
@@ -415,7 +428,14 @@ function calculateForEmployee(db, settings, employee, month) {
         dayLabel = 'admin_absent';
       }
       paidDays += dayPay;
-      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay, admin_marked: true });
+      breakdown.push({
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: dayPay,
+        admin_marked: true,
+        ...(leaveType ? { applied_leave: leaveType } : {}),
+      });
       continue;
     }
 
@@ -465,7 +485,15 @@ function calculateForEmployee(db, settings, employee, month) {
         }
       }
       paidDays += dayPay;
-      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay, punch_in: att.punch_in_time, hours });
+      breakdown.push({
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: dayPay,
+        punch_in: att.punch_in_time,
+        hours,
+        ...(leaveType ? { applied_leave: leaveType } : {}),
+      });
       continue;
     }
 
@@ -560,8 +588,26 @@ function calculateForEmployee(db, settings, employee, month) {
     sundayWorkedPay += b.pay;
     b.sunday_worked = true;
     b.sunday_bonus = b.pay;
+    if (settings.sundays_paid) {
+      // Every Sunday is credited as a paid Sunday (4 or 5 per month).
+      // Working on Sunday adds the attendance pay on top for double pay.
+      sundayCount += 1;
+      paidDays += 1;
+      b.pay = round2(b.pay + 1);
+    } else {
+      paidDays += b.pay;
+      b.pay = round2(b.pay * 2);
+    }
+    if (b.label === 'present' || b.label === 'late') {
+      b.label = 'sunday_worked';
+    } else if (b.label === 'admin_present' || b.label === 'admin_late') {
+      b.label = 'admin_sunday_worked';
+    } else if (b.label === 'half_day_late' || b.label === 'half_day_low_hours') {
+      b.label = 'sunday_half_day';
+    } else if (b.label === 'admin_half_day' || b.label === 'admin_short_day') {
+      b.label = 'admin_sunday_half_day';
+    }
   }
-  paidDays += sundayWorkedPay;
 
   // ─── Per-day rate (mam 2026-06-01) ───────────────────────────────
   // "one per day we count = full salary / total days in month".
@@ -635,7 +681,7 @@ function calculateForEmployee(db, settings, employee, month) {
     // present_days = the REAL worked-day equivalents from attendance
     // (full=1, half=0.5) — always the auto figure so a manual Paid Days
     // override doesn't distort the breakdown.
-    present_days: round2(paidDays - sundayCount - paidLeaves - holidayDays - sundayWorkedPay),
+    present_days: round2(paidDays - sundayCount - paidLeaves - holidayDays),
     holiday_days: round2(holidayDays),
     sunday_worked: sundayWorked,            // # of Sundays the person worked
     sunday_worked_pay: round2(sundayWorkedPay), // extra day-equivalents paid for them

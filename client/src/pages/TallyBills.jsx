@@ -24,8 +24,9 @@ import { fmtDateTime, fmtDate } from '../utils/datetime';
 import { exportCsv } from '../utils/exportCsv';
 import {
   FiPlus, FiDownload, FiFilter, FiPaperclip, FiClock, FiCheckCircle,
-  FiPauseCircle, FiPlayCircle, FiXCircle, FiUnlock, FiSettings, FiEye, FiTrash2,
+  FiPauseCircle, FiPlayCircle, FiXCircle, FiUnlock, FiSettings, FiEye, FiTrash2, FiRefreshCw,
 } from 'react-icons/fi';
+import TallySyncModal from '../components/TallySyncModal';
 
 const CATS = [
   { id: '', label: 'All' },
@@ -131,6 +132,7 @@ export default function TallyBills() {
     return id ? +id : null;
   });
   const [settingsModal, setSettingsModal] = useState(false);
+  const [syncModal, setSyncModal] = useState(false);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const isDesktop = useIsDesktop();
@@ -227,9 +229,14 @@ export default function TallyBills() {
         </div>
         <div className="flex gap-2 flex-wrap">
           {admin && (
-            <button onClick={() => setSettingsModal(true)} className="btn btn-secondary flex items-center gap-1 text-sm" title="SLA rules + stage owners">
-              <FiSettings /> SLA Settings
-            </button>
+            <>
+              <button onClick={() => setSyncModal(true)} className="btn btn-secondary flex items-center gap-1.5 text-sm" title="Tally to ERP Sync Status & Token">
+                <FiRefreshCw /> Tally Sync
+              </button>
+              <button onClick={() => setSettingsModal(true)} className="btn btn-secondary flex items-center gap-1 text-sm" title="SLA rules + stage owners">
+                <FiSettings /> SLA Settings
+              </button>
+            </>
           )}
           {tab === 'register' && (
             <button onClick={exportRegister} disabled={exporting} className="btn btn-secondary flex items-center gap-2 text-sm disabled:opacity-60"><FiDownload /> {exporting ? 'Exporting…' : 'Export Excel'}</button>
@@ -312,7 +319,14 @@ export default function TallyBills() {
                 {bills.map(b => (
                   <tr key={b.id} className="cursor-pointer hover:bg-blue-50/40" onClick={() => setDetailId(b.id)}>
                     <td>
-                      <div className="font-medium">{b.bill_number}</div>
+                      <div className="font-medium flex items-center gap-1.5">
+                        {b.bill_number}
+                        {b.is_tally_synced === 1 && (
+                          <span className="px-1.5 py-0.2 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded tracking-wide">
+                            Tally
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[10px] text-gray-400">{b.register_no} · {fmtDate(b.bill_date)}</div>
                     </td>
                     <td>{b.vendor_name}</td>
@@ -355,7 +369,15 @@ export default function TallyBills() {
               <div key={b.id} className="card p-3 space-y-2" onClick={() => setDetailId(b.id)}>
                 <div className="flex justify-between items-start gap-2">
                   <div>
-                    <div className="font-semibold text-sm">{b.bill_number} <span className="text-[10px] text-gray-400 font-normal">{b.register_no}</span></div>
+                    <div className="font-semibold text-sm flex items-center gap-1.5">
+                      {b.bill_number}
+                      {b.is_tally_synced === 1 && (
+                        <span className="px-1.5 py-0.2 text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
+                          Tally
+                        </span>
+                      )}
+                      <span className="text-[10px] text-gray-400 font-normal">{b.register_no}</span>
+                    </div>
                     <div className="text-xs text-gray-500">{b.vendor_name} · {b.category_label}</div>
                     <div className="text-[11px] text-gray-400 truncate max-w-[220px]">{b.project_name}</div>
                   </div>
@@ -409,6 +431,7 @@ export default function TallyBills() {
           onClose={() => { setDetailId(null); load(); }} />
       )}
       {settingsModal && <SettingsModal onClose={() => setSettingsModal(false)} />}
+      {syncModal && <TallySyncModal isOpen={syncModal} onClose={() => setSyncModal(false)} isAdmin={admin} />}
     </div>
   );
 }
@@ -553,13 +576,22 @@ function DetailModal({ id, meta, canEditM, canApproveM, canDeleteM, isAdmin, onC
         <div className="flex flex-wrap gap-2 items-center">
           <StatusBadgePill bill={d} />
           <RagPill sla={d.sla} />
+          {d.is_tally_synced === 1 && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+              ⚡ SYNCED FROM TALLY
+            </span>
+          )}
           {d.locked === 1 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-800 text-white">LOCKED</span>}
           {secondPending && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white">AWAITING DIRECTOR</span>}
           <span className="text-xs text-gray-500 ml-auto">{d.category_label} · {d.project_name} · uploaded {fmtDateTime(d.t0_uploaded_at)}</span>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div className="card p-2"><div className="text-[10px] text-gray-400">Vendor</div><div className="text-sm font-semibold">{d.vendor_name}</div></div>
+          <div className="card p-2">
+            <div className="text-[10px] text-gray-400">Vendor</div>
+            <div className="text-sm font-semibold">{d.vendor_name}</div>
+            {d.tally_party_gstin && <div className="text-[10px] text-gray-500 font-mono">GST: {d.tally_party_gstin}</div>}
+          </div>
           <div className="card p-2"><div className="text-[10px] text-gray-400">Bill Amount</div><div className="text-sm font-bold tabular-nums">{inr(d.bill_amount)}</div></div>
           <div className="card p-2"><div className="text-[10px] text-gray-400">Approved</div><div className="text-sm font-bold tabular-nums">{d.approved_amount != null ? inr(d.approved_amount) : '—'}</div>
             {d.variance_amount ? <div className="text-[10px] text-red-600">variance {inr(d.variance_amount)} ({d.variance_pct}%)</div> : null}</div>

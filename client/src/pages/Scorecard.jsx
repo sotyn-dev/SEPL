@@ -14,7 +14,7 @@ import TemplateAssignmentPicker from '../components/TemplateAssignmentPicker';
 import { ScoreMetricSettings, ScoreMetricDates } from '../components/ScoreMetricInputs';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter, FiInfo, FiExternalLink } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { createLatestScorecardRequest, createScorecardSelection, selectScorecardWeek, selectedScorecard, saveSelectedScorecard } from '../utils/scorecardSelection';
 import {
@@ -90,10 +90,10 @@ const SOURCE_INFO = {
   manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
   'auto:lead_response_hours': { plan: 'You set the allowed response hours', actual: 'Average hours from Sales Funnel lead creation to its first completed follow-up by this user, for leads created in the week. Older completions without a timestamp are excluded.' },
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
-  'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
-  'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
-  'auto:checklists':            { plan: 'Assigned checklist occurrences due Mon–Sat, following frequency and attendance rules', actual: 'Approved occurrences from that same week, including submissions made by an admin for the assignee' },
-  'auto:tickets':               { plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed' },
+  'auto:delegations':           { desc: 'Tracks task execution on assignments delegated to you with target deadlines in this week.', plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)', tip: 'Submit tasks before due date and request review approval from your assigner.' },
+  'auto:pms':                   { desc: 'Tracks scheduled PMS engineering and project milestones due this week.', plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)', tip: 'Keep milestone timelines updated and submit deliverables for approval promptly.' },
+  'auto:checklists':            { desc: 'Assigned recurring checklists and inspection SOPs.', plan: 'Assigned checklist occurrences due Mon–Sat, following frequency and attendance rules', actual: 'Approved occurrences from that same week, including submissions made by an admin for the assignee', tip: 'Fill checklist responses on their due days and avoid overdue backlogs.' },
+  'auto:tickets':               { desc: 'Resolution of internal support and issue tickets.', plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed', tip: 'Close open support tickets within their assigned SLA deadline.' },
   'auto:snags':                  { plan: 'Snags raised within the week, assigned to user', actual: 'Of those, status = Approved (whenever approved)' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
@@ -102,7 +102,7 @@ const SOURCE_INFO = {
   'auto:tickets_all':           { plan: 'ALL help tickets DUE this week (company-wide)', actual: 'Of those, resolved (company-wide)' },
   'auto:snags_all':             { plan: 'ALL snags raised within the week (company-wide)', actual: 'Of those, status = Approved (company-wide)' },
   'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
-  'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
+  'auto:raci_steps_done':       { desc: 'Cross-module SOP accountability across Drawings, Procurement, Indents, and Dispatch.', plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)', tip: 'Click on the numbers or "step-wise" to see module-by-module breakdown and pending steps.' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // ERP Management (System Flow) — the ERP build tracked step by step, scored
   // on the DEVELOPER column, not the RACI-style Owner (mam 2026-09-07).
@@ -127,7 +127,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'All active projects × active checkpoints across all 3 stages (regardless of CRM owner)', actual: 'Cells with a nonblank latest response (Yes, No, Partially or N/A) — cumulative, all 3 stages' },
+  'auto:crm_kitting':           { plan: 'All active checkpoints across active stages per project (stages disabled for a project are deducted)', actual: 'Cells with a nonblank latest response across active stages (Yes, No, Partially or N/A)' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -143,9 +143,9 @@ const SOURCE_INFO = {
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
   'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
   // System / Engagement (from the audit trail)
-  'auto:daily_active_users':    { plan: 'Active, non-archived users', actual: 'Average daily users checking or updating work pages (IST); excludes attendance, login-only use and background pings. Past page views were not recorded.' },
+  'auto:daily_active_users':    { desc: 'Company-wide employee adoption & daily system engagement across all departments.', plan: 'Total active, registered ERP user accounts in the company.', actual: 'Average daily users performing qualifying work actions (Drawings, Tasks, Bills, Indents) Mon–Sat in IST. Attendance punches, login-only visits, and background pings do not count.', tip: 'Ensure all team members log daily task progress and site updates in SOTYN.AI directly instead of offline notes.' },
   'auto:data_entry_all':        { plan: 'You set (e.g. 300000)',               actual: 'CREATE/UPDATE/DELETE records entered company-wide this week' },
-  'auto:data_completeness':     { plan: 'Every required field across Item Master, Business Book, Employees & Users', actual: 'Those fields actually filled — the same % the Data Completion bar shows on each page' },
+  'auto:data_completeness':     { desc: 'Measures mandatory field data quality across Item Master, Business Book, Employees & Users.', plan: 'Every required field across all existing records in company registers.', actual: 'Count of mandatory fields currently filled in with valid data.', tip: 'Review records with missing fields (e.g. HSN/GST, Vendor, Rate, Bank Details) and update them to 100%.' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
@@ -282,6 +282,84 @@ export default function Scorecard() {
   const [raci, setRaci] = useState({ open: false, loading: false, data: null });
   // Collapse + drop stale data whenever the viewed user or week changes.
   useEffect(() => { setRaci({ open: false, loading: false, data: null }); }, [viewUserId, weekStart]);
+
+  // Metric Explainer Modal (ℹ️ button next to each KPI)
+  const [explainingKpi, setExplainingKpi] = useState(null);
+
+  // Universal Drilldown Modal for Planned / Actual / Previous Pending / Done
+  const [drilldown, setDrilldown] = useState(null);
+  const handleDrilldown = useCallback((kpi, type) => {
+    // 1. Daily Active Users Drilldown (Active vs Inactive company employees)
+    if (kpi.data_source === 'auto:daily_active_users') {
+      setDrilldown({
+        open: true,
+        loading: true,
+        title: `Daily Active Users — Company Adoption Audit (${fmtRange(weekStart)})`,
+        module: 'active_users',
+        type,
+        activeTab: type === 'planned' ? 'inactive' : 'active',
+        engagementData: null,
+      });
+      api.get(`/scoring/engagement/users?week_start=${weekStart}`)
+        .then(res => setDrilldown(prev => ({ ...prev, loading: false, engagementData: res.data })))
+        .catch(err => {
+          toast.error(err.response?.data?.error || 'Failed to load user engagement details');
+          setDrilldown(null);
+        });
+      return;
+    }
+
+    // 2. Data Completeness Field Audit
+    if (kpi.data_source === 'auto:data_completeness' || kpi.data_source?.startsWith('auto:data_completeness:')) {
+      const subMod = kpi.data_source === 'auto:data_completeness' ? '' : kpi.data_source.slice('auto:data_completeness:'.length);
+      setDrilldown({
+        open: true,
+        loading: true,
+        title: `${kpi.metric_name} — Data Field Completion Audit`,
+        module: 'data_completeness',
+        type,
+        completenessData: null,
+      });
+      const url = subMod ? `/data-completion/${subMod}` : `/data-completion`;
+      api.get(url)
+        .then(res => setDrilldown(prev => ({ ...prev, loading: false, completenessData: res.data })))
+        .catch(err => {
+          toast.error(err.response?.data?.error || 'Failed to load data completion details');
+          setDrilldown(null);
+        });
+      return;
+    }
+
+    // 3. Task Modules (Delegations, PMS, Tickets, Checklists)
+    const modMap = {
+      'auto:delegations': 'delegations',
+      'auto:pms': 'pms',
+      'auto:tickets': 'tickets',
+      'auto:checklists': 'checklists',
+    };
+    const mod = modMap[kpi.data_source];
+    if (!mod) return;
+    const typeLabels = {
+      planned: 'Planned Tasks (Due this week)',
+      actual: 'Approved Tasks (This week)',
+      prev_pending: 'Carryover Pending Backlog (Due before this week)',
+      prev_done: 'Previous Backlog Approved This Week',
+    };
+    setDrilldown({
+      open: true,
+      loading: true,
+      title: `${kpi.metric_name} — ${typeLabels[type] || 'Tasks'} (${fmtRange(weekStart)})`,
+      rows: [],
+      module: mod,
+      type,
+    });
+    api.get(`/scoring/weekly/detail?user_id=${viewUserId}&module=${mod}&type=${type}&week_start=${weekStart}`)
+      .then(res => setDrilldown(prev => ({ ...prev, loading: false, rows: res.data?.rows || [] })))
+      .catch(err => {
+        toast.error(err.response?.data?.error || 'Failed to load task details');
+        setDrilldown(null);
+      });
+  }, [viewUserId, weekStart]);
   const toggleRaci = useCallback(() => {
     setRaci(r => {
       if (r.open) return { ...r, open: false };          // collapse
@@ -551,7 +629,16 @@ export default function Scorecard() {
           {viewUserId !== user?.id && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 flex items-center justify-between text-xs text-blue-800 print:hidden shadow-sm">
               <span className="flex items-center gap-1.5 font-medium">
-                <FiUser size={14} className="text-blue-600" /> Viewing <b>{cardOwnerName}</b>&apos;s scorecard (Read Only)
+                <FiUser size={14} className="text-blue-600" /> Viewing <b>{cardOwnerName?.trim()}</b>&apos;s scorecard
+                {isAdmin() ? (
+                  <span className="ml-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold text-[10px]">
+                    Admin Mode
+                  </span>
+                ) : (
+                  <span className="ml-1 text-gray-500 font-normal">
+                    (Read Only)
+                  </span>
+                )}
               </span>
               <button
                 type="button"
@@ -703,6 +790,8 @@ export default function Scorecard() {
                           readOnly={periodMode || (viewUserId !== user.id && !isAdmin())}
                           onStepWise={isRaci && !periodMode ? toggleRaci : null}
                           stepWiseOpen={isRaci && !periodMode && raci.open}
+                          onDrilldown={handleDrilldown}
+                          onExplain={setExplainingKpi}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
@@ -988,6 +1077,314 @@ export default function Scorecard() {
       >
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
+
+      {/* Universal Drilldown Modal */}
+      <Modal
+        isOpen={!!drilldown?.open}
+        onClose={() => setDrilldown(null)}
+        title={drilldown?.title || 'Audit Details'}
+        wide
+      >
+        {drilldown?.loading ? (
+          <div className="p-8 text-center text-sm text-gray-500">Loading details…</div>
+        ) : drilldown?.module === 'active_users' ? (
+          // ─── Daily Active Users Audit View ───
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-lg border text-center">
+              <div>
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">Registered Users (Target)</div>
+                <div className="text-xl font-bold text-gray-800">{drilldown.engagementData?.total_registered || 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">Avg Daily Active (Score)</div>
+                <div className="text-xl font-bold text-indigo-600">{drilldown.engagementData?.average_daily_active || 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">Active This Week</div>
+                <div className="text-xl font-bold text-emerald-600">{drilldown.engagementData?.active_users?.length || 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">Zero-Activity Gap</div>
+                <div className="text-xl font-bold text-red-600">{drilldown.engagementData?.inactive_users?.length || 0}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-b pb-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDrilldown(prev => ({ ...prev, activeTab: 'active' }))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    drilldown.activeTab === 'active'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <span>Active Employees</span>
+                  <span className="px-1.5 py-0.2 bg-white/20 rounded-full text-[10px]">
+                    {drilldown.engagementData?.active_users?.length || 0}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDrilldown(prev => ({ ...prev, activeTab: 'inactive' }))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    drilldown.activeTab === 'inactive'
+                      ? 'bg-red-600 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <span>⚠️ Missing / Inactive Users</span>
+                  <span className="px-1.5 py-0.2 bg-white/20 rounded-full text-[10px]">
+                    {drilldown.engagementData?.inactive_users?.length || 0}
+                  </span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const isAct = drilldown.activeTab === 'active';
+                  const list = isAct ? (drilldown.engagementData?.active_users || []) : (drilldown.engagementData?.inactive_users || []);
+                  exportCsv(
+                    `daily_active_users_${drilldown.activeTab}_${weekStart}.csv`,
+                    list.map(u => ({
+                      'User ID': u.id,
+                      'Name': u.name,
+                      'Email': u.email,
+                      'Department': u.department,
+                      'Role': u.role,
+                      'Designation': u.designation,
+                      ...(isAct ? { 'Days Active Count': u.active_days_count, 'Days List': (u.active_days || []).join('; ') } : { 'Status': 'Zero qualifying actions this week' })
+                    }))
+                  );
+                }}
+                className="btn btn-secondary text-xs py-1 px-2.5 flex items-center gap-1"
+                title="Export list to CSV"
+              >
+                <FiDownload size={13} /> Export CSV
+              </button>
+            </div>
+
+            <div className="overflow-x-auto max-h-[50vh] border rounded-lg">
+              {drilldown.activeTab === 'active' ? (
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                    <tr>
+                      <th className="p-2 text-left">#</th>
+                      <th className="p-2 text-left">Employee</th>
+                      <th className="p-2 text-left">Department</th>
+                      <th className="p-2 text-left">Designation</th>
+                      <th className="p-2 text-center">Days Active</th>
+                      <th className="p-2 text-left">Active Days (Mon–Sat)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {drilldown.engagementData?.active_users?.map((u, i) => (
+                      <tr key={u.id} className="hover:bg-emerald-50/40">
+                        <td className="p-2 font-bold text-gray-400">#{i + 1}</td>
+                        <td className="p-2 font-semibold text-gray-900">{u.name}</td>
+                        <td className="p-2 text-gray-600">{u.department}</td>
+                        <td className="p-2 text-gray-600">{u.designation}</td>
+                        <td className="p-2 text-center font-bold text-emerald-700">{u.active_days_count} day{u.active_days_count === 1 ? '' : 's'}</td>
+                        <td className="p-2">
+                          <div className="flex flex-wrap gap-1">
+                            {u.active_days?.map(d => (
+                              <span key={d} className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-mono">
+                                {d.slice(5)}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                    <tr>
+                      <th className="p-2 text-left">#</th>
+                      <th className="p-2 text-left">Employee</th>
+                      <th className="p-2 text-left">Department</th>
+                      <th className="p-2 text-left">Designation</th>
+                      <th className="p-2 text-left">Email</th>
+                      <th className="p-2 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {drilldown.engagementData?.inactive_users?.map((u, i) => (
+                      <tr key={u.id} className="hover:bg-red-50/40">
+                        <td className="p-2 font-bold text-gray-400">#{i + 1}</td>
+                        <td className="p-2 font-semibold text-gray-900">{u.name}</td>
+                        <td className="p-2 text-gray-600">{u.department}</td>
+                        <td className="p-2 text-gray-600">{u.designation}</td>
+                        <td className="p-2 text-gray-500">{u.email}</td>
+                        <td className="p-2 text-center">
+                          <span className="px-2 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-semibold">
+                            0 Actions
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        ) : drilldown?.module === 'data_completeness' ? (
+          // ─── Data Completeness Audit View ───
+          <div className="space-y-4">
+            {drilldown.completenessData?.per_field ? (
+              <div>
+                <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center justify-between text-xs text-indigo-900 mb-3">
+                  <div>
+                    <b>{drilldown.completenessData.label}</b> · {drilldown.completenessData.total_items} {drilldown.completenessData.noun} ({drilldown.completenessData.complete_items} 100% complete)
+                  </div>
+                  <div className="font-bold text-indigo-700">
+                    {drilldown.completenessData.required_total ? Math.round((drilldown.completenessData.filled_total / drilldown.completenessData.required_total) * 100) : 0}% Filled
+                  </div>
+                </div>
+                <div className="overflow-x-auto max-h-[55vh] border rounded-lg">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                      <tr>
+                        <th className="p-2 text-left">Mandatory Field</th>
+                        <th className="p-2 text-center">Filled Records</th>
+                        <th className="p-2 text-center">Missing / Incomplete</th>
+                        <th className="p-2 text-left w-48">Completion Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {drilldown.completenessData.per_field.map(f => {
+                        const pct = drilldown.completenessData.total_items ? Math.round((f.filled / drilldown.completenessData.total_items) * 100) : 0;
+                        return (
+                          <tr key={f.key} className="hover:bg-gray-50">
+                            <td className="p-2 font-semibold text-gray-800">{f.label}</td>
+                            <td className="p-2 text-center font-bold text-emerald-700">{f.filled}</td>
+                            <td className="p-2 text-center font-bold text-red-600">{f.missing}</td>
+                            <td className="p-2">
+                              <div className="flex items-center gap-2">
+                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                  <div className={`h-2 rounded-full ${pct === 100 ? 'bg-emerald-500' : pct >= 70 ? 'bg-blue-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}></div>
+                                </div>
+                                <span className="text-[10px] font-bold text-gray-600 w-9 text-right">{pct}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : drilldown.completenessData?.modules ? (
+              <div className="space-y-3">
+                {drilldown.completenessData.modules.map(mod => (
+                  <div key={mod.module} className="border rounded-lg p-3 bg-white">
+                    <div className="flex items-center justify-between text-xs font-bold mb-2">
+                      <span className="text-gray-900">{mod.label}</span>
+                      <span className="text-indigo-600">{mod.required_total ? Math.round((mod.filled_total / mod.required_total) * 100) : 0}% ({mod.filled_total} / {mod.required_total} fields)</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                      {mod.per_field?.map(f => (
+                        <div key={f.key} className="bg-gray-50 p-1.5 rounded border flex justify-between">
+                          <span className="text-gray-600 truncate">{f.label}</span>
+                          <span className={f.missing > 0 ? 'text-amber-700 font-bold' : 'text-emerald-700 font-bold'}>{f.filled}/{mod.total_items}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 text-center text-gray-500">No completion data available.</div>
+            )}
+          </div>
+        ) : !drilldown?.rows?.length ? (
+          // ─── Task Modules Empty State ───
+          <div className="p-8 text-center text-sm text-gray-400">
+            No tasks found in this category.
+          </div>
+        ) : (
+          // ─── Task Modules List ───
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-gray-500 font-medium px-1">
+              <span>Showing <b>{drilldown.rows.length}</b> task{drilldown.rows.length === 1 ? '' : 's'}:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  exportCsv(
+                    `tasks_${drilldown.module}_${drilldown.type}_${weekStart}.csv`,
+                    drilldown.rows.map(r => ({
+                      'Task ID': drilldown.module === 'pms' ? `PMS-${String(r.id).padStart(4, '0')}` : `TSK-${String(r.id).padStart(4, '0')}`,
+                      'Description': r.description || r.title || r.subject || '',
+                      'Project': r.project_name || '',
+                      'Assigned By': r.assigned_by_name || r.raised_by_name || '',
+                      'Due Date': r.due_date || r.deadline_date || '',
+                      'Approved At': r.reviewed_at ? r.reviewed_at.slice(0, 10) : '',
+                      'Status': r.status,
+                    }))
+                  );
+                }}
+                className="btn btn-secondary text-xs py-1 px-2.5 flex items-center gap-1"
+                title="Export list to CSV"
+              >
+                <FiDownload size={13} /> Export CSV
+              </button>
+            </div>
+            <div className="overflow-x-auto max-h-[60vh] border rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                  <tr>
+                    <th className="p-2 text-left w-20">Task ID</th>
+                    <th className="p-2 text-left">Description</th>
+                    {drilldown.module === 'pms' && <th className="p-2 text-left">Project</th>}
+                    <th className="p-2 text-left">Assigned By</th>
+                    <th className="p-2 text-center w-24">Due Date</th>
+                    <th className="p-2 text-center w-24">Approved At</th>
+                    <th className="p-2 text-center w-20">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {drilldown.rows.map(row => (
+                    <tr key={row.id} className="hover:bg-blue-50/40">
+                      <td className="p-2 font-mono font-bold text-red-700">
+                        <a
+                          href={drilldown.module === 'pms' ? `/pms-tasks?open=${row.id}` : `/delegations?open=${row.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="hover:underline flex items-center gap-1"
+                          title="Open task in new tab"
+                        >
+                          {drilldown.module === 'pms' ? `PMS-${String(row.id).padStart(4, '0')}` : `TSK-${String(row.id).padStart(4, '0')}`}
+                        </a>
+                      </td>
+                      <td className="p-2 text-gray-800 whitespace-pre-wrap max-w-sm">{row.description || row.title || row.subject || '—'}</td>
+                      {drilldown.module === 'pms' && <td className="p-2 text-gray-600">{row.project_name || '—'}</td>}
+                      <td className="p-2 text-gray-600">{row.assigned_by_name || row.raised_by_name || '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{row.due_date || row.deadline_date || '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{row.reviewed_at ? row.reviewed_at.slice(0, 10) : '—'}</td>
+                      <td className="p-2 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          row.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                          row.status === 'submitted' ? 'bg-blue-100 text-blue-800' :
+                          row.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Metric Explainer Modal (ℹ️ button) */}
+      <MetricExplainerModal kpi={explainingKpi} onClose={() => setExplainingKpi(null)} />
     </div>
   );
 }
@@ -1296,7 +1693,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
+function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen, onDrilldown, onExplain }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -1344,12 +1741,33 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
   const plannedEditable = kpi.planned_editable ?? !isAuto;
   const calculatedHours = kpi.actual_mode === 'dates';
   const unit = kpi.metric_type === 'hours' ? 'hrs' : kpi.metric_type === 'amount' ? 'amount' : '';
+  const canDrill = [
+    'auto:delegations',
+    'auto:pms',
+    'auto:tickets',
+    'auto:checklists',
+    'auto:daily_active_users',
+    'auto:data_completeness',
+  ].includes(kpi.data_source) || kpi.data_source?.startsWith('auto:data_completeness:');
+  const isRaci = kpi.data_source === 'auto:raci_steps_done';
 
   return (
     <tr className={`border-t ${saving ? 'bg-amber-50' : ''}`}>
       <td className="serial-number-cell">{serialNumber}</td>
       <td className="p-2">
-        <div className="font-medium">{kpi.metric_name}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-gray-900">{kpi.metric_name}</span>
+          {onExplain && (
+            <button
+              type="button"
+              onClick={() => onExplain(kpi)}
+              className="text-gray-400 hover:text-indigo-600 transition p-0.5 rounded cursor-pointer shrink-0"
+              title="Click to view KPI calculation rules & details"
+            >
+              <FiInfo size={13} />
+            </button>
+          )}
+        </div>
         {unit && <div className="text-[10px] text-gray-500">{unit === 'hrs' ? 'Hours' : 'Amount'}</div>}
         {actualAuto && SOURCE_INFO[kpi.data_source]?.scope && <div className="text-[10px] text-gray-500" title={SOURCE_INFO[kpi.data_source].actual}>B-actual · {SOURCE_INFO[kpi.data_source].scope}</div>}
         <ScoreMetricDates kpi={kpi} readOnly={readOnly} onSave={flush} />
@@ -1375,7 +1793,25 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
                 title={(kpi.target_auto
                   ? sourceInfoFor(kpi.data_source).plan
                   : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`)}>
-            {planned}
+            {canDrill && onDrilldown ? (
+              <button
+                type="button"
+                onClick={() => onDrilldown(kpi, 'planned')}
+                className="font-bold text-indigo-600 hover:underline hover:text-indigo-800"
+                title="Click to view planned tasks due this week"
+              >
+                {planned}
+              </button>
+            ) : (isRaci && onStepWise) ? (
+              <button
+                type="button"
+                onClick={onStepWise}
+                className="font-bold text-indigo-600 hover:underline hover:text-indigo-800 cursor-pointer"
+                title="Click to view step-wise breakdown"
+              >
+                {planned}
+              </button>
+            ) : planned}
             {!kpi.target_auto && (
               <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                 {+planned === 0 && +actual > 0 ? 'no target set' : 'target set'}
@@ -1387,8 +1823,33 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
         )}
       </td>
       <td className="text-center p-2">
-        {actualAuto || calculatedHours ? <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>{kpi.actual == null ? '—' : `${actual}${unit === 'hrs' ? ' hrs' : ''}`}</span> :
-          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />}
+        {actualAuto || calculatedHours ? (
+          <span className="text-gray-700" title={calculatedHours ? 'Calculated from your selected date/times (IST)' : sourceInfoFor(kpi.data_source).actual}>
+            {kpi.actual == null ? '—' : (
+              canDrill && onDrilldown ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'actual')}
+                  className={`font-bold hover:underline ${+actual > 0 ? 'text-emerald-700 hover:text-emerald-900' : 'text-gray-600 hover:text-gray-800'}`}
+                  title="Click to view approved tasks for this week"
+                >
+                  {`${actual}${unit === 'hrs' ? ' hrs' : ''}`}
+                </button>
+              ) : (isRaci && onStepWise) ? (
+                <button
+                  type="button"
+                  onClick={onStepWise}
+                  className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                  title="Click to view step-wise breakdown"
+                >
+                  {`${actual}${unit === 'hrs' ? ' hrs' : ''}`}
+                </button>
+              ) : `${actual}${unit === 'hrs' ? ' hrs' : ''}`
+            )}
+          </span>
+        ) : (
+          <input aria-label={`Actual ${kpi.metric_name}`} type="number" step="any" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={() => flush()} disabled={readOnly} />
+        )}
         {kpi.actual == null && <span className="block text-[9px] text-gray-500" title={kpi.date_error || undefined}>{kpi.date_error ? 'Check selected dates' : 'Awaiting recorded time'}</span>}
         {kpi.observations != null && <span className="block text-[9px] text-gray-500">{kpi.observations} response{kpi.observations === 1 ? '' : 's'}</span>}
       </td>
@@ -1404,12 +1865,52 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
           <div className="flex items-start justify-center gap-2 font-semibold leading-tight"
             title={`Previous (due before this week): ${kpi.pending_uptodate || 0} carried in — ${Math.max(0, (+kpi.pending_uptodate || 0) - (+kpi.pending_work || 0))} still pending, ${kpi.pending_work || 0} done this week`}>
             <div className="text-center">
-              <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+              {canDrill && onDrilldown && (+kpi.pending_uptodate > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'prev_pending')}
+                  className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
+                  title="Click to view carryover pending tasks due before this week"
+                >
+                  {kpi.pending_uptodate || 0}
+                </button>
+              ) : (isRaci && onStepWise && (+kpi.pending_uptodate > 0)) ? (
+                <button
+                  type="button"
+                  onClick={onStepWise}
+                  className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
+                  title="Click to view step-wise breakdown"
+                >
+                  {kpi.pending_uptodate || 0}
+                </button>
+              ) : (
+                <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+              )}
               <div className="text-[9px] font-normal text-gray-400">pending</div>
             </div>
             <span className="text-gray-300">/</span>
             <div className="text-center">
-              <div className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work || 0}</div>
+              {canDrill && onDrilldown && (+kpi.pending_work > 0) ? (
+                <button
+                  type="button"
+                  onClick={() => onDrilldown(kpi, 'prev_done')}
+                  className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                  title="Click to view older backlog tasks completed this week"
+                >
+                  {kpi.pending_work || 0}
+                </button>
+              ) : (isRaci && onStepWise && (+kpi.pending_work > 0)) ? (
+                <button
+                  type="button"
+                  onClick={onStepWise}
+                  className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                  title="Click to view step-wise breakdown"
+                >
+                  {kpi.pending_work || 0}
+                </button>
+              ) : (
+                <div className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work || 0}</div>
+              )}
               <div className="text-[9px] font-normal text-gray-400">done</div>
             </div>
           </div>
@@ -2187,5 +2688,88 @@ function AssignTemplates({ assignments, templates, onSaved }) {
       </NumberedTable></div>
       {editing && <TemplateAssignmentPicker key={editing.user_id} employee={editing} templates={templates} onSaved={onSaved} onClose={() => setEditing(null)} />}
     </div>
+  );
+}
+
+// ---------- Metric Explainer Modal (ℹ️ button) ----------
+function MetricExplainerModal({ kpi, onClose }) {
+  if (!kpi) return null;
+  const src = sourceInfoFor(kpi.data_source) || {};
+  const isAuto = kpi.is_auto || (kpi.data_source && kpi.data_source.startsWith('auto:'));
+  const isHigher = kpi.direction !== 'lower_better';
+
+  return (
+    <Modal isOpen onClose={onClose} title={`KPI Guide: ${kpi.metric_name}`} wide>
+      <div className="space-y-4 text-xs">
+        {/* Banner */}
+        <div className="p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-lg flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-bold text-gray-900 flex items-center gap-2">
+              <span>{kpi.metric_name}</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isHigher ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>
+                {isHigher ? '↑ Higher is Better' : '↓ Lower is Better'}
+              </span>
+              {isAuto && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
+            </div>
+            <div className="text-gray-500 text-[11px] mt-0.5">
+              {kpi.department ? `${kpi.department} · ` : ''}{kpi.template_name || 'Role KPI'} · Weight: <b>{kpi.weightage || kpi.weight || 0}%</b>
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Explainer Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Card 1: Purpose */}
+          <div className="card p-3 bg-white border border-slate-200 space-y-1">
+            <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
+              <span className="text-indigo-600">📌</span> What This Metric Measures
+            </div>
+            <p className="text-gray-600 leading-relaxed">
+              {src.desc || `Evaluates performance for ${kpi.metric_name}. Planned targets are compared against verified achievements recorded in the ERP.`}
+            </p>
+          </div>
+
+          {/* Card 2: Planned */}
+          <div className="card p-3 bg-white border border-slate-200 space-y-1">
+            <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
+              <span className="text-blue-600">🎯</span> How Target (Planned) is Set
+            </div>
+            <p className="text-gray-600 leading-relaxed">
+              {kpi.target_auto
+                ? (src.plan || 'Calculated automatically by ERP based on active cohort.')
+                : (kpi.has_target_override
+                  ? `Specific weekly target override set for this employee: ${kpi.planned || 0}.`
+                  : `Standard weekly target defined in the role template (${kpi.planned || 0}).`)}
+            </p>
+          </div>
+
+          {/* Card 3: Actual */}
+          <div className="card p-3 bg-white border border-slate-200 space-y-1">
+            <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
+              <span className="text-emerald-600">✅</span> How Achievement (Actual) is Counted
+            </div>
+            <p className="text-gray-600 leading-relaxed">
+              {src.actual || 'Actual achievement recorded for the Mon–Sat week cohort.'}
+            </p>
+          </div>
+
+          {/* Card 4: How to Score 100% */}
+          <div className="card p-3 bg-white border border-slate-200 space-y-1">
+            <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
+              <span className="text-amber-600">💡</span> How to Achieve 100%
+            </div>
+            <p className="text-gray-600 leading-relaxed">
+              {src.tip || 'Complete and submit all scheduled activities before Saturday end-of-day. Ensure the approver reviews and signs off on your completed tasks.'}
+            </p>
+          </div>
+        </div>
+
+        {/* Footer info */}
+        <div className="p-2.5 bg-gray-50 border rounded text-[11px] text-gray-500 flex items-center justify-between">
+          <span>Formula: <b>Variance % = ((Actual − Planned) ÷ Planned) × 100</b></span>
+          <button type="button" onClick={onClose} className="btn btn-secondary text-xs py-1 px-3">Close</button>
+        </div>
+      </div>
+    </Modal>
   );
 }

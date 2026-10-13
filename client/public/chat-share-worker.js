@@ -13,7 +13,17 @@ self.addEventListener('fetch',event=>{
       try {
         const data=await event.request.formData();
         const text=['title','text','url'].map(k=>data.get(k)).filter(v=>typeof v==='string' && v.trim()).join('\n');
-        const files=data.getAll('files').filter(v=>typeof v!=='string' && v.name);
+        const rawFiles=(data.getAll('files').length ? data.getAll('files') : data.getAll('file')).filter(v=>typeof v!=='string' && v.name);
+        const files=rawFiles.map(f=>{
+          let name=f.name;
+          if(!/\.[a-z0-9]+$/i.test(name)){
+            if(f.type==='image/jpeg') name+='.jpg';
+            else if(f.type==='image/png') name+='.png';
+            else if(f.type==='image/webp') name+='.webp';
+            else if(f.type==='application/pdf') name+='.pdf';
+          }
+          return (name===f.name || typeof File==='undefined') ? f : new File([f],name,{type:f.type});
+        });
         const draft=await self.SotynChatShares.create({text,files});
         return Response.redirect(`${url.origin}/site-chat/share?draft=${draft.id}`,303);
       } catch(error) { return sharePage(error.message || 'Could not save the selected content. Please try sharing again.'); }

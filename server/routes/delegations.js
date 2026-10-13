@@ -197,7 +197,7 @@ router.get('/', (req, res) => {
   const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
   const canSeeAll = isAdmin || isEA(uid);
-  const { scope = 'mine', status, assignee_id, date_from, date_to } = req.query;
+  const { scope = 'mine', status, assignee_id, date_from, date_to, date_basis = 'due' } = req.query;
 
   const where = [];
   const params = [];
@@ -216,10 +216,17 @@ router.get('/', (req, res) => {
   if (st) { where.push(st.sql); params.push(...st.params); }
   // Name filter — admin/EA filter by assignee_id from the dropdown
   if (assignee_id) { where.push('d.assigned_to = ?'); params.push(+assignee_id); }
-  // Date range filters — inclusive on both ends. Uses due_date since that's
-  // what mam typically cares about when chasing follow-ups.
-  if (date_from) { where.push('d.due_date >= ?'); params.push(date_from); }
-  if (date_to) { where.push('d.due_date <= ?'); params.push(date_to); }
+  // Date range filters — by due_date (default), approved/reviewed_at, or created_at
+  if (date_basis === 'approved') {
+    if (date_from) { where.push("date(d.reviewed_at, '+330 minutes') >= ?"); params.push(date_from); }
+    if (date_to) { where.push("date(d.reviewed_at, '+330 minutes') <= ?"); params.push(date_to); }
+  } else if (date_basis === 'created') {
+    if (date_from) { where.push("date(d.created_at, '+330 minutes') >= ?"); params.push(date_from); }
+    if (date_to) { where.push("date(d.created_at, '+330 minutes') <= ?"); params.push(date_to); }
+  } else {
+    if (date_from) { where.push('d.due_date >= ?'); params.push(date_from); }
+    if (date_to) { where.push('d.due_date <= ?'); params.push(date_to); }
+  }
 
   const sql = `SELECT d.*,
       au.name as assigned_by_name,

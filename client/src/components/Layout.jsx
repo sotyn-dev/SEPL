@@ -10,6 +10,7 @@ import EngagementTracker from './EngagementTracker';
 import EnablePushButton from './EnablePushButton';
 import TrainingVideoButton from './TrainingVideoButton';
 import AIAgentChat from './AIAgentChat';
+import DailyStandupModal, { DailyFocusHeaderButton } from './DailyStandupModal';
 import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
@@ -1104,11 +1105,9 @@ export default function Layout() {
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
-          {/* Mam (2026-05-22): unified inbox bell.  Shows BOTH HR
-              notifications (interview reminders / offer expiries /
-              pending approvals) AND company announcements as two
-              tabs inside a single dropdown — replaces the previous
-              "3 separate bells" layout that confused users. */}
+          {/* Daily Standup & Focus Briefing trigger pill */}
+          <DailyFocusHeaderButton />
+          {/* Mam (2026-05-22): unified inbox bell. */}
           <AnnouncementBell />
           {/* User avatar menu (mam 2026-06-17 header freeze) — identity +
               Change Password + Logout always reachable from the top bar,
@@ -1200,6 +1199,7 @@ export default function Layout() {
       {/* Floating "?" help-ticket bubble removed (mam 2026-06-19) — Help
           Tickets is still reachable from the sidebar page. */}
       <AIAgentChat />
+      <DailyStandupModal />
     </div>
     </CallProvider>
   );

@@ -30,6 +30,7 @@ import {
   FiCheckCircle, FiXCircle, FiAlertCircle, FiMinusCircle,
   FiCamera, FiClock, FiSettings, FiPlus, FiTrash2, FiEdit2,
   FiPackage, FiX, FiCalendar, FiUser, FiSearch, FiRefreshCw,
+  FiCheck,
 } from 'react-icons/fi';
 import { fmtDateTime, fmtDate } from '../utils/datetime';
 
@@ -77,6 +78,8 @@ export default function CRMKitting() {
   const [filter, setFilter] = useState('');
   // Projects removed from the tracker (handed over etc.) — shown only on demand.
   const [showRemoved, setShowRemoved] = useState(false);
+  // Projects disabled from the active stage — shown only on demand.
+  const [showStageDisabled, setShowStageDisabled] = useState(false);
 
   // Update modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -153,10 +156,32 @@ export default function CRMKitting() {
     () => matrix.projects.filter(p => matrix.meta[p.project_key]?.removed_at).length,
     [matrix.projects, matrix.meta]
   );
+  const stageCol = `stage${activeStage}_disabled_at`;
+  const stageDisabledCount = useMemo(() => {
+    return matrix.projects.filter(p => {
+      const meta = matrix.meta[p.project_key];
+      return !meta?.removed_at && !!meta?.[stageCol];
+    }).length;
+  }, [matrix.projects, matrix.meta, stageCol]);
+
+  const activeStageProjectsCount = useMemo(() => {
+    return matrix.projects.filter(p => {
+      const meta = matrix.meta[p.project_key];
+      return !meta?.removed_at && !meta?.[stageCol];
+    }).length;
+  }, [matrix.projects, matrix.meta, stageCol]);
+
   const filteredProjects = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    // Active grid by default; the "Removed" toggle swaps in removed projects.
-    const base = matrix.projects.filter(p => !!matrix.meta[p.project_key]?.removed_at === showRemoved);
+    // In removed view: show removed projects.
+    // In active view: if showStageDisabled is on, show stage-disabled projects; else show active (non-disabled) projects.
+    const base = matrix.projects.filter(p => {
+      const meta = matrix.meta[p.project_key];
+      if (showRemoved) return !!meta?.removed_at;
+      if (meta?.removed_at) return false;
+      const isStageDisabled = !!meta?.[stageCol];
+      return showStageDisabled ? isStageDisabled : !isStageDisabled;
+    });
     if (!q) return base;
     return base.filter(p =>
       (p.project_name || '').toLowerCase().includes(q) ||
@@ -165,10 +190,59 @@ export default function CRMKitting() {
       (matrix.meta[p.project_key]?.pm_owner || '').toLowerCase().includes(q) ||
       (matrix.meta[p.project_key]?.crm_owner || '').toLowerCase().includes(q)
     );
-  }, [matrix.projects, matrix.meta, filter, showRemoved]);
+  }, [matrix.projects, matrix.meta, filter, showRemoved, showStageDisabled, stageCol]);
 
   // ── Cell helpers ───────────────────────────────────────────────
   const getEntry = (projectKey, cpId) => matrix.entries[`${projectKey}::${cpId}`];
+
+  // ── Disable / re-enable project for a specific stage ───────────
+  const toggleStageDisable = async (p, isCurrentlyDisabled) => {
+    if (!editAllowed) return;
+    const stageTitle = STAGE_META[activeStage]?.title || `Stage ${activeStage}`;
+    if (!isCurrentlyDisabled) {
+      if (!window.confirm(`Disable "${p.project_name}" from Stage ${activeStage} (${stageTitle})?\n\nThis project will be hidden from Stage ${activeStage}. You can view or re-enable it anytime from "Disabled in Stage ${activeStage}".`)) {
+        return;
+      }
+    }
+    const targetDisabled = !isCurrentlyDisabled;
+    const colAt = `stage${activeStage}_disabled_at`;
+    const colBy = `stage${activeStage}_disabled_by`;
+
+    // Optimistic UI update so the row responds immediately
+    setMatrix(prev => {
+      const prevMeta = prev.meta || {};
+      const projMeta = prevMeta[p.project_key] || {};
+      return {
+        ...prev,
+        meta: {
+          ...prevMeta,
+          [p.project_key]: {
+            ...projMeta,
+            project_key: p.project_key,
+            [colAt]: targetDisabled ? new Date().toISOString() : null,
+            [colBy]: targetDisabled ? (user?.id || null) : null,
+          },
+        },
+      };
+    });
+
+    try {
+      await api.post('/crm-kitting/project-stage-toggle', {
+        project_key: p.project_key,
+        stage_no: activeStage,
+        disabled: targetDisabled,
+      });
+      if (targetDisabled) {
+        toast.success(`"${p.project_name}" disabled from Stage ${activeStage}`);
+      } else {
+        toast.success(`"${p.project_name}" re-enabled in Stage ${activeStage}`);
+        if (stageDisabledCount <= 1) setShowStageDisabled(false);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update stage status');
+      loadMatrix();
+    }
+  };
 
   // ── Remove / restore a project (mam 2026-09-10: "projects can delete bcs
   // like some are handover"). Takes it off this tracker only — Business Book,
@@ -410,7 +484,7 @@ export default function CRMKitting() {
           return (
             <button
               key={sn}
-              onClick={() => setActiveStage(sn)}
+              onClick={() => { setActiveStage(sn); setShowStageDisabled(false); }}
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={`Stage ${sn} — ${STAGE_META[sn].title}`}
             >
@@ -425,9 +499,18 @@ export default function CRMKitting() {
             </button>
           );
         })}
+        {(stageDisabledCount > 0 && !showRemoved) && (
+          <button
+            onClick={() => setShowStageDisabled(v => !v)}
+            className={`btn ${showStageDisabled ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}
+            title={`Projects disabled from Stage ${activeStage}`}
+          >
+            <FiCheck size={13} /> {showStageDisabled ? 'Back to active projects' : `Disabled in Stage ${activeStage} (${stageDisabledCount})`}
+          </button>
+        )}
         {(removedCount > 0 || showRemoved) && (
           <button
-            onClick={() => setShowRemoved(v => !v)}
+            onClick={() => { setShowRemoved(v => !v); setShowStageDisabled(false); }}
             className={`btn ${showRemoved ? 'btn-primary' : 'btn-secondary'} ml-auto flex items-center gap-1.5 text-sm`}
             title="Projects removed from the tracker (handed over etc.)"
           >
@@ -451,7 +534,7 @@ export default function CRMKitting() {
       <div className="text-[11px] text-gray-500 mb-1.5 px-1">
         {loading
           ? 'Loading…'
-          : `${matrix.projects.length - removedCount} projects${removedCount ? ` · ${removedCount} removed` : ''} · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length}${showRemoved ? ' removed' : ''} on Stage ${activeStage}`}
+          : `${activeStageProjectsCount} active on Stage ${activeStage}${stageDisabledCount ? ` · ${stageDisabledCount} disabled` : ''}${removedCount ? ` · ${removedCount} removed` : ''} · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length}${showStageDisabled ? ` disabled on Stage ${activeStage}` : showRemoved ? ' removed' : ` on Stage ${activeStage}`}`}
       </div>
 
       {/* Matrix — single table with `table-layout: fixed` + explicit
@@ -547,25 +630,46 @@ export default function CRMKitting() {
                 {filteredProjects.map((p, idx) => {
                   const meta = matrix.meta[p.project_key] || {};
                   const pct = stagePctFor(p.project_key, activeStage);
+                  const isStageDisabled = !showRemoved && !!meta[stageCol];
                   return (
-                    <tr key={p.project_key} className="hover:bg-blue-50/40" style={{ height: 44 }}>
+                    <tr key={p.project_key} className={`hover:bg-blue-50/40 ${isStageDisabled ? 'bg-slate-50/70' : ''}`} style={{ height: 44 }}>
                       <td className="sticky z-10 bg-white border-r border-b text-center text-gray-500 text-[10px]" style={{ left: L.sr, position: 'sticky' }}>{idx + 1}</td>
                       <td className="sticky z-10 bg-white border-r border-b px-2 overflow-hidden" style={{ left: L.name, position: 'sticky' }}>
-                        <div className="flex items-center gap-1">
-                          <div className="font-medium text-gray-900 text-[11px] truncate flex-1 min-w-0" title={p.project_name}>{p.project_name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <div className={`font-medium text-[11px] truncate flex-1 min-w-0 ${isStageDisabled ? 'text-gray-500' : 'text-gray-900'}`} title={p.project_name}>{p.project_name}</div>
                           {canRemoveProjects && (showRemoved ? (
-                            <button type="button" onClick={() => restoreProject(p)} className="shrink-0 text-emerald-600 hover:text-emerald-800" title="Restore to Full Kitting" aria-label={`Restore ${p.project_name}`}>
+                            <button type="button" onClick={() => restoreProject(p)} className="shrink-0 text-emerald-600 hover:text-emerald-800 p-0.5 rounded" title="Restore to Full Kitting" aria-label={`Restore ${p.project_name}`}>
                               <FiRefreshCw size={11} />
                             </button>
                           ) : (
-                            <button type="button" onClick={() => removeProject(p)} className="shrink-0 text-gray-300 hover:text-rose-600" title="Remove from Full Kitting (handed over etc.)" aria-label={`Remove ${p.project_name}`}>
-                              <FiTrash2 size={11} />
-                            </button>
+                            <>
+                              {editAllowed && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleStageDisable(p, isStageDisabled)}
+                                  className={`shrink-0 p-0.5 rounded transition ${
+                                    isStageDisabled
+                                      ? 'text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-300'
+                                      : 'text-gray-300 hover:text-emerald-600 hover:bg-emerald-50'
+                                  }`}
+                                  title={isStageDisabled
+                                    ? `Disabled from Stage ${activeStage} · click to re-enable`
+                                    : `Tick to disable ${p.project_name} from Stage ${activeStage} (${STAGE_META[activeStage]?.title})`}
+                                  aria-label={isStageDisabled ? `Re-enable in Stage ${activeStage}` : `Disable from Stage ${activeStage}`}
+                                >
+                                  <FiCheck size={12} className={isStageDisabled ? 'stroke-[2.5]' : 'stroke-2'} />
+                                </button>
+                              )}
+                              <button type="button" onClick={() => removeProject(p)} className="shrink-0 text-gray-300 hover:text-rose-600 p-0.5 rounded" title="Remove from Full Kitting (handed over etc.)" aria-label={`Remove ${p.project_name}`}>
+                                <FiTrash2 size={11} />
+                              </button>
+                            </>
                           ))}
                         </div>
                         <div className="text-[9px] text-gray-500 flex items-center gap-1 truncate">
                           {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
                           {p.bb_entry_count > 1 && <span className="text-amber-700">· {p.bb_entry_count} BB</span>}
+                          {isStageDisabled && <span className="bg-emerald-100 text-emerald-700 px-1 rounded text-[8px] font-semibold">Disabled on S{activeStage}</span>}
                           <span className="ml-auto inline-flex items-center gap-0.5 whitespace-nowrap">
                             <span className={`inline-block w-1.5 h-1.5 rounded-full ${pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-gray-300'}`} />
                             {pct}%

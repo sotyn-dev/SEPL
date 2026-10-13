@@ -51,4 +51,88 @@ function dailyActiveUsers(db, from, to, today = istToday()) {
   return { given, done: Math.round(activeDays.size / days) };
 }
 
-module.exports = { qualifiesPath, ensureEngagementTable, recordView, dailyActiveUsers };
+function dailyActiveUsersDetail(db, from, to, today = istToday()) {
+  const users = db.prepare(
+    `SELECT u.id, u.name, u.email, u.role, u.department, e.designation
+     FROM users u
+     LEFT JOIN employees e ON e.user_id = u.id OR lower(e.email) = lower(u.email)
+     WHERE COALESCE(u.active, 1) = 1 AND COALESCE(u.archived, 0) = 0
+     ORDER BY u.name ASC`
+  ).all();
+
+  const last = to < today ? to : today;
+  const days = last >= from ? (Math.round((Date.parse(last + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000) + 1) : 0;
+
+  const userDaysMap = new Map();
+  users.forEach(u => userDaysMap.set(u.id, new Set()));
+
+  const hasViews = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_engagement_days'").get();
+  if (hasViews && days > 0) {
+    for (const r of db.prepare(`SELECT e.day, e.user_id FROM user_engagement_days e JOIN users u ON u.id=e.user_id
+      WHERE e.day BETWEEN ? AND ? AND COALESCE(u.active,1)=1 AND COALESCE(u.archived,0)=0`).all(from, last)) {
+      if (userDaysMap.has(r.user_id)) {
+        userDaysMap.get(r.user_id).add(r.day);
+      }
+    }
+  }
+
+  if (days > 0) {
+    const rows = db.prepare(`SELECT DISTINCT date(a.at,'+5 hours','+30 minutes') day, a.user_id, a.path, a.entity_type
+      FROM audit_log a JOIN users u ON u.id=a.user_id
+      WHERE a.at >= date(?,'-1 day') AND a.at < date(?,'+1 day')
+        AND datetime(a.at) >= datetime(?,'-5 hours','-30 minutes')
+        AND datetime(a.at) < datetime(?,'+1 day','-5 hours','-30 minutes')
+        AND COALESCE(u.active,1)=1 AND COALESCE(u.archived,0)=0
+        AND a.action IN ('CREATE','UPDATE','DELETE')
+        AND a.status_code >= 200 AND a.status_code < 400`).all(from, last, from, last);
+    for (const r of rows) {
+      if (qualifiesPath(r.path) && !EXCLUDED.test('/' + (r.entity_type || ''))) {
+        if (userDaysMap.has(r.user_id)) {
+          userDaysMap.get(r.user_id).add(r.day);
+        }
+      }
+    }
+  }
+
+  const active = [];
+  const inactive = [];
+  let totalUserDays = 0;
+
+  for (const u of users) {
+    const daysSet = userDaysMap.get(u.id) || new Set();
+    const daysArr = Array.from(daysSet).sort();
+    totalUserDays += daysArr.length;
+    const item = {
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      department: u.department || '—',
+      role: u.role || '—',
+      designation: u.designation || u.role || '—',
+      active_days: daysArr,
+      active_days_count: daysArr.length,
+    };
+    if (daysArr.length > 0) {
+      active.push(item);
+    } else {
+      inactive.push(item);
+    }
+  }
+
+  active.sort((a, b) => b.active_days_count - a.active_days_count || a.name.localeCompare(b.name));
+  inactive.sort((a, b) => (a.department || '').localeCompare(b.department || '') || a.name.localeCompare(b.name));
+
+  const averageDailyActive = days > 0 ? Math.round(totalUserDays / days) : 0;
+
+  return {
+    total_registered: users.length,
+    average_daily_active: averageDailyActive,
+    days_counted: days,
+    from,
+    to: last,
+    active_users: active,
+    inactive_users: inactive,
+  };
+}
+
+module.exports = { qualifiesPath, ensureEngagementTable, recordView, dailyActiveUsers, dailyActiveUsersDetail };

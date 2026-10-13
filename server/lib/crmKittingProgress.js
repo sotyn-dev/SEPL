@@ -101,15 +101,59 @@ function kittingAllProjects(db) {
   `).all().map(row => row.project_key);
 }
 
-// Planned: projects times all active checkpoints across three stages.
-// Actual: nonblank latest responses, including No and Partially; history counts once.
+// Planned: projects times active checkpoints across non-disabled stages.
+// When a stage is disabled for a project (e.g. Stage 1 Pre-Start completed/disabled),
+// that stage's checkpoints are deducted from that project's planned count (given),
+// and entries in that disabled stage are excluded from actual (done).
 function kittingProgress(db, projectKeys) {
   const keys = [...new Set((projectKeys || []).filter(k => k != null).map(String))];
-  const checkpoints = db.prepare(
-    `SELECT COUNT(*) c FROM crm_kitting_checkpoint WHERE is_active = 1`
-  ).get().c;
-  if (keys.length === 0) return { projects: 0, checkpoints, given: 0, done: 0 };
+  const activeCheckpoints = db.prepare(
+    `SELECT id, stage_no FROM crm_kitting_checkpoint WHERE is_active = 1`
+  ).all();
+  const totalCps = activeCheckpoints.length;
+  if (keys.length === 0) return { projects: 0, checkpoints: totalCps, given: 0, done: 0 };
+
+  const stageCounts = { 1: 0, 2: 0, 3: 0 };
+  for (const cp of activeCheckpoints) {
+    if (stageCounts[cp.stage_no] !== undefined) {
+      stageCounts[cp.stage_no] += 1;
+    }
+  }
+
+  const metaCols = db.prepare(`PRAGMA table_info(crm_kitting_project_meta)`).all().map(c => c.name);
+  const hasStage1Disabled = metaCols.includes('stage1_disabled_at');
+  const hasStage2Disabled = metaCols.includes('stage2_disabled_at');
+  const hasStage3Disabled = metaCols.includes('stage3_disabled_at');
+
   const ph = keys.map(() => '?').join(',');
+  const selectCols = ['project_key'];
+  if (hasStage1Disabled) selectCols.push('stage1_disabled_at');
+  if (hasStage2Disabled) selectCols.push('stage2_disabled_at');
+  if (hasStage3Disabled) selectCols.push('stage3_disabled_at');
+
+  const metaRows = db.prepare(`
+    SELECT ${selectCols.join(', ')}
+    FROM crm_kitting_project_meta
+    WHERE project_key IN (${ph})
+  `).all(...keys);
+  const metaByKey = {};
+  for (const m of metaRows) metaByKey[m.project_key] = m;
+
+  let given = 0;
+  for (const k of keys) {
+    const m = metaByKey[k];
+    let projPlan = totalCps;
+    if (hasStage1Disabled && m?.stage1_disabled_at) projPlan -= (stageCounts[1] || 0);
+    if (hasStage2Disabled && m?.stage2_disabled_at) projPlan -= (stageCounts[2] || 0);
+    if (hasStage3Disabled && m?.stage3_disabled_at) projPlan -= (stageCounts[3] || 0);
+    given += Math.max(0, projPlan);
+  }
+
+  let stageExclusions = '';
+  if (hasStage1Disabled) stageExclusions += ' AND NOT (c.stage_no = 1 AND m.stage1_disabled_at IS NOT NULL)';
+  if (hasStage2Disabled) stageExclusions += ' AND NOT (c.stage_no = 2 AND m.stage2_disabled_at IS NOT NULL)';
+  if (hasStage3Disabled) stageExclusions += ' AND NOT (c.stage_no = 3 AND m.stage3_disabled_at IS NOT NULL)';
+
   const done = db.prepare(`
     SELECT COUNT(*) c
       FROM crm_kitting_entry e
@@ -120,9 +164,12 @@ function kittingProgress(db, projectKeys) {
          GROUP BY project_key, checkpoint_id
       ) lm ON lm.latest_id = e.id
       JOIN crm_kitting_checkpoint c ON c.id = e.checkpoint_id AND c.is_active = 1
+      LEFT JOIN crm_kitting_project_meta m ON m.project_key = e.project_key
      WHERE COALESCE(TRIM(e.status), '') <> ''
+       ${stageExclusions}
   `).get(...keys).c;
-  return { projects: keys.length, checkpoints, given: keys.length * checkpoints, done };
+
+  return { projects: keys.length, checkpoints: totalCps, given, done };
 }
 
 module.exports = {

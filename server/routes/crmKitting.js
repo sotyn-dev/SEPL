@@ -148,8 +148,14 @@ try {
     if (!metaCols.includes('removed_at'))     db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_at DATETIME`);
     if (!metaCols.includes('removed_by'))     db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_by INTEGER REFERENCES users(id)`);
     if (!metaCols.includes('removed_reason')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_reason TEXT`);
+    if (!metaCols.includes('stage1_disabled_at')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage1_disabled_at DATETIME`);
+    if (!metaCols.includes('stage1_disabled_by')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage1_disabled_by INTEGER REFERENCES users(id)`);
+    if (!metaCols.includes('stage2_disabled_at')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage2_disabled_at DATETIME`);
+    if (!metaCols.includes('stage2_disabled_by')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage2_disabled_by INTEGER REFERENCES users(id)`);
+    if (!metaCols.includes('stage3_disabled_at')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage3_disabled_at DATETIME`);
+    if (!metaCols.includes('stage3_disabled_by')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN stage3_disabled_by INTEGER REFERENCES users(id)`);
   } catch (e) {
-    console.warn('[crm_kitting] removed_* column migration skipped:', e.message);
+    console.warn('[crm_kitting] removed_* / stage*_disabled_* column migration skipped:', e.message);
   }
 
   // Stage-name override (admin-editable like rental_tools stage labels)
@@ -816,6 +822,59 @@ router.post('/project-restore', requirePermission('crm_kitting', 'delete'), (req
       body: { project_key: projectKey },
     });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/crm-kitting/project-stage-toggle  { project_key, stage_no, disabled } ──
+// Disables or re-enables a project specifically for a single stage (1, 2, or 3).
+// Preserves entries, photos, and presence in other stages.
+router.post('/project-stage-toggle', requirePermission('crm_kitting', 'edit'), (req, res) => {
+  const db = getDb();
+  const projectKey = String(req.body?.project_key || '').trim();
+  const stageNo = Number(req.body?.stage_no);
+  const disabled = req.body?.disabled !== false;
+
+  if (!projectKey) return res.status(400).json({ error: 'project_key required' });
+  if (![1, 2, 3].includes(stageNo)) return res.status(400).json({ error: 'stage_no must be 1, 2, or 3' });
+
+  try {
+    if (!projectExistsInBB(db, projectKey)) return res.status(404).json({ error: 'project not found in business book' });
+
+    const colAt = `stage${stageNo}_disabled_at`;
+    const colBy = `stage${stageNo}_disabled_by`;
+
+    if (disabled) {
+      db.prepare(`
+        INSERT INTO crm_kitting_project_meta (project_key, ${colAt}, ${colBy}, updated_by, updated_at)
+        VALUES (?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(project_key) DO UPDATE SET
+          ${colAt}   = CURRENT_TIMESTAMP,
+          ${colBy}   = excluded.${colBy},
+          updated_by = excluded.updated_by,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(projectKey, req.user?.id || null, req.user?.id || null);
+    } else {
+      db.prepare(`
+        UPDATE crm_kitting_project_meta
+        SET ${colAt} = NULL, ${colBy} = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE project_key = ?
+      `).run(req.user?.id || null, projectKey);
+    }
+
+    logAuditEvent({
+      user: req.user,
+      action: disabled ? 'DISABLE_STAGE' : 'ENABLE_STAGE',
+      entity_type: 'crm_kitting_project_stage',
+      entity_id: `${projectKey}::stage_${stageNo}`,
+      entity_label: `${projectKey} (Stage ${stageNo})`,
+      method: 'POST',
+      path: '/api/crm-kitting/project-stage-toggle',
+      body: { project_key: projectKey, stage_no: stageNo, disabled },
+    });
+
+    res.json({ ok: true, stage_no: stageNo, disabled });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

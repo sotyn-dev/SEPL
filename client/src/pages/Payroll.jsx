@@ -149,6 +149,16 @@ const LABEL_PILL = {
   absent_low_hours: 'bg-red-100 text-red-700',
   sunday_paid: 'bg-blue-100 text-blue-700',
   sunday_unpaid: 'bg-gray-100 text-gray-500',
+  sunday_worked: 'bg-emerald-100 text-emerald-800 font-semibold',
+  admin_sunday_worked: 'bg-emerald-100 text-emerald-800 font-semibold',
+  sunday_half_day: 'bg-amber-100 text-amber-800 font-semibold',
+  admin_sunday_half_day: 'bg-amber-100 text-amber-800 font-semibold',
+  admin_present: 'bg-emerald-100 text-emerald-700',
+  admin_late: 'bg-amber-100 text-amber-700',
+  admin_half_day: 'bg-orange-100 text-orange-700',
+  admin_short_day: 'bg-orange-100 text-orange-700',
+  admin_absent: 'bg-red-100 text-red-700',
+  sunday_sandwich_break: 'bg-red-100 text-red-700',
   holiday_paid: 'bg-indigo-100 text-indigo-700',
   admin_holiday: 'bg-indigo-100 text-indigo-700',
   paid_casual_leave: 'bg-purple-100 text-purple-700',
@@ -345,9 +355,8 @@ export default function Payroll() {
   // bonus in NO column — Gagandeep showed 11.5 + 2.5 = 14 against Paid Days
   // 16.5 (mam 2026-08-19).
   const dayBreakdown = (r) => {
-    const worked = +r.sunday_worked_pay || 0;
     const att = Math.round((+r.present_days || 0) * 100) / 100;
-    const sun = Math.round(((+r.sunday_count || 0) + worked) * 100) / 100;
+    const sun = Math.round((+r.sunday_count || 0) * 100) / 100;
     return { att, sun };
   };
 
@@ -1043,7 +1052,7 @@ export default function Payroll() {
               <div className="text-[10px] uppercase font-bold text-gray-400 mb-2">Metrics</div>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
-                <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
+                <Stat label="Sundays" value={`${detail.sunday_count ?? 0}${detail.sunday_worked > 0 ? ` (+${detail.sunday_worked_pay}d)` : ''}`} color="text-blue-600" />
                 <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
                 <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
                 <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
@@ -1096,10 +1105,24 @@ export default function Payroll() {
                       <tr key={i} className="border-t">
                         <td className="p-2">{d.date}</td>
                         <td className="p-2">{d.day}</td>
-                        <td className="p-2"><span className={`text-[10px] px-1.5 py-0.5 rounded ${LABEL_PILL[d.label] || 'bg-gray-100'}`}>{d.label.replace(/_/g, ' ')}</span></td>
+                        <td className="p-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${LABEL_PILL[d.label] || 'bg-gray-100'}`}>{d.label.replace(/_/g, ' ')}</span>
+                          {d.applied_leave && (
+                            <span className="block text-[9px] text-amber-600 font-normal">
+                              (applied {d.applied_leave} leave, attended)
+                            </span>
+                          )}
+                        </td>
                         <td className="p-2">{d.punch_in ? fmtTime(d.punch_in, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                         <td className="p-2 text-right">{d.hours || '-'}</td>
-                        <td className="p-2 text-right font-semibold">{d.pay}</td>
+                        <td className="p-2 text-right font-semibold">
+                          {d.pay}
+                          {d.sunday_bonus ? (
+                            <span className="block text-[9px] text-emerald-600 font-normal">
+                              (incl. Sunday + {d.sunday_bonus}d work)
+                            </span>
+                          ) : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
