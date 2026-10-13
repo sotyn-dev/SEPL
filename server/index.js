@@ -184,6 +184,16 @@ try {
   // Non-fatal — DB may not have business_book yet
 }
 
+// Self-heal and sync active/inactive/terminated statuses across users, employees, chat groups, and flow boards
+try {
+  const { healInactiveAndTerminatedUsers } = require('./lib/userStatusSync');
+  healInactiveAndTerminatedUsers();
+  console.log('[sync] user status & memberships healed at boot');
+} catch (e) {
+  console.warn('[sync] user status heal failed:', e.message);
+}
+
+
 // Nightly DB backup scheduler — runs at 02:00 local time every day and
 // keeps the last 30 backups. Backups go to ~/erp-backups on the VPS (or
 // ../backups on Windows). Admin can also list / download / trigger manually

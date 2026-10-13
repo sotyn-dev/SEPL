@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
+import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload, FiRefreshCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 import HrIdentity, { hrDeptText } from '../components/HrIdentity';
@@ -58,6 +58,14 @@ const fmtT = (iso) => {
   try {
     return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
   } catch { return '—'; }
+};
+
+const isoToTimeInput = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000);
+    return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+  } catch { return ''; }
 };
 
 // Status that matches the punch times, on the SAME thresholds payroll pays on
@@ -123,6 +131,9 @@ export default function Attendance() {
   const [userSearch, setUserSearch] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
   const [userRecords, setUserRecords] = useState([]);
+  const [userMuster, setUserMuster] = useState(null);
+  const [userMusterLoading, setUserMusterLoading] = useState(false);
+  const [musterFilter, setMusterFilter] = useState('all');
   const today = new Date().toISOString().split('T')[0];
   const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
   const [userDateFrom, setUserDateFrom] = useState(firstOfMonth);
@@ -197,13 +208,58 @@ export default function Attendance() {
     }
   }, [filterDate]);
 
-  // Load per-user records when the By User tab filters change
+  // Load per-user muster & records when the By User tab filters change
+  const loadUserMuster = useCallback(() => {
+    if (!seeAll || tab !== 'byuser' || !selectedUserId) {
+      setUserMuster(null);
+      setUserRecords([]);
+      return;
+    }
+    setUserMusterLoading(true);
+    api.get(`/attendance/user-muster?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`)
+      .then(r => {
+        setUserMuster(r.data);
+        setUserRecords((r.data?.days || []).filter(d => d.punch_in_time || d.admin_marked));
+      })
+      .catch(() => {
+        setUserMuster(null);
+        api.get(`/attendance?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`)
+          .then(r => setUserRecords(r.data || []))
+          .catch(() => setUserRecords([]));
+      })
+      .finally(() => setUserMusterLoading(false));
+  }, [seeAll, tab, selectedUserId, userDateFrom, userDateTo]);
+
   useEffect(() => {
-    if (!seeAll || tab !== 'byuser' || !selectedUserId) { setUserRecords([]); return; }
-    api.get(`/attendance?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`)
-      .then(r => setUserRecords(r.data))
-      .catch(() => setUserRecords([]));
-  }, [tab, selectedUserId, userDateFrom, userDateTo, isAdmin]);
+    loadUserMuster();
+  }, [loadUserMuster]);
+
+  const setMonthPreset = (offset = 0) => {
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const pad = n => String(n).padStart(2, '0');
+    const y = target.getFullYear();
+    const m = target.getMonth() + 1;
+    const lastDay = new Date(y, m, 0).getDate();
+    setUserDateFrom(`${y}-${pad(m)}-01`);
+    setUserDateTo(`${y}-${pad(m)}-${pad(lastDay)}`);
+  };
+
+  const exportUserMuster = async () => {
+    if (!selectedUserId) return;
+    try {
+      const resp = await api.get(`/attendance/user-muster/export.xlsx?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([resp.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      const userName = (userMuster?.user?.name || 'employee').replace(/[^a-zA-Z0-9]/g, '_');
+      a.download = `attendance-muster-${userName}-${userDateFrom}-to-${userDateTo}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to export muster Excel');
+    }
+  };
 
   // Load the logged-in user's own attendance when the My History tab /
   // its date range changes. Self-service — works for every employee.
@@ -980,13 +1036,16 @@ export default function Attendance() {
           </div>
 
           {/* Not Punched In */}
-          {dashboard.notPunched?.length > 0 && (
+          {dashboard.notPunched?.filter(u => u.bucket !== 'terminated').length > 0 && (
             <div className="card bg-red-50 border border-red-200">
-              <h4 className="font-bold text-red-700 mb-2"><FiAlertTriangle className="inline mr-1" /> Not Punched In Today ({dashboard.notPunched.length})</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{dashboard.notPunched.map(u => (
-                <div key={u.id} className="bg-white rounded p-2 text-sm">
-                  <div className="font-medium">{u.name}</div>
-                  <div className="mb-1.5"><HrIdentity rec={u} size="text-xs" /></div>
+              <h4 className="font-bold text-red-700 mb-2">
+                <FiAlertTriangle className="inline mr-1" /> Not Punched In Today ({dashboard.notPunched.filter(u => u.bucket !== 'terminated').length})
+              </h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {dashboard.notPunched.filter(u => u.bucket !== 'terminated').map(u => (
+                  <div key={u.id} className="bg-white rounded p-2 text-sm">
+                    <div className="font-medium">{u.name}</div>
+                    <div className="mb-1.5"><HrIdentity rec={u} size="text-xs" /></div>
                   {/* Admin override — back-fill present for users who didn't
                       punch. Row is hidden from the user's own dashboard. */}
                   <button onClick={async () => {
@@ -1315,7 +1374,7 @@ export default function Attendance() {
       {tab === 'byuser' && seeAll && (
         <div className="space-y-4">
           <div className="card p-3">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-start">
               <div className="md:col-span-2">
                 <label className="label">Search Employee</label>
                 <input
@@ -1348,98 +1407,326 @@ export default function Attendance() {
                 </div>
               </div>
               <div>
-                <label className="label">From</label>
-                <input type="date" className="input" value={userDateFrom} onChange={e => setUserDateFrom(e.target.value)} />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label m-0">Date Range</label>
+                  <div className="flex gap-1 text-[11px]">
+                    <button type="button" onClick={() => setMonthPreset(0)} className="text-blue-600 hover:underline">This Month</button>
+                    <span className="text-gray-300">|</span>
+                    <button type="button" onClick={() => setMonthPreset(-1)} className="text-blue-600 hover:underline">Last Month</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[10px] text-gray-400 block mb-0.5">From</span>
+                    <input type="date" className="input text-xs" value={userDateFrom} onChange={e => setUserDateFrom(e.target.value)} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 block mb-0.5">To</span>
+                    <input type="date" className="input text-xs" value={userDateTo} onChange={e => setUserDateTo(e.target.value)} />
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="label">To</label>
-                <input type="date" className="input" value={userDateTo} onChange={e => setUserDateTo(e.target.value)} />
+              <div className="pt-6">
+                <button
+                  type="button"
+                  onClick={loadUserMuster}
+                  disabled={!selectedUserId || userMusterLoading}
+                  className="btn btn-primary w-full text-sm py-2 flex items-center justify-center gap-1.5"
+                >
+                  <FiRefreshCw size={14} className={userMusterLoading ? 'animate-spin' : ''} />
+                  {userMusterLoading ? 'Loading…' : 'Refresh Muster'}
+                </button>
               </div>
             </div>
           </div>
 
           {!selectedUserId ? (
-            <div className="card p-8 text-center text-gray-400 text-sm">Pick an employee on the left to see their attendance details</div>
+            <div className="card p-8 text-center text-gray-400 text-sm">Pick an employee on the left to see their complete monthly attendance record</div>
+          ) : !userMuster ? (
+            <div className="card p-8 text-center text-gray-400 text-sm">
+              {userMusterLoading ? 'Loading complete attendance muster…' : 'No records found for this range'}
+            </div>
           ) : (
             <>
-              {/* Summary cards */}
-              {(() => {
-                const total = userRecords.length;
-                const present = userRecords.filter(r => r.punch_in_time).length;
-                const late = userRecords.filter(r => r.status === 'late').length;
-                const halfDay = userRecords.filter(r => r.status === 'half_day').length;
-                const autoIn = userRecords.filter(r => r.auto_punched_in).length;
-                const autoOut = userRecords.filter(r => r.auto_punched_out).length;
-                const totalHours = userRecords.reduce((s, r) => s + (r.total_hours || 0), 0);
-                const avgHours = present > 0 ? (totalHours / present).toFixed(1) : '0';
-                const selectedUser = allUsers.find(u => u.id === selectedUserId);
-                return (
-                  <>
-                    <div className="card p-3 flex items-center justify-between">
-                      <div>
-                        <h4 className="font-bold text-lg">{selectedUser?.name || '—'}</h4>
-                        <p className="text-xs text-gray-500">{hrDeptText(selectedUser)} {selectedUser?.email ? `· ${selectedUser.email}` : ''}</p>
-                      </div>
-                      <span className="text-xs text-gray-400">{userDateFrom} → {userDateTo}</span>
+              {/* Employee Header & Date Banner */}
+              <div className="card p-3 flex flex-wrap items-center justify-between gap-2 border-l-4 border-blue-600">
+                <div className="flex items-center gap-3">
+                  {userMuster.user?.avatar_url ? (
+                    <img src={userMuster.user.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover border" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">
+                      {(userMuster.user?.name || 'U').charAt(0)}
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Records</div><div className="text-2xl font-bold">{total}</div></div>
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Present</div><div className="text-2xl font-bold text-emerald-600">{present}</div></div>
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Late</div><div className="text-2xl font-bold text-amber-600">{late}</div></div>
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Half Day</div><div className="text-2xl font-bold text-orange-600">{halfDay}</div></div>
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Total Hours</div><div className="text-2xl font-bold">{totalHours.toFixed(1)}</div></div>
-                      <div className="card p-3"><div className="text-[11px] text-gray-500">Avg Hours / day</div><div className="text-2xl font-bold">{avgHours}</div></div>
-                    </div>
-                    {(autoIn > 0 || autoOut > 0) && (
-                      <div className="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-                        Auto-punched: {autoIn} in · {autoOut} out. These entries were marked automatically after 5 min inside/outside the geofence.
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
+                  )}
+                  <div>
+                    <h4 className="font-bold text-lg text-gray-900 leading-tight">{userMuster.user?.name || '—'}</h4>
+                    <p className="text-xs text-gray-500">
+                      {userMuster.user?.hr_department || userMuster.user?.department || 'Staff'} · {userMuster.user?.hr_designation || userMuster.user?.role || ''} {userMuster.user?.email ? `· ${userMuster.user.email}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <span className="text-xs font-semibold text-gray-700 block">{userMuster.from} → {userMuster.to}</span>
+                    <span className="text-[11px] text-gray-400">{userMuster.summary.total_days} Calendar Days ({userMuster.summary.working_days} Working)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={exportUserMuster}
+                    className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50"
+                    title="Export complete attendance muster to Excel"
+                  >
+                    <FiDownload size={14} /> Export Excel
+                  </button>
+                </div>
+              </div>
 
-              {/* Detail table */}
+              {/* Complete Executive KPI Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+                <div className="card p-2.5 border-l-4 border-gray-400">
+                  <div className="text-[10px] text-gray-500 uppercase font-semibold">Total Days</div>
+                  <div className="text-xl font-bold text-gray-800">{userMuster.summary.total_days}</div>
+                  <div className="text-[10px] text-gray-400">{userMuster.summary.working_days} working</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-emerald-500">
+                  <div className="text-[10px] text-emerald-600 uppercase font-semibold">Present</div>
+                  <div className="text-xl font-bold text-emerald-600">{userMuster.summary.present}</div>
+                  <div className="text-[10px] text-emerald-600 font-medium">{userMuster.summary.attendance_rate}% rate</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-amber-500">
+                  <div className="text-[10px] text-amber-600 uppercase font-semibold">Late Marks</div>
+                  <div className="text-xl font-bold text-amber-600">{userMuster.summary.late}</div>
+                  <div className="text-[10px] text-gray-400">&gt; cut-off time</div>
+                </div>
+                <div className={`card p-2.5 border-l-4 ${userMuster.summary.absent > 0 ? 'border-red-500 bg-red-50/20' : 'border-gray-300'}`}>
+                  <div className="text-[10px] text-red-600 uppercase font-semibold">Absent</div>
+                  <div className="text-xl font-bold text-red-600">{userMuster.summary.absent}</div>
+                  <div className="text-[10px] text-red-500 font-medium">No punch / leave</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-orange-500">
+                  <div className="text-[10px] text-orange-600 uppercase font-semibold">Half Day</div>
+                  <div className="text-xl font-bold text-orange-600">{userMuster.summary.half_day}</div>
+                  <div className="text-[10px] text-gray-400">0.5 day mark</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-purple-500">
+                  <div className="text-[10px] text-purple-600 uppercase font-semibold">Approved Leave</div>
+                  <div className="text-xl font-bold text-purple-600">{userMuster.summary.on_leave}</div>
+                  <div className="text-[10px] text-gray-400">In HR system</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-blue-500">
+                  <div className="text-[10px] text-blue-600 uppercase font-semibold">Week-Offs</div>
+                  <div className="text-xl font-bold text-blue-600">{userMuster.summary.week_offs}</div>
+                  <div className="text-[10px] text-gray-400">Sundays / Offs</div>
+                </div>
+                <div className="card p-2.5 border-l-4 border-teal-500">
+                  <div className="text-[10px] text-teal-600 uppercase font-semibold">Total Hours</div>
+                  <div className="text-xl font-bold text-teal-700">{userMuster.summary.total_hours}h</div>
+                  <div className="text-[10px] text-gray-400">{userMuster.summary.avg_hours}h / day avg</div>
+                </div>
+              </div>
+
+              {/* Warnings / Alerts if any */}
+              {userMuster.summary.missed_punch_out > 0 && (
+                <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center justify-between">
+                  <span>⚠ <b>{userMuster.summary.missed_punch_out}</b> day(s) have a punch-in but no punch-out time recorded. Click "Add Out" to record their punch out.</span>
+                </div>
+              )}
+              {(userMuster.summary.auto_punched_in > 0 || userMuster.summary.auto_punched_out > 0) && (
+                <div className="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                  Auto-punched: {userMuster.summary.auto_punched_in} in · {userMuster.summary.auto_punched_out} out via geofence.
+                </div>
+              )}
+
+              {/* Complete Daily Muster Table */}
               <div className="card p-0 overflow-x-auto">
-                <div className="p-3 border-b"><h4 className="font-semibold text-sm">Daily Detail</h4></div>
+                <div className="flex flex-wrap items-center justify-between p-3 border-b gap-2 bg-gray-50/70">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-600 mr-1">Filter Days:</span>
+                    {[
+                      { id: 'all', label: `All (${userMuster.summary.total_days})` },
+                      { id: 'present', label: `Present (${userMuster.summary.present})` },
+                      { id: 'late', label: `Late (${userMuster.summary.late})` },
+                      { id: 'absent', label: `Absent (${userMuster.summary.absent})`, alert: userMuster.summary.absent > 0 },
+                      { id: 'leave', label: `Leave (${userMuster.summary.on_leave})` },
+                      { id: 'weekend', label: `Week-Off (${userMuster.summary.week_offs})` },
+                    ].map(f => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setMusterFilter(f.id)}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition ${musterFilter === f.id ? 'bg-blue-600 text-white shadow-xs' : f.alert ? 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100' : 'bg-white border text-gray-700 hover:bg-gray-100'}`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[11px] text-gray-400">
+                    Showing {userMuster.days.filter(d => {
+                      if (musterFilter === 'all') return true;
+                      if (musterFilter === 'present') return d.status === 'present' || d.status === 'late' || (d.is_sunday && d.punch_in_time);
+                      if (musterFilter === 'late') return d.is_late;
+                      if (musterFilter === 'absent') return d.status === 'absent';
+                      if (musterFilter === 'leave') return d.status === 'on_leave';
+                      if (musterFilter === 'weekend') return d.status === 'weekend';
+                      return true;
+                    }).length} of {userMuster.days.length} days
+                  </span>
+                </div>
+
                 <div className="overflow-x-auto">
                   <NumberedTable className="text-sm w-full">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-gray-50 text-xs">
                       <tr>
-                        <th className="px-2 py-2 text-left">Date</th>
-                        <th className="px-2 py-2">In</th>
-                        <th className="px-2 py-2">Out</th>
-                        <th className="px-2 py-2">Hours</th>
+                        <th className="px-2.5 py-2 text-left">Date</th>
+                        <th className="px-2 py-2 text-center">In</th>
+                        <th className="px-2 py-2 text-center">Out</th>
+                        <th className="px-2 py-2 text-center">Hours</th>
                         <th className="px-2 py-2 text-left">Site</th>
-                        <th className="px-2 py-2">Status</th>
-                        <th className="px-2 py-2">Photos</th>
+                        <th className="px-2 py-2 text-center">Status</th>
+                        <th className="px-2 py-2 text-center">Photos</th>
+                        <th className="px-2 py-2 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {userRecords.map(r => (
-                        <tr key={r.id} className="border-b">
-                          <td className="px-2 py-2 font-medium">{r.date}</td>
-                          <td className="px-2 py-2 text-center text-xs text-emerald-600">
-                            {fmtT(r.punch_in_time)}
-                            {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
-                          </td>
-                          <td className="px-2 py-2 text-center text-xs text-red-600">
-                            {fmtT(r.punch_out_time)}
-                            {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
-                          </td>
-                          <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
-                          <td className="px-2 py-2 text-xs">{r.site_name || '-'}</td>
-                          <td className="px-2 py-2 text-center"><StatusBadge status={r.status} /></td>
-                          <td className="px-2 py-2">
-                            <div className="flex gap-1 justify-center">
-                              {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch In" />}
-                              {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch Out" />}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {userRecords.length === 0 && (
-                        <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
+                      {userMuster.days
+                        .filter(d => {
+                          if (musterFilter === 'all') return true;
+                          if (musterFilter === 'present') return d.status === 'present' || d.status === 'late' || (d.is_sunday && d.punch_in_time);
+                          if (musterFilter === 'late') return d.is_late;
+                          if (musterFilter === 'absent') return d.status === 'absent';
+                          if (musterFilter === 'leave') return d.status === 'on_leave';
+                          if (musterFilter === 'weekend') return d.status === 'weekend';
+                          return true;
+                        })
+                        .map(d => {
+                          const isSun = d.is_sunday;
+                          const isAbs = d.status === 'absent';
+                          const isFut = d.status === 'future';
+                          return (
+                            <tr key={d.date} className={`border-b transition hover:bg-gray-50/80 ${isAbs ? 'bg-red-50/30' : isSun ? 'bg-blue-50/20' : isFut ? 'opacity-60 bg-gray-50/40' : ''}`}>
+                              <td className="px-2.5 py-2 font-medium">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{d.date}</span>
+                                  <span className={`text-[10px] font-semibold px-1 rounded ${isSun ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
+                                    {d.day_name}
+                                  </span>
+                                  {d.admin_marked && (
+                                    <span className="text-[9px] bg-blue-100 text-blue-700 px-1 rounded" title="Admin marked">ADM</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-2 py-2 text-center text-xs">
+                                {d.punch_in_time ? (
+                                  <span className="text-emerald-700 font-medium">
+                                    {fmtT(d.punch_in_time)}
+                                    {d.auto_punched_in && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-2 text-center text-xs">
+                                {d.punch_out_time ? (
+                                  <span className="text-red-700 font-medium">
+                                    {fmtT(d.punch_out_time)}
+                                    {d.auto_punched_out && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                                  </span>
+                                ) : d.missed_punch_out ? (
+                                  <span className="text-[11px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-medium" title="Punch-in recorded, but punch-out was missed">
+                                    Missed Out
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-300">—</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-2 text-center text-xs font-semibold">
+                                {d.total_hours != null ? `${d.total_hours}h` : '—'}
+                              </td>
+                              <td className="px-2 py-2 text-xs text-gray-700">
+                                {d.site_name || (d.leave ? `Leave: ${d.leave.leave_type}` : isSun ? 'Weekly Off' : '—')}
+                              </td>
+                              <td className="px-2 py-2 text-center">
+                                {d.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
+                                {d.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({d.late_minutes}m)</span>}
+                                {d.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
+                                {d.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({d.leave?.leave_type || 'Approved'})</span>}
+                                {d.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
+                                {d.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
+                                {d.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                              </td>
+                              <td className="px-2 py-2">
+                                <div className="flex gap-1 justify-center">
+                                  {d.punch_in_photo && (
+                                    <img
+                                      src={d.punch_in_photo}
+                                      alt="In"
+                                      onClick={() => setLightbox({ src: d.punch_in_photo, label: `Punch In — ${d.date}` })}
+                                      className="w-7 h-7 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
+                                      title="Punch In Photo"
+                                    />
+                                  )}
+                                  {d.punch_out_photo && (
+                                    <img
+                                      src={d.punch_out_photo}
+                                      alt="Out"
+                                      onClick={() => setLightbox({ src: d.punch_out_photo, label: `Punch Out — ${d.date}` })}
+                                      className="w-7 h-7 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
+                                      title="Punch Out Photo"
+                                    />
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-2 py-2 text-right">
+                                {isAbs ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setForm({ user_id: selectedUserId, date: d.date, status: 'present', remarks: '' });
+                                      setModal('admin-mark');
+                                    }}
+                                    className="btn btn-secondary text-[11px] py-0.5 px-2 text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                                    title="Mark or backfill attendance for this absent day"
+                                  >
+                                    + Mark Present
+                                  </button>
+                                ) : d.missed_punch_out ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setForm({ user_id: selectedUserId, date: d.date, status: 'fill_out', punch_in: isoToTimeInput(d.punch_in_time), punch_out: '' });
+                                      setModal('admin-mark');
+                                    }}
+                                    className="btn btn-secondary text-[11px] py-0.5 px-2 text-amber-700 border-amber-300 hover:bg-amber-50"
+                                    title="Add punch-out time"
+                                  >
+                                    + Add Out
+                                  </button>
+                                ) : (d.punch_in_time || d.admin_marked) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setForm({
+                                        user_id: selectedUserId,
+                                        date: d.date,
+                                        status: d.status,
+                                        punch_in: isoToTimeInput(d.punch_in_time),
+                                        punch_out: isoToTimeInput(d.punch_out_time),
+                                        remarks: d.remarks || ''
+                                      });
+                                      setModal('admin-mark');
+                                    }}
+                                    className="text-[11px] text-gray-500 hover:text-blue-600 underline"
+                                    title="Edit attendance details"
+                                  >
+                                    Edit
+                                  </button>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {userMuster.days.length === 0 && (
+                        <tr><td colSpan="8" className="text-center py-6 text-gray-400">No attendance days in this range</td></tr>
                       )}
                     </tbody>
                   </NumberedTable>
@@ -1878,7 +2165,7 @@ export default function Attendance() {
             toast.success(/punch/i.test(res.data?.message || '')
               ? `${who} · ${res.data.message} (${form.date})`
               : `${who} marked ${sentStatus.replace('_', ' ')} for ${form.date}`);
-            setModal(null); load();
+            setModal(null); load(); loadUserMuster();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div>

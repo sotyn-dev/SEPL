@@ -493,7 +493,15 @@ router.get('/:groupId', (req, res) => {
   } else {
     messages = db.prepare('SELECT * FROM chat_messages WHERE group_id=? ORDER BY created_at, id').all(g);
   }
-  const members = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
+  const allMembers = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
+  let members = allMembers;
+  if (!group.is_dm) {
+    try {
+      const erpDb = getDb();
+      const activeIds = new Set(erpDb.prepare('SELECT id FROM users WHERE active=1 AND COALESCE(archived,0)=0').all().map(u => u.id));
+      members = allMembers.filter(m => activeIds.has(m.user_id));
+    } catch (_) {}
+  }
   // DM header = the OTHER participant's name (per viewer), not the stored name.
   if (group.is_dm) group.name = members.filter(m => m.user_id !== req.user.id).map(m => m.name).filter(Boolean).join(', ') || group.name;
   const readRows = db.prepare('SELECT user_id,last_read_id,updated_at FROM chat_reads WHERE group_id=?').all(g);
@@ -612,7 +620,14 @@ router.post('/:groupId/read', (req, res) => {
 router.get('/:groupId/members', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
-  res.json(db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g));
+  const raw = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
+  try {
+    const erpDb = getDb();
+    const activeIds = new Set(erpDb.prepare('SELECT id FROM users WHERE active=1 AND COALESCE(archived,0)=0').all().map(u => u.id));
+    return res.json(raw.filter(m => activeIds.has(m.user_id)));
+  } catch (_) {
+    return res.json(raw);
+  }
 });
 router.post('/:groupId/members', requirePermission('site_chat', 'create'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;

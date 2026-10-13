@@ -43,7 +43,7 @@ export default function UserManagement() {
   const [revealedPassword, setRevealedPassword] = useState(null); // { user, password } shown once after reset
 
   const load = () => {
-    api.get('/auth/users').then(r => {
+    api.get('/auth/users?include_inactive=1').then(r => {
       setUsers(r.data);
       setEditing(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
       setSecurityUser(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
