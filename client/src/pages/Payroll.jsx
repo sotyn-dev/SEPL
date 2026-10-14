@@ -9,7 +9,8 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar } from 'react-icons/fi';
+import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar, FiMail } from 'react-icons/fi';
+import SendSalaryEmailModal from '../components/SendSalaryEmailModal';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
@@ -195,6 +196,9 @@ export default function Payroll() {
   const [holidays, setHolidays] = useState([]);            // [{date, name}]
   const [holidayModal, setHolidayModal] = useState(false);
   const [holidayForm, setHolidayForm] = useState({ date: '', name: '' });
+  // Salary Email modal state (TSK-0924)
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [singleEmailTarget, setSingleEmailTarget] = useState(null);
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -584,6 +588,13 @@ export default function Payroll() {
                 <FiLock size={14} /> Finalise Month
               </button>
             )}
+            <button
+              onClick={() => { setSingleEmailTarget(null); setEmailModalOpen(true); }}
+              className="btn btn-secondary text-sm flex items-center gap-1.5 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+              title="Send salary slip emails to employees"
+            >
+              <FiMail size={14} /> Email Slips
+            </button>
             {isAdmin && (
               <button
                 onClick={unlockMonth}
@@ -661,7 +672,7 @@ export default function Payroll() {
                   <th className="text-right" title="Food allowance — added to net pay">Food</th>
                   <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay ₹</th>
                   <th className="text-center" title="Accounts marks each person Paid after the month is finalised">Paid</th>
-                  <th className="text-center w-20 min-w-[76px]">Slip</th>
+                  <th className="text-center w-24 min-w-[96px]">Slip</th>
                 </tr>
               </thead>
               <tbody>
@@ -760,10 +771,17 @@ export default function Payroll() {
                         </label>
                       ) : <span className="text-[10px] text-gray-300" title="Finalise the month to mark salary paid">—</span>}
                     </td>
-                    <td className="text-center whitespace-nowrap min-w-[76px] w-20">
+                    <td className="text-center whitespace-nowrap min-w-[96px] w-24">
                       <div className="inline-flex items-center justify-center gap-1">
                         <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-[11px] px-1.5 py-1" title="Detail — full day-by-day calculation"><FiEye size={12} /></button>
                         <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-[11px] px-1.5 py-1" title="Printable SEPL salary slip"><LuIndianRupee size={12} /></a>
+                        <button
+                          onClick={() => { setSingleEmailTarget(r); setEmailModalOpen(true); }}
+                          className={`btn text-[11px] px-1.5 py-1 ${r.email_sent_at ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'btn-secondary'}`}
+                          title={r.email_sent_at ? `Slip emailed to ${r.email_sent_to || r.email || ''} on ${fmtDateTime(r.email_sent_at)}` : 'Send Salary Slip via Email'}
+                        >
+                          <FiMail size={12} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -885,9 +903,16 @@ export default function Payroll() {
                   </label>
                 )}
                 <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
-                  <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-3 flex-1">Detail</button>
+                  <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-2 flex-1">Detail</button>
                   <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer"
-                    className="btn btn-primary text-xs py-1.5 px-3 flex-1 text-center">SEPL Slip</a>
+                    className="btn btn-primary text-xs py-1.5 px-2 flex-1 text-center">SEPL Slip</a>
+                  <button
+                    onClick={() => { setSingleEmailTarget(r); setEmailModalOpen(true); }}
+                    className="btn btn-secondary text-xs py-1.5 px-2 flex-1 flex items-center justify-center gap-1 text-indigo-700 border-indigo-200"
+                    title="Email Salary Slip"
+                  >
+                    <FiMail size={12} /> Email
+                  </button>
                 </div>
               </div>
             ))}
@@ -1203,6 +1228,18 @@ export default function Payroll() {
 
             <div className="flex justify-end gap-3 pt-3 border-t">
               <a href={`/payroll/slip/${detail.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-success text-sm">Open SEPL Salary Slip</a>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = detail;
+                  setDetail(null);
+                  setSingleEmailTarget(target);
+                  setEmailModalOpen(true);
+                }}
+                className="btn btn-secondary text-sm flex items-center gap-1.5 text-indigo-700 border-indigo-200"
+              >
+                <FiMail size={14} /> Email Slip
+              </button>
               <button onClick={() => setDetail(null)} className="btn btn-primary text-sm">Close</button>
             </div>
           </div>
@@ -1262,6 +1299,17 @@ export default function Payroll() {
           </div>
         </div>
       </Modal>
+
+      <SendSalaryEmailModal
+        isOpen={emailModalOpen}
+        onClose={() => { setEmailModalOpen(false); setSingleEmailTarget(null); }}
+        month={month}
+        employees={list}
+        isFinalised={isFinalised}
+        onSuccess={() => loadMonth()}
+        currentUser={user}
+        singleTarget={singleEmailTarget}
+      />
 
       <ConfirmDialog
         open={!!confirmDialog}

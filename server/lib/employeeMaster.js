@@ -52,6 +52,7 @@ function validateInput(body, previous, permissions, hasEmployees = true) {
     if (f.type === 'file' && (typeof value !== 'string' || !/^\/uploads\/[^?#]+\.(pdf|jpe?g|png)$/i.test(value) || value.includes('..'))) errors[f.key] = 'Choose an uploaded PDF, JPG or PNG';
   }
   if (has(body, 'email') && present(body.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) errors.email = 'Enter a valid email address';
+  if (has(body, 'personal_email') && present(body.personal_email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.personal_email)) errors.personal_email = 'Enter a valid personal email address';
   for (const key of ['phone','emergency_contact_phone']) {
     if (has(body,key) && present(body[key])) {
       const digits = String(body[key]).replace(/\D/g,'');

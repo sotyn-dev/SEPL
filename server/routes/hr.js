@@ -874,7 +874,7 @@ function masterValues(b) {
 router.get('/ifsc/:code', require('../lib/ifscLookup'));
 
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
-  const { name, phone, email, designation, department, join_date, salary,
+  const { name, phone, email, personal_email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file, roster } = req.body;
   let { user_id } = req.body;
   const db = getDb();
@@ -912,14 +912,14 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
       loginDetails = provisionEmployeeLogin(db, { name, email, phone, department, userId: user_id });
       user_id = loginDetails.userId;
       const r = db.prepare(`
-        INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
+        INSERT INTO employees (user_id,name,phone,email,personal_email,designation,department,join_date,salary,
                                aadhar_file, pan_file, qualification_file, roster,
                                date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
                                pan_number, aadhaar_last4,
                                bank_name, bank_branch, bank_account_no, bank_ifsc,
                                emergency_contact_name, emergency_contact_phone, ${FIELDS.join(', ')})
-        VALUES (${Array(25 + FIELDS.length).fill('?').join(',')})
-      `).run(user_id || null, name, phone, email, designation, department, join_date, access.salaryEdit ? salary ?? null : null,
+        VALUES (${Array(26 + FIELDS.length).fill('?').join(',')})
+      `).run(user_id || null, name, phone, email, personal_email || null, designation, department, join_date, access.salaryEdit ? salary ?? null : null,
             aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
             m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
             m.pan_number, m.aadhaar_last4,
@@ -1052,7 +1052,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const normalized = masterValues(input);
   const values = { ...terms };
   for (const key of Object.keys(normalized)) if (has(key)) values[key] = normalized[key];
-  for (const key of ['name','phone','email','designation','department','join_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
+  for (const key of ['name','phone','email','personal_email','designation','department','join_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
     if (has(key)) values[key] = input[key] === '' ? null : input[key];
   }
   if (has('name')) values.name = input.name.trim();

@@ -149,6 +149,9 @@ export default function PMSTasks() {
   const openCreate = () => {
     setForm({
       description: '',
+      is_new_site: false,
+      site_name: '',
+      client_name: '',
       project_id: '',
       crm_name: '',         // auto-filled when project picked
       project_label: '',    // shown read-only next to the picker
@@ -176,7 +179,8 @@ export default function PMSTasks() {
     e.preventDefault();
     if (saving) return;
     if (!String(form.description || '').trim()) return toast.error('Description is required');
-    if (!form.project_id) return toast.error('Pick a project');
+    if (!form.is_new_site && !form.project_id) return toast.error('Pick a project or switch to "New Site"');
+    if (form.is_new_site && !String(form.site_name || '').trim()) return toast.error('Enter the new site name');
     if (!form.assigned_to) return toast.error('Pick an assignee');
     if (!getFlowStep(form.flow_number)) return toast.error('Enter a valid Flow Number, for example 1.1');
     setSaving(true); setSavePct(0);
@@ -201,7 +205,11 @@ export default function PMSTasks() {
       await api.post('/pms-tasks', {
         description: form.description,
         flow_number: form.flow_number.trim(),
-        project_id: form.project_id,
+        project_id: form.is_new_site ? null : form.project_id,
+        is_new_site: !!form.is_new_site,
+        site_name: form.is_new_site ? form.site_name.trim() : undefined,
+        client_name: form.is_new_site && form.client_name ? form.client_name.trim() : undefined,
+        crm_name: form.crm_name || (user?.name || ''),
         assigned_to: form.assigned_to,
         due_date: form.due_date,
         attachment_url: attachmentUrl,
@@ -291,6 +299,7 @@ export default function PMSTasks() {
       assigned_to: task.assigned_to || '',
       due_date: task.due_date || '',
       project_id: task.project_id || '',
+      site_name: !task.project_id ? (task.project_name_snapshot || '') : '',
     });
     setEditModal(task);
   };
@@ -299,7 +308,13 @@ export default function PMSTasks() {
     if (!editForm.description || !editForm.description.trim()) return toast.error('Description is required');
     setEditSaving(true);
     try {
-      await api.put(`/pms-tasks/${editModal.id}`, editForm);
+      await api.put(`/pms-tasks/${editModal.id}`, {
+        description: editForm.description,
+        assigned_to: editForm.assigned_to,
+        due_date: editForm.due_date,
+        project_id: editForm.project_id || undefined,
+        site_name: !editForm.project_id && editForm.site_name ? editForm.site_name.trim() : undefined,
+      });
       toast.success('Task updated');
       setEditModal(null); setEditForm({}); load();
     } catch (err) {
@@ -467,10 +482,16 @@ export default function PMSTasks() {
                   <td className="text-center text-xs text-gray-500 font-medium">{(pager.page - 1) * pager.perPage + idx + 1}</td>
                   <td className="font-mono text-[10px] text-red-700">PMS-{String(t.id).padStart(4, '0')}</td>
                   <td>
-                    <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
+                    <div className="font-medium text-gray-800 text-xs flex items-center gap-1.5 flex-wrap">
+                      <span>{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</span>
+                      {!t.project_id && (
+                        <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">New Site (Pre-visit)</span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-gray-500">
                       {t.lead_no && <span className="font-mono mr-1">{t.lead_no}</span>}
                       {t.company_name && <span>{t.company_name}</span>}
+                      {!t.project_id && !t.company_name && <span className="text-amber-600 italic">Not in Business Book yet</span>}
                     </div>
                   </td>
                   <td className="text-xs">
@@ -588,7 +609,13 @@ export default function PMSTasks() {
               {t.flow_number && <p className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</p>}
               <p className="text-sm text-gray-800 font-medium mb-2 whitespace-pre-wrap break-words">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
-                <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
+                <div className="col-span-2">
+                  <span className="text-gray-400">Project:</span>{' '}
+                  <b>{t.project_name_live || t.project_name_snapshot || '—'}</b>
+                  {!t.project_id && (
+                    <span className="ml-1.5 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">New Site</span>
+                  )}
+                </div>
                 {t.crm_name && <div className="col-span-2"><span className="text-gray-400">CRM:</span> <b>{t.crm_name}</b></div>}
                 <div><span className="text-gray-400">Assigned to:</span> <b>{t.assigned_to_name}</b></div>
                 <div><span className="text-gray-400">By:</span> {t.assigned_by_name}</div>
@@ -674,23 +701,91 @@ export default function PMSTasks() {
             </p>
           </div>
           <div>
-            <label className="label">Project *</label>
-            <SearchableSelect
-              options={projectOptions}
-              value={form.project_id || null}
-              valueKey="id" displayKey="label"
-              placeholder="Search project by name, company or client…"
-              onChange={(p) => onPickProject(p)}
-            />
-            {form.crm_name && (
-              <p className="text-[11px] text-emerald-700 mt-1 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
-                CRM auto-picked from the latest Client PO for this project: <b>{form.crm_name}</b>
-              </p>
-            )}
-            {form.project_id && !form.crm_name && (
-              <p className="text-[11px] text-amber-700 mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                No Client PO with a CRM name exists for this project yet — the task will be created without a CRM tag.
-              </p>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="label mb-0">Project / Site *</label>
+              <div className="inline-flex rounded-md border border-gray-200 bg-gray-50 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, is_new_site: false, site_name: '' }))}
+                  className={`px-2.5 py-1 rounded font-medium transition ${!form.is_new_site ? 'bg-white shadow text-blue-700 font-semibold' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  From Business Book
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, is_new_site: true, project_id: '', project_label: '', crm_name: f.crm_name || user?.name || '' }))}
+                  className={`px-2.5 py-1 rounded font-medium transition ${form.is_new_site ? 'bg-amber-600 text-white shadow font-semibold' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  + New Site (Pre-visit)
+                </button>
+              </div>
+            </div>
+
+            {!form.is_new_site ? (
+              <>
+                <SearchableSelect
+                  options={projectOptions}
+                  value={form.project_id || null}
+                  valueKey="id" displayKey="label"
+                  placeholder="Search project by name, company or client…"
+                  onChange={(p) => onPickProject(p)}
+                />
+                {form.crm_name && (
+                  <p className="text-[11px] text-emerald-700 mt-1 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                    CRM auto-picked from the latest Client PO for this project: <b>{form.crm_name}</b>
+                  </p>
+                )}
+                {form.project_id && !form.crm_name && (
+                  <p className="text-[11px] text-amber-700 mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    No Client PO with a CRM name exists for this project yet — the task will be created without a CRM tag.
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="space-y-2.5 p-3 bg-amber-50/60 border border-amber-200 rounded-lg">
+                <div>
+                  <label className="text-xs font-semibold text-amber-950 block mb-1">
+                    New Site / Project Name * <span className="font-normal text-amber-800">(not in Business Book yet)</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input bg-white text-sm"
+                    placeholder="Enter site name, e.g. Dugri Residential Site Visit"
+                    value={form.site_name || ''}
+                    onChange={e => setForm(f => ({ ...f, site_name: e.target.value }))}
+                    required={form.is_new_site}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] font-semibold text-gray-700 block mb-0.5">
+                      Client / Company Name <span className="font-normal text-gray-400">(optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="input bg-white text-xs"
+                      placeholder="e.g. M/s Sonalika"
+                      value={form.client_name || ''}
+                      onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-gray-700 block mb-0.5">
+                      CRM Owner Name
+                    </label>
+                    <input
+                      type="text"
+                      className="input bg-white text-xs"
+                      placeholder="CRM name"
+                      value={form.crm_name || ''}
+                      onChange={e => setForm(f => ({ ...f, crm_name: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-amber-800 bg-amber-100/70 rounded px-2 py-1 border border-amber-200/60">
+                  ℹ️ This task will be assigned immediately for the site visit. Once the site is verified and confirmed into the Business Book, you can link it by clicking <b>Edit</b> on this task.
+                </p>
+              </div>
             )}
           </div>
           <div>
@@ -796,6 +891,31 @@ export default function PMSTasks() {
                 onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
                 required
               />
+            </div>
+            <div>
+              <label className="label">
+                Link to Business Book Project
+                {!editModal.project_id && <span className="ml-1.5 text-[11px] font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">Currently Unlinked (New Site)</span>}
+              </label>
+              <SearchableSelect
+                options={projectOptions}
+                value={editForm.project_id || null}
+                valueKey="id" displayKey="label"
+                placeholder="Search project to link to Business Book…"
+                onChange={(p) => setEditForm(f => ({ ...f, project_id: p?.id || '' }))}
+              />
+              {!editForm.project_id && (
+                <div className="mt-1.5">
+                  <label className="text-[11px] text-gray-500 block mb-0.5">Site Name:</label>
+                  <input
+                    type="text"
+                    className="input text-xs"
+                    value={editForm.site_name || ''}
+                    onChange={e => setEditForm(f => ({ ...f, site_name: e.target.value }))}
+                    placeholder="Site / Project Name"
+                  />
+                </div>
+              )}
             </div>
             <div>
               <label className="label">Assigned To *</label>

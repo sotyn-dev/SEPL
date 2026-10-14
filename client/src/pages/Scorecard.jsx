@@ -14,7 +14,7 @@ import TemplateAssignmentPicker from '../components/TemplateAssignmentPicker';
 import { ScoreMetricSettings, ScoreMetricDates } from '../components/ScoreMetricInputs';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter, FiInfo, FiExternalLink } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter, FiInfo, FiExternalLink, FiBarChart2, FiCheckSquare, FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { createLatestScorecardRequest, createScorecardSelection, selectScorecardWeek, selectedScorecard, saveSelectedScorecard } from '../utils/scorecardSelection';
 import {
@@ -752,8 +752,11 @@ export default function Scorecard() {
               last week's committed target, and a committed-vs-delivered graph
               so they SEE the gap (mam 2026-07-06). Print shows the MIS tables
               only, so this interactive panel stays screen-only. */}
-          <div className="print:hidden">
+          <div className="print:hidden space-y-4">
             <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+            {displayCard.template && (displayCard.kpis || []).length > 0 && (
+              <WorkExecutionGraph kpis={displayCard.kpis} weekStart={weekStart} cardOwnerName={cardOwnerName} />
+            )}
           </div>
 
           {!displayCard.template && (
@@ -1413,6 +1416,43 @@ function CommitTooltip({ active, payload, label }) {
   );
 }
 
+function CommitWorkTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  const gap = row.work_gap != null ? row.work_gap : Math.round((Number(row.total_actual || 0) - Number(row.total_planned || 0)) * 10) / 10;
+  return (
+    <div className="bg-white border rounded shadow-md px-3 py-2 text-xs space-y-1 max-w-xs">
+      <div className="font-semibold text-gray-800 border-b pb-1">Week of {label}</div>
+      <div className="flex items-center justify-between gap-3 text-indigo-700">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block"></span>
+          Committed Work (Plan):
+        </span>
+        <b className="font-bold">{row.total_planned} units</b>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-gray-800">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: row.total_actual >= row.total_planned && row.total_planned > 0 ? '#10b981' : '#ef4444' }}></span>
+          Done Work (Delivered):
+        </span>
+        <b className="font-bold">{row.total_actual} units</b>
+      </div>
+      {row.work_achievement_pct != null && (
+        <div className="flex items-center justify-between gap-3 text-gray-600 border-t pt-1 text-[11px]">
+          <span>Execution Rate:</span>
+          <b>{row.work_achievement_pct}%</b>
+        </div>
+      )}
+      {gap != null && (
+        <div className={`text-[11px] font-semibold pt-0.5 ${gap >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+          {gap >= 0 ? `Target exceeded (+${gap} units)` : `Shortfall of ${Math.abs(gap)} units`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CommitmentPanel({ viewUserId, weekStart }) {
   const { user, isAdmin } = useAuth();
   const readOnly = viewUserId !== user.id && !isAdmin();
@@ -1421,6 +1461,8 @@ function CommitmentPanel({ viewUserId, weekStart }) {
   const [saving, setSaving] = useState(false);
   // Mam 2026-08-17: graph range — 8 weeks (default, fast) or the last 6 months.
   const [range, setRange] = useState(8);
+  // View mode: 'units' (Work Units: Committed vs Done) or 'variance' (Score Variance %)
+  const [graphMode, setGraphMode] = useState('units');
 
   const load = useCallback(() => {
     api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=${range}`)
@@ -1453,29 +1495,72 @@ function CommitmentPanel({ viewUserId, weekStart }) {
   const gapThisWeek = (current != null && actualThisWeek != null)
     ? Math.round((actualThisWeek - current) * 100) / 100 : null;
 
-  const chart = series.map(w => ({
+  const currentWeekWork = series.length ? series[series.length - 1] : null;
+
+  // Chart data for percentage variance
+  const chartVariance = series.map(w => ({
     label: fmtShort(w.week_start),
     committed: w.committed_pct,
     actual: w.actual_pct,
     gap: (w.committed_pct != null && w.actual_pct != null)
       ? Math.round((w.actual_pct - w.committed_pct) * 100) / 100 : null,
   }));
-  const vals = chart.flatMap(r => [r.committed, r.actual]).filter(v => v != null);
-  const lo = Math.floor(Math.min(-55, 0, ...vals) / 5) * 5;
-  const hi = Math.ceil(Math.max(10, 0, ...vals) / 5) * 5;
+  const valsVariance = chartVariance.flatMap(r => [r.committed, r.actual]).filter(v => v != null);
+  const lo = Math.floor(Math.min(-55, 0, ...valsVariance) / 5) * 5;
+  const hi = Math.ceil(Math.max(10, 0, ...valsVariance) / 5) * 5;
+
+  // Chart data for work units (Committed Work vs Done Work)
+  const chartUnits = series.map(w => ({
+    label: fmtShort(w.week_start),
+    total_planned: Number(w.total_planned || 0),
+    total_actual: Number(w.total_actual || 0),
+    work_gap: w.gap != null ? w.gap : Math.round((Number(w.total_actual || 0) - Number(w.total_planned || 0)) * 10) / 10,
+    work_achievement_pct: w.work_achievement_pct,
+  }));
+  const maxWorkUnit = Math.max(10, ...chartUnits.flatMap(r => [r.total_planned, r.total_actual]));
+  const yMaxUnits = Math.ceil((maxWorkUnit * 1.15) / 5) * 5;
+
   // Green when the bar meets/beats the promise line, red when it falls short.
-  const barColor = (r) => {
+  const barColorVariance = (r) => {
     if (r.actual == null) return '#e5e7eb';
     if (r.committed != null) return r.actual >= r.committed ? '#10b981' : '#ef4444';
     return r.actual >= 0 ? '#10b981' : r.actual >= -50 ? '#f59e0b' : '#ef4444';
   };
-  const hasData = vals.length > 0;
+
+  const barColorUnits = (r) => {
+    if (r.total_actual == null || (r.total_planned === 0 && r.total_actual === 0)) return '#e2e8f0';
+    if (r.total_planned > 0) return r.total_actual >= r.total_planned ? '#10b981' : r.total_actual > 0 ? '#f59e0b' : '#ef4444';
+    return '#3b82f6';
+  };
+
+  const hasDataVariance = valsVariance.length > 0;
+  const hasDataUnits = chartUnits.some(r => r.total_planned > 0 || r.total_actual > 0);
 
   return (
     <div className="card p-4 space-y-4">
-      <div className="flex items-center gap-2">
-        <FiTarget className="text-indigo-600" />
-        <h3 className="font-bold text-sm">Weekly Commitment <span className="text-gray-400 font-normal">— your promise vs what you delivered</span></h3>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-2">
+        <div className="flex items-center gap-2">
+          <FiTarget className="text-indigo-600" />
+          <h3 className="font-bold text-sm">Weekly Commitment &amp; Work Execution</h3>
+        </div>
+
+        {/* Graph Mode Selector */}
+        <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-lg text-xs">
+          <button
+            type="button"
+            onClick={() => setGraphMode('units')}
+            className={`px-2.5 py-1 rounded font-semibold transition ${graphMode === 'units' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+          >
+            Work Units (Committed vs Done)
+          </button>
+          <button
+            type="button"
+            onClick={() => setGraphMode('variance')}
+            className={`px-2.5 py-1 rounded font-semibold transition ${graphMode === 'variance' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+          >
+            Score Variance %
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1493,6 +1578,12 @@ function CommitmentPanel({ viewUserId, weekStart }) {
                 ? <span className="text-emerald-700 font-semibold">met the promise (+{gapThisWeek}%)</span>
                 : <span className="text-red-700 font-semibold">gap of {gapThisWeek}%</span>}
             </p>
+          )}
+          {currentWeekWork && (currentWeekWork.total_planned > 0 || currentWeekWork.total_actual > 0) && (
+            <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-600">
+              <span>Work Execution:</span>
+              <span><b>{currentWeekWork.total_actual}</b> done / <b>{currentWeekWork.total_planned}</b> committed</span>
+            </div>
           )}
         </div>
 
@@ -1514,48 +1605,318 @@ function CommitmentPanel({ viewUserId, weekStart }) {
               </button>
             )}
           </div>
-          <p className="text-[10px] text-gray-400 mt-1.5">0% = you'll fully hit plan · −50% = the worst you'll allow. You can't commit below −50%.</p>
+          <p className="text-[10px] text-gray-400 mt-1.5">0% = you&apos;ll fully hit plan · −50% = the worst you&apos;ll allow. You can&apos;t commit below −50%.</p>
         </div>
       </div>
 
-      {/* Graph — the emotional angle: bars (delivered) against the dashed
-          promise line, red where they fall short. */}
+      {/* Graph Section with Range Buttons */}
       <div>
-        <div className="flex justify-end gap-1 mb-1">
-          <button onClick={() => setRange(8)}
-            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 8 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            8 Weeks
-          </button>
-          <button onClick={() => setRange(26)}
-            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 26 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            Last 6 Months
-          </button>
-        </div>
-        {hasData ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <ComposedChart data={chart} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} domain={[lo, hi]} tickFormatter={v => `${v}%`} />
-              <Tooltip content={<CommitTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} ifOverflow="extendDomain" />
-              <Bar dataKey="actual" name="Delivered" radius={[3, 3, 0, 0]} maxBarSize={40}>
-                {chart.map((r, i) => <Cell key={i} fill={barColor(r)} />)}
-              </Bar>
-              <Line type="monotone" dataKey="committed" name="Committed" stroke="#4f46e5"
-                strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3, fill: '#4f46e5' }} connectNulls />
-            </ComposedChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="text-center text-gray-400 text-sm py-10 border border-dashed rounded">
-            No commitments yet. Set one for next week above — the gap graph fills in as the weeks go by.
+        <div className="flex items-center justify-between gap-1 mb-2">
+          <span className="text-xs font-semibold text-gray-700">
+            {graphMode === 'units' ? 'Work Done vs Committed Units' : 'Commitment vs Delivered Score %'}
+          </span>
+          <div className="flex gap-1">
+            <button onClick={() => setRange(8)}
+              className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 8 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              8 Weeks
+            </button>
+            <button onClick={() => setRange(26)}
+              className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 26 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              Last 6 Months
+            </button>
           </div>
+        </div>
+
+        {graphMode === 'units' ? (
+          hasDataUnits ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={chartUnits} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} domain={[0, yMaxUnits]} />
+                <Tooltip content={<CommitWorkTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="total_planned" name="Committed Work (Planned)" fill="#6366f1" radius={[3, 3, 0, 0]} maxBarSize={32} />
+                <Bar dataKey="total_actual" name="Done Work (Delivered)" radius={[3, 3, 0, 0]} maxBarSize={32}>
+                  {chartUnits.map((r, i) => <Cell key={i} fill={barColorUnits(r)} />)}
+                </Bar>
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-center text-gray-400 text-sm py-10 border border-dashed rounded">
+              No work data recorded for these weeks yet. Once scoring KPIs are recorded, the committed vs done work chart displays here.
+            </div>
+          )
+        ) : (
+          hasDataVariance ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={chartVariance} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} domain={[lo, hi]} tickFormatter={v => `${v}%`} />
+                <Tooltip content={<CommitTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} ifOverflow="extendDomain" />
+                <Bar dataKey="actual" name="Delivered" radius={[3, 3, 0, 0]} maxBarSize={40}>
+                  {chartVariance.map((r, i) => <Cell key={i} fill={barColorVariance(r)} />)}
+                </Bar>
+                <Line type="monotone" dataKey="committed" name="Committed" stroke="#4f46e5"
+                  strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3, fill: '#4f46e5' }} connectNulls />
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-center text-gray-400 text-sm py-10 border border-dashed rounded">
+              No commitments yet. Set one for next week above — the gap graph fills in as the weeks go by.
+            </div>
+          )
         )}
         <p className="text-[11px] text-gray-500 text-center mt-1">
-          Dashed line = what you <b>committed</b>. Bars = what you <b>delivered</b>. <span className="text-red-600 font-semibold">Red bars fall short of your promise</span> — that's the gap to close.
+          {graphMode === 'units'
+            ? <>Indigo bars = <b>Committed Work (Plan)</b> · Colored bars = <b>Done Work (Delivered)</b> (<span className="text-emerald-600 font-semibold">Green = Achieved</span>, <span className="text-amber-600 font-semibold">Amber = Partial</span>, <span className="text-rose-600 font-semibold">Red = Shortfall</span>).</>
+            : <>Dashed line = what you <b>committed</b>. Bars = what you <b>delivered</b>. <span className="text-red-600 font-semibold">Red bars fall short of your promise</span> — that&apos;s the gap to close.</>}
         </p>
       </div>
+    </div>
+  );
+}
+
+function WorkMetricTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  const gap = Math.round((Number(row.actual || 0) - Number(row.planned || 0)) * 10) / 10;
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs max-w-xs space-y-1">
+      <div className="font-bold text-gray-900 border-b pb-1">{row.metric_name}</div>
+      <div className="text-[11px] text-gray-500">Group: <span className="font-medium text-gray-700">{row.group_name}</span></div>
+      <div className="flex justify-between py-0.5">
+        <span className="text-indigo-700 font-medium flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block"></span> Committed / Planned:
+        </span>
+        <b className="font-bold text-indigo-900">{row.planned}</b>
+      </div>
+      <div className="flex justify-between py-0.5">
+        <span className="text-gray-700 font-medium flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: row.actual >= row.planned && row.planned > 0 ? '#10b981' : '#ef4444' }}></span> Done / Delivered:
+        </span>
+        <b className={`font-bold ${row.actual >= row.planned && row.planned > 0 ? 'text-emerald-700' : row.actual > 0 ? 'text-amber-700' : 'text-rose-700'}`}>{row.actual}</b>
+      </div>
+      <div className="flex justify-between py-0.5 border-t mt-1 pt-1">
+        <span className="text-gray-500">Achievement:</span>
+        <b className="font-semibold">{row.achievement_pct != null ? `${row.achievement_pct}%` : '—'}</b>
+      </div>
+      <div className={`mt-1.5 text-[11px] font-semibold flex items-center gap-1 ${gap >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+        {gap >= 0 ? `✅ Met Target (+${gap})` : `⚠️ Shortfall of ${Math.abs(gap)}`}
+      </div>
+      {row.pending_uptodate ? (
+        <div className="text-[10px] text-gray-400 mt-1 border-t pt-1">
+          Backlog: {row.pending_work || 0} done / {row.pending_uptodate} pending
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkExecutionGraph({ kpis = [], weekStart, cardOwnerName }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState('all');
+
+  const groups = useMemo(() => {
+    const set = new Set();
+    kpis.forEach(k => { if (k.group_name) set.add(k.group_name); });
+    return Array.from(set);
+  }, [kpis]);
+
+  const filteredKpis = useMemo(() => {
+    if (selectedGroup === 'all') return kpis;
+    return kpis.filter(k => k.group_name === selectedGroup);
+  }, [kpis, selectedGroup]);
+
+  const summary = useMemo(() => {
+    let totPlanned = 0;
+    let totActual = 0;
+    let targetsHit = 0;
+    let targetsTotal = 0;
+
+    filteredKpis.forEach(k => {
+      const p = Number(k.planned || 0);
+      const a = Number(k.actual || 0);
+      totPlanned += p;
+      totActual += a;
+      if (p > 0) {
+        targetsTotal++;
+        if (a >= p) targetsHit++;
+      }
+    });
+
+    const completionRate = totPlanned > 0
+      ? Math.round((totActual / totPlanned) * 100)
+      : (totActual > 0 ? 100 : 0);
+
+    return {
+      totPlanned: Math.round(totPlanned * 10) / 10,
+      totActual: Math.round(totActual * 10) / 10,
+      gap: Math.round((totActual - totPlanned) * 10) / 10,
+      completionRate,
+      targetsHit,
+      targetsTotal,
+    };
+  }, [filteredKpis]);
+
+  const chartData = useMemo(() => {
+    return filteredKpis.map(k => {
+      const p = Number(k.planned || 0);
+      const a = Number(k.actual || 0);
+      const rawPct = p > 0 ? Math.round((a / p) * 100) : (a > 0 ? 100 : 0);
+      const short = (k.metric_name || '').length > 20
+        ? (k.metric_name || '').slice(0, 18) + '…'
+        : k.metric_name;
+      return {
+        metric_name: k.metric_name,
+        shortName: short,
+        group_name: k.group_name || 'Other',
+        planned: p,
+        actual: a,
+        achievement_pct: rawPct,
+        pending_uptodate: k.pending_uptodate,
+        pending_work: k.pending_work,
+      };
+    });
+  }, [filteredKpis]);
+
+  if (!kpis.length) return null;
+
+  return (
+    <div className="card p-4 space-y-3 border border-indigo-100 shadow-sm bg-gradient-to-br from-white to-slate-50/50">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+            <FiBarChart2 size={18} />
+          </div>
+          <div>
+            <h3 className="font-bold text-sm text-gray-800 flex items-center gap-2">
+              Work Execution Graph
+              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">
+                Committed vs Done Work
+              </span>
+            </h3>
+            <p className="text-[11px] text-gray-500">
+              Visual comparison showing what was committed/planned vs what was actually delivered for {fmtRange(weekStart)}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {groups.length > 1 && (
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-gray-400">Group:</span>
+              <select
+                className="input text-xs py-1 px-2 h-7"
+                value={selectedGroup}
+                onChange={e => setSelectedGroup(e.target.value)}
+              >
+                <option value="all">All Groups ({kpis.length})</option>
+                {groups.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setCollapsed(!collapsed)}
+            className="btn btn-secondary text-xs py-1 px-2.5 flex items-center gap-1"
+          >
+            {collapsed ? <><FiChevronDown size={14} /> Show Graph</> : <><FiChevronUp size={14} /> Hide Graph</>}
+          </button>
+        </div>
+      </div>
+
+      {/* Summary KPI Badges */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="rounded-lg bg-indigo-50/70 border border-indigo-100 p-2.5">
+          <p className="text-[10px] uppercase font-semibold text-indigo-800 tracking-wider">Committed Work (Plan)</p>
+          <p className="text-xl font-bold text-indigo-900 mt-0.5">{summary.totPlanned} <span className="text-xs font-normal text-indigo-600">units</span></p>
+        </div>
+        <div className="rounded-lg bg-emerald-50/70 border border-emerald-100 p-2.5">
+          <p className="text-[10px] uppercase font-semibold text-emerald-800 tracking-wider">Done Work (Delivered)</p>
+          <p className="text-xl font-bold text-emerald-900 mt-0.5">{summary.totActual} <span className="text-xs font-normal text-emerald-600">units</span></p>
+        </div>
+        <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+          <p className="text-[10px] uppercase font-semibold text-gray-500 tracking-wider">Work Gap</p>
+          <p className={`text-xl font-bold mt-0.5 ${summary.gap >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+            {summary.gap >= 0 ? `+${summary.gap}` : summary.gap} <span className="text-xs font-normal text-gray-500">units</span>
+          </p>
+        </div>
+        <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+          <p className="text-[10px] uppercase font-semibold text-gray-500 tracking-wider">Execution Rate</p>
+          <p className={`text-xl font-bold mt-0.5 ${summary.completionRate >= 100 ? 'text-emerald-700' : summary.completionRate >= 80 ? 'text-indigo-600' : 'text-amber-600'}`}>
+            {summary.completionRate}%
+            {summary.targetsTotal > 0 && (
+              <span className="text-[10px] font-normal text-gray-500 block">
+                {summary.targetsHit}/{summary.targetsTotal} targets met
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div className="mt-3">
+          <div className="flex items-center justify-between text-xs text-gray-500 mb-2 px-1">
+            <span className="text-[11px]">
+              Comparing <b>{chartData.length}</b> metric{chartData.length === 1 ? '' : 's'}:
+            </span>
+            <div className="flex items-center gap-3 text-[11px]">
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-indigo-600 inline-block"></span>
+                <b>Committed Work</b>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block"></span>
+                <b>Done Work (Met/Exceeded)</b>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 inline-block"></span>
+                <b>Done Work (Shortfall)</b>
+              </span>
+            </div>
+          </div>
+
+          <ResponsiveContainer width="100%" height={Math.max(280, Math.min(420, chartData.length * 28 + 120))}>
+            <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: -10, bottom: 50 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis
+                dataKey="shortName"
+                tick={{ fontSize: 11, fill: '#475569' }}
+                interval={0}
+                angle={-25}
+                textAnchor="end"
+                height={60}
+              />
+              <YAxis tick={{ fontSize: 11, fill: '#64748b' }} allowDecimals={false} />
+              <Tooltip content={<WorkMetricTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: '10px' }} />
+              <Bar dataKey="planned" name="Committed Work (Plan)" fill="#6366f1" radius={[3, 3, 0, 0]} maxBarSize={36} />
+              <Bar dataKey="actual" name="Done Work (Delivered)" radius={[3, 3, 0, 0]} maxBarSize={36}>
+                {chartData.map((r, i) => {
+                  const fill = (r.planned > 0 && r.actual >= r.planned)
+                    ? '#10b981'
+                    : (r.actual === 0 && r.planned > 0)
+                      ? '#ef4444'
+                      : (r.actual < r.planned)
+                        ? '#f59e0b'
+                        : '#3b82f6';
+                  return <Cell key={i} fill={fill} />;
+                })}
+              </Bar>
+            </ComposedChart>
+          </ResponsiveContainer>
+          <p className="text-[11px] text-gray-400 text-center mt-1">
+            Blue bars = what was <b>Committed / Planned</b>. Colored bars = what was <b>Actually Done</b> (<span className="text-emerald-600 font-semibold">Green = Achieved</span>, <span className="text-amber-600 font-semibold">Amber = Partial</span>, <span className="text-rose-600 font-semibold">Red = Zero</span>).
+          </p>
+        </div>
+      )}
     </div>
   );
 }
