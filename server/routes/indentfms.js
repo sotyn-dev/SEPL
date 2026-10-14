@@ -34,8 +34,9 @@ router.post('/tracker/:indent_id/stage', requirePermission('indent_fms', 'edit')
   const db = getDb();
 
   const indentForGate = db.prepare('SELECT * FROM indents WHERE id=?').get(req.params.indent_id);
-  if (require('../lib/indentRaiserApproval').usesRaiserApproval(indentForGate)
-      && (indentForGate.l2_status !== 'approved' || indentForGate.approved_by !== indentForGate.created_by
+  const raiserLib = require('../lib/indentRaiserApproval');
+  if (raiserLib.usesRaiserApproval(indentForGate)
+      && (!raiserLib.isApprovedByRaiserOrAdmin(db, indentForGate)
         || ['indent_raised', 'approval_pending', 'approved'].includes(stage))) {
     return res.status(409).json({ error: 'Use Indent to Dispatch for this indent. Its review and raiser approval cannot be changed through the tracker.' });
   }

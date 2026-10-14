@@ -117,4 +117,19 @@ function invalidateReview(db, row, actorId) {
     rejected_admin_override=0, rejected_assigned_approver=NULL WHERE id=?`).run(row.id);
 }
 
-module.exports = { START_DATE, appliesOn, usesRaiserApproval, migrate, audit, validateAction, markCorrect, invalidateReview };
+function isApprovedByRaiserOrAdmin(db, indent) {
+  if (!indent || indent.status !== 'approved' || indent.l2_status !== 'approved') return false;
+  // 1. Approved by original raiser
+  if (indent.approved_by === indent.created_by || indent.l2_by === indent.created_by) return true;
+  // 2. Approved with admin override flag
+  if (Number(indent.approved_admin_override) === 1 || Number(indent.l2_admin_override) === 1) return true;
+  // 3. Approver has admin role in users table
+  const approverId = indent.approved_by || indent.l2_by;
+  if (approverId && db) {
+    const user = db.prepare('SELECT role FROM users WHERE id=?').get(approverId);
+    if (user?.role === 'admin') return true;
+  }
+  return false;
+}
+
+module.exports = { START_DATE, appliesOn, usesRaiserApproval, migrate, audit, validateAction, markCorrect, invalidateReview, isApprovedByRaiserOrAdmin };
