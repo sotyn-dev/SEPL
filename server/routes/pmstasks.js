@@ -169,26 +169,42 @@ router.post('/:id/followup-remarks', (req, res) => {
 // them. Title is derived from the first line of the description.
 router.post('/', (req, res) => {
   if (!can(req.user.id, 'create')) return res.status(403).json({ error: 'Not allowed to create PMS tasks' });
-  const { description, project_id, assigned_to, due_date, attachment_url } = req.body;
+  const { description, project_id, site_name, client_name, crm_name: customCrmName, assigned_to, due_date, attachment_url } = req.body;
   const desc = String(description || '').trim();
   const flowNumber = validatePmsFlowNumber(req.body.flow_number);
   if (!flowNumber) return res.status(400).json({ error: 'A valid Flow Number is required. Enter an existing ERP step, for example 1.1.' });
   if (!desc) return res.status(400).json({ error: 'Description is required' });
-  if (!project_id) return res.status(400).json({ error: 'Project is required' });
   if (!assigned_to) return res.status(400).json({ error: 'Assignee is required' });
 
   const db = getDb();
-  // Look up the project + its latest CRM in one go
-  const proj = db.prepare(`
-    SELECT bb.id, COALESCE(s.name, bb.project_name) AS project_name,
-      (SELECT po.crm_name FROM purchase_orders po
-         WHERE po.business_book_id = bb.id AND po.crm_name IS NOT NULL AND po.crm_name != ''
-         ORDER BY po.created_at DESC LIMIT 1) AS crm_name
-    FROM business_book bb
-    LEFT JOIN sites s ON s.business_book_id = bb.id
-    WHERE bb.id = ?
-  `).get(project_id);
-  if (!proj) return res.status(400).json({ error: 'Project not found' });
+  let finalProjectId = null;
+  let finalProjectName = '';
+  let finalCrmName = null;
+
+  if (project_id) {
+    // Look up the project + its latest CRM in one go
+    const proj = db.prepare(`
+      SELECT bb.id, COALESCE(s.name, bb.project_name) AS project_name,
+        (SELECT po.crm_name FROM purchase_orders po
+           WHERE po.business_book_id = bb.id AND po.crm_name IS NOT NULL AND po.crm_name != ''
+           ORDER BY po.created_at DESC LIMIT 1) AS crm_name
+      FROM business_book bb
+      LEFT JOIN sites s ON s.business_book_id = bb.id
+      WHERE bb.id = ?
+    `).get(project_id);
+    if (!proj) return res.status(400).json({ error: 'Project not found' });
+    finalProjectId = proj.id;
+    finalProjectName = proj.project_name;
+    finalCrmName = proj.crm_name;
+  } else if (site_name && String(site_name).trim()) {
+    finalProjectId = null;
+    const cleanSiteName = String(site_name).trim();
+    const cleanClient = client_name && String(client_name).trim() ? String(client_name).trim() : '';
+    finalProjectName = cleanClient ? `${cleanSiteName} (${cleanClient})` : cleanSiteName;
+    finalCrmName = customCrmName && String(customCrmName).trim() ? String(customCrmName).trim() : (req.user.name || null);
+  } else {
+    return res.status(400).json({ error: 'Project from Business Book or new site name is required' });
+  }
 
   const derivedTitle = desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'PMS Task';
   const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
@@ -196,12 +212,12 @@ router.post('/', (req, res) => {
     `INSERT INTO pms_tasks
        (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, attachment_url, flow_number)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null, attachment, flowNumber);
+  ).run(derivedTitle, desc, finalProjectId, finalProjectName, finalCrmName, req.user.id, assigned_to, due_date || null, attachment, flowNumber);
 
   try {
     const { notify } = require('../lib/push');
     notify(assigned_to, {
-      title: `📌 PMS — ${proj.project_name || 'Task'}`,
+      title: `📌 PMS — ${finalProjectName || 'Task'}`,
       body: derivedTitle + (due_date ? ` · due ${due_date}` : ''),
       url: '/pms-tasks',
       tag: `pms-${r.lastInsertRowid}`,
@@ -221,7 +237,7 @@ router.post('/', (req, res) => {
     });
   } catch {}
 
-  res.status(201).json({ id: r.lastInsertRowid, crm_name: proj.crm_name, project_name: proj.project_name });
+  res.status(201).json({ id: r.lastInsertRowid, crm_name: finalCrmName, project_name: finalProjectName });
 });
 
 // Edit a PMS task — admin or the original assigner only. Allowed in any
@@ -246,7 +262,7 @@ router.put('/:id', (req, res) => {
   if (assignedTo) { sets.push('assigned_to=?'); params.push(assignedTo); }
   if (dueDate !== undefined) { sets.push('due_date=?'); params.push(dueDate); }
 
-  // Optionally allow re-targeting the project (if business book changed)
+  // Optionally allow re-targeting or linking to the project (e.g. when site is confirmed in Business Book)
   if (b.project_id) {
     const proj = db.prepare(`
       SELECT bb.id, COALESCE(s.name, bb.project_name) AS project_name,
@@ -261,6 +277,9 @@ router.put('/:id', (req, res) => {
       sets.push('project_id=?', 'project_name_snapshot=?', 'crm_name=?');
       params.push(proj.id, proj.project_name, proj.crm_name);
     }
+  } else if (b.site_name && String(b.site_name).trim()) {
+    sets.push('project_name_snapshot=?');
+    params.push(String(b.site_name).trim());
   }
   if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
   params.push(req.params.id);

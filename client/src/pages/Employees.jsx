@@ -111,11 +111,11 @@ export default function Employees() {
   const exportCSV = () => {
     if (filtered.length === 0) return toast.error('No data');
     const headers = canSeeSalary
-      ? ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Salary', 'Status']
-      : ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Status'];
+      ? ['Name', 'Phone', 'Email', 'Personal Email', 'Designation', 'Department', 'Join Date', 'Salary', 'Status']
+      : ['Name', 'Phone', 'Email', 'Personal Email', 'Designation', 'Department', 'Join Date', 'Status'];
     const rows = filtered.map(e => canSeeSalary
-      ? [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.salary, e.status]
-      : [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.status]);
+      ? [e.name, e.phone, e.email, e.personal_email || '', e.designation, e.department, e.join_date, e.salary, e.status]
+      : [e.name, e.phone, e.email, e.personal_email || '', e.designation, e.department, e.join_date, e.status]);
     headers.push('Staff Type');
     rows.forEach((row, i) => row.push(staffTypeLabel(filtered[i].staff_type)));
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -200,7 +200,7 @@ export default function Employees() {
   };
 
   const filtered = employees.filter(e =>
-    matchesStaffType(e.staff_type, staffType) && (!search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase())))
+    matchesStaffType(e.staff_type, staffType) && (!search || [e.name, e.phone, e.email, e.personal_email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase())))
   );
   const pager = usePagination(filtered, { resetKey: [search, staffType] });
 
@@ -261,7 +261,7 @@ export default function Employees() {
           {/* Table */}
           <div className="card p-0 hidden md:block table-responsive"><NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head w-full min-w-[900px]">
             <thead><tr>
-              <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
+              <th>Name</th><th>Phone</th><th>Email</th><th>Personal Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
               <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
               {canSeeSalary && <th>Salary</th>}
               <th>Status</th><th>Actions</th>
@@ -269,7 +269,16 @@ export default function Employees() {
             <tbody>
               {pager.pageItems.map(e => (
                 <tr key={e.id}>
-                  <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
+                  <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email || <span className="text-gray-400 text-xs italic">—</span>}</td>
+                  <td>
+                    {e.personal_email ? (
+                      <a href={`mailto:${e.personal_email}`} className="text-indigo-600 hover:underline font-medium text-xs flex items-center gap-1" title={e.personal_email}>
+                        {e.personal_email}
+                      </a>
+                    ) : (
+                      <span className="text-gray-400 text-xs italic">Not set</span>
+                    )}
+                  </td>
                   <td>{e.designation}</td><td>{e.department}<div className="text-xs text-gray-500">{staffTypeLabel(e.staff_type)}</div></td><td>{e.join_date}</td>
                   <td>
                     {e.linked_user_name
@@ -290,7 +299,7 @@ export default function Employees() {
                   </div></td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 11 : 10} className="text-center py-8 text-gray-400">No employees found</td></tr>}
             </tbody>
           </NumberedTable></div>
 
@@ -322,6 +331,12 @@ export default function Employees() {
                     <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
                       <div className="text-[9px] uppercase text-gray-400">Email</div>
                       <div className="font-semibold truncate">✉ {e.email}</div>
+                    </a>
+                  )}
+                  {e.personal_email && (
+                    <a href={`mailto:${e.personal_email}`} className="text-indigo-600 hover:underline truncate" title={e.personal_email}>
+                      <div className="text-[9px] uppercase text-gray-400">Personal Email</div>
+                      <div className="font-semibold truncate">✉ {e.personal_email}</div>
                     </a>
                   )}
                   {e.join_date && (

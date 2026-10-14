@@ -1989,15 +1989,40 @@ router.get('/commitments', (req, res) => {
       const w = shiftWeek(weekStart, -7 * i);
       const commit = commitmentRow(db, userId, w);
       let actualPct = null;
+      let totalPlanned = 0;
+      let totalActual = 0;
+      let kpisSummary = [];
       try {
         const sc = computeScorecard(db, userId, w);
         // Only weeks with a template have a real score; else leave the bar blank.
-        if (sc && sc.template) actualPct = Math.round((sc.score - 100) * 100) / 100;
+        if (sc && sc.template) {
+          actualPct = Math.round((sc.score - 100) * 100) / 100;
+          let sumP = 0, sumA = 0;
+          for (const k of (sc.kpis || [])) {
+            const p = Number(k.planned || 0);
+            const a = Number(k.actual || 0);
+            sumP += p;
+            sumA += a;
+            kpisSummary.push({
+              metric_name: k.metric_name,
+              planned: p,
+              actual: a,
+              group_name: k.group_name || 'Other',
+            });
+          }
+          totalPlanned = Math.round(sumP * 10) / 10;
+          totalActual = Math.round(sumA * 10) / 10;
+        }
       } catch (_) { /* leave null */ }
       series.push({
         week_start: w,
         committed_pct: commit ? commit.committed_pct : null,
         actual_pct: actualPct,
+        total_planned: totalPlanned,
+        total_actual: totalActual,
+        gap: Math.round((totalActual - totalPlanned) * 10) / 10,
+        work_achievement_pct: totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : (totalActual > 0 ? 100 : null),
+        kpis: kpisSummary,
       });
     }
 

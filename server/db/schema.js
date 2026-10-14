@@ -1693,6 +1693,8 @@ function initializeDatabase() {
       deductions REAL DEFAULT 0,
       net_pay REAL DEFAULT 0,
       breakdown_json TEXT,                            -- per-day breakdown for slip
+      email_sent_at DATETIME,                         -- timestamp when salary slip was mailed
+      email_sent_to TEXT,                             -- email address slip was mailed to
       status TEXT DEFAULT 'draft' CHECK(status IN ('draft','finalised','disbursed')),
       finalised_by INTEGER REFERENCES users(id),
       finalised_at DATETIME,
@@ -4233,6 +4235,9 @@ function initializeDatabase() {
     // unaffected — but real since the fields were added (9 June 2026).
     ['payroll_runs', 'present_days REAL DEFAULT 0'],
     ['payroll_runs', 'sunday_worked_pay REAL DEFAULT 0'],
+    ['payroll_runs', 'email_sent_at DATETIME'],
+    ['payroll_runs', 'email_sent_to TEXT'],
+    ['employees', 'personal_email TEXT'],
     // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
     // the existing sales_bills table so legacy delivery-note rows (bill_type
     // NULL) are untouched; the new module only handles bill_type 1-4.

@@ -96,6 +96,21 @@
       "quickCreate": true
     },
     {
+      "key": "personal_email",
+      "label": "Personal Email (for salary slip)",
+      "type": "email",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": true
+    },
+    {
       "key": "date_of_birth",
       "label": "Date of birth",
       "type": "date",

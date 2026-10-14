@@ -17,6 +17,8 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { rosterCutoffs } = require('../lib/roster');
+const { sendEmail, isConfigured } = require('../lib/email');
+const { rupeesInWords } = require('../lib/numberToWords');
 
 router.use(authMiddleware);
 
@@ -91,6 +93,313 @@ function timeToMinutes(t) {
   }
   const [h, m] = t.split(':').map(Number);
   return h * 60 + (m || 0);
+}
+
+// ─── Salary Slip Email Template Generator (TSK-0924) ─────────────────────────
+const COMPANY_INFO = {
+  name: 'Secured Engineers Private Limited',
+  brandName: 'SECURED ENGINEERS PVT. LTD.',
+  headOffice: 'B.K Towers, Janta Nagar, Gill Road, Ludhiana, (PB)(141003)',
+  corpOffice: '58/A/1, First Floor, Kalu Sarai, New Delhi - 110016',
+  email: 'Sales@securedengineers.com',
+  website: 'www.securedengineers.com',
+};
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function fmt(n) {
+  return Math.round(n || 0).toLocaleString('en-IN');
+}
+
+function formatDate(d) {
+  if (!d) return '-';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  return `${String(dt.getDate()).padStart(2, '0')}-${String(dt.getMonth() + 1).padStart(2, '0')}-${dt.getFullYear()}`;
+}
+
+function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
+  const [yrStr, moStr] = month.split('-');
+  const moNum = parseInt(moStr, 10);
+  const payPeriod = `${MONTH_NAMES[moNum - 1]} ${yrStr}`;
+
+  const empName = data.employee_name || emp?.name || 'Employee';
+  const empId = data.employee_id || emp?.id || '-';
+  const designation = data.designation || emp?.designation || '-';
+  const department = data.department || emp?.department || '-';
+  const joinDate = formatDate(data.join_date || emp?.join_date);
+
+  const basicPay = Number(data.basic_pay || 0);
+  const conveyance = Number(data.conveyance || 0);
+  const hra = Number(data.hra || 0);
+  const adhoc = Number(data.adhoc || 0);
+  const misc = Number(data.misc || 0);
+  const otPay = Number(data.ot_pay || 0);
+  const otHours = Number(data.ot_hours || 0);
+  const food = Number(data.food || 0);
+
+  const latePenalty = Number(data.late_penalty || 0);
+  const advance = Number(data.advance || 0);
+
+  const totalEarnings = Number(data.total_earnings != null ? (data.total_earnings + otPay + food) : (basicPay + conveyance + hra + adhoc + misc + otPay + food));
+  const totalDeductions = Number(data.total_deductions != null ? data.total_deductions : (latePenalty + advance));
+  const netPay = Number(data.net_pay != null ? data.net_pay : (totalEarnings - totalDeductions));
+  const words = rupeesInWords(netPay);
+
+  const attParts = [
+    `Worked ${data.paid_days || 0} of ${data.working_days || 0} days`
+  ];
+  if (data.half_days) attParts.push(`${data.half_days} half day(s)`);
+  if (data.absent_days) attParts.push(`${data.absent_days} absent day(s)`);
+  if (data.late_marks) attParts.push(`${data.late_marks} late mark(s)`);
+  if (data.paid_leaves) attParts.push(`${data.paid_leaves} paid leave(s)`);
+  if (data.sunday_worked) attParts.push(`${data.sunday_worked} Sunday(s) worked (+${data.sunday_worked_pay || 0} day pay)`);
+  const attSummary = attParts.join(' • ');
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Salary Slip - ${payPeriod}</title>
+</head>
+<body style="margin:0;padding:24px 12px;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width:680px;background:#ffffff;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,0.06);border-collapse:collapse;">
+          ${isTest ? `
+          <tr>
+            <td style="background-color:#fef3c7;border-bottom:2px solid #f59e0b;padding:12px 20px;text-align:center;">
+              <span style="font-weight:bold;color:#b45309;font-size:13px;letter-spacing:0.5px;">
+                ⚠️ THIS IS A TEST / PREVIEW SALARY SLIP EMAIL. NO REAL PAYOUT MODIFICATIONS HAVE OCCURRED.
+              </span>
+            </td>
+          </tr>` : ''}
+
+          <!-- Header -->
+          <tr>
+            <td style="padding:22px 28px 18px;border-bottom:3px solid #c00000;background:linear-gradient(to right, #ffffff 60%, #fff5f5);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                <tr>
+                  <td width="72" valign="middle" style="padding-right:16px;">
+                    <div style="width:60px;height:52px;background:#ffffff;border:2px solid #c00000;border-radius:6px;text-align:center;line-height:50px;font-weight:900;color:#c00000;font-size:22px;letter-spacing:1px;font-family:sans-serif;">
+                      SE
+                    </div>
+                  </td>
+                  <td valign="middle">
+                    <h1 style="margin:0;font-size:20px;font-weight:800;color:#c00000;letter-spacing:0.5px;line-height:1.2;">
+                      ${COMPANY_INFO.brandName}
+                    </h1>
+                    <p style="margin:4px 0 0;font-size:11px;color:#64748b;line-height:1.4;">
+                      <strong>Head Office:</strong> ${COMPANY_INFO.headOffice}<br>
+                      <strong>Corporate Office:</strong> ${COMPANY_INFO.corpOffice}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Slip Title Banner -->
+          <tr>
+            <td align="center" style="background:#f8fafc;padding:14px 20px;border-bottom:1px solid #e2e8f0;">
+              <h2 style="margin:0;font-size:16px;color:#0f172a;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">
+                Payslip
+              </h2>
+              <div style="margin-top:2px;font-size:13px;color:#475569;font-weight:600;">
+                Pay Period: <span style="color:#c00000;">${payPeriod}</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Employee Details -->
+          <tr>
+            <td style="padding:18px 28px 12px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12.5px;">
+                <tr>
+                  <td width="50%" valign="top" style="padding-right:12px;">
+                    <table width="100%" cellpadding="3" cellspacing="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td width="120" style="color:#64748b;font-weight:600;">Employee Name:</td>
+                        <td style="color:#0f172a;font-weight:700;">${empName}</td>
+                      </tr>
+                      <tr>
+                        <td width="120" style="color:#64748b;font-weight:600;">Employee ID:</td>
+                        <td style="color:#0f172a;">${empId}</td>
+                      </tr>
+                      <tr>
+                        <td width="120" style="color:#64748b;font-weight:600;">Date of Joining:</td>
+                        <td style="color:#0f172a;">${joinDate}</td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td width="50%" valign="top" style="padding-left:12px;">
+                    <table width="100%" cellpadding="3" cellspacing="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td width="110" style="color:#64748b;font-weight:600;">Department:</td>
+                        <td style="color:#0f172a;">${department}</td>
+                      </tr>
+                      <tr>
+                        <td width="110" style="color:#64748b;font-weight:600;">Designation:</td>
+                        <td style="color:#0f172a;">${designation}</td>
+                      </tr>
+                      <tr>
+                        <td width="110" style="color:#64748b;font-weight:600;">Worked Days:</td>
+                        <td style="color:#0f172a;font-weight:700;">${data.paid_days || 0} <span style="color:#64748b;font-weight:normal;">(out of ${data.working_days || 0})</span></td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Earnings & Deductions Table -->
+          <tr>
+            <td style="padding:10px 28px 20px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #cbd5e1;font-size:12.5px;">
+                <thead>
+                  <tr style="background:#f1f5f9;color:#334155;border-bottom:2px solid #cbd5e1;">
+                    <th width="32%" align="left" style="padding:8px 12px;font-weight:700;border-right:1px solid #cbd5e1;">Earnings</th>
+                    <th width="18%" align="right" style="padding:8px 12px;font-weight:700;border-right:1px solid #cbd5e1;">Amount (₹)</th>
+                    <th width="32%" align="left" style="padding:8px 12px;font-weight:700;border-right:1px solid #cbd5e1;">Deductions</th>
+                    <th width="18%" align="right" style="padding:8px 12px;font-weight:700;">Amount (₹)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Basic Pay</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(basicPay)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">Late Penalty</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:#dc2626;">${latePenalty > 0 ? fmt(latePenalty) : '0'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Conveyance Allowance</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(conveyance)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">Advance Salary</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:#dc2626;">${advance > 0 ? fmt(advance) : '0'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">House Rent Allowance (HRA)</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(hra)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Adhoc Allowance</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(adhoc)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
+                  </tr>
+                  ${misc > 0 ? `
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Miscellaneous Allowance</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(misc)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
+                  </tr>` : ''}
+                  ${otPay > 0 ? `
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Overtime Pay (${otHours}h)</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(otPay)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
+                  </tr>` : ''}
+                  ${food > 0 ? `
+                  <tr>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Food Allowance</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(food)}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
+                  </tr>` : ''}
+                  <!-- Subtotals -->
+                  <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #cbd5e1;">
+                    <td style="padding:8px 12px;border:1px solid #cbd5e1;border-right:1px solid #cbd5e1;">Total Earnings</td>
+                    <td align="right" style="padding:8px 12px;border:1px solid #cbd5e1;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">₹${fmt(totalEarnings)}</td>
+                    <td style="padding:8px 12px;border:1px solid #cbd5e1;border-right:1px solid #cbd5e1;">Total Deductions</td>
+                    <td align="right" style="padding:8px 12px;border:1px solid #cbd5e1;font-variant-numeric:tabular-nums;color:#dc2626;">₹${fmt(totalDeductions)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Net Pay Box -->
+          <tr>
+            <td style="padding:0 28px 16px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4;border:1px solid #86efac;border-radius:6px;border-collapse:collapse;">
+                <tr>
+                  <td valign="middle" style="padding:12px 18px;">
+                    <span style="font-size:14px;color:#166534;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Net Payable Amount:</span>
+                  </td>
+                  <td align="right" valign="middle" style="padding:12px 18px;">
+                    <span style="font-size:22px;color:#15803d;font-weight:800;letter-spacing:0.5px;">₹${fmt(netPay)}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Amount In Words -->
+          <tr>
+            <td style="padding:0 28px 14px;">
+              <div style="background:#f8fafc;border-left:3px solid #c00000;padding:10px 14px;font-size:12.5px;color:#334155;">
+                <strong style="color:#0f172a;">Amount in Words:</strong> ${words}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Attendance Breakdown -->
+          <tr>
+            <td style="padding:0 28px 20px;">
+              <div style="font-size:11.5px;color:#64748b;background:#fafafa;border:1px dashed #cbd5e1;border-radius:4px;padding:8px 12px;line-height:1.5;">
+                <strong style="color:#334155;">Attendance Summary:</strong> ${attSummary}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:16px 28px;text-align:center;font-size:11px;color:#64748b;line-height:1.6;">
+              <div>This is a system-generated salary slip sent from <strong>${COMPANY_INFO.name}</strong>.</div>
+              <div>Email: <a href="mailto:${COMPANY_INFO.email}" style="color:#c00000;text-decoration:none;">${COMPANY_INFO.email}</a> • Website: <a href="https://${COMPANY_INFO.website}" style="color:#c00000;text-decoration:none;">${COMPANY_INFO.website}</a></div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const text = `${COMPANY_INFO.brandName}
+PAYSLIP FOR ${payPeriod}
+--------------------------------------------------
+Employee: ${empName} (ID: ${empId})
+Department: ${department} | Designation: ${designation}
+Worked Days: ${data.paid_days || 0} / ${data.working_days || 0} days
+
+EARNINGS:
+- Basic Pay: ₹${fmt(basicPay)}
+- Conveyance Allowance: ₹${fmt(conveyance)}
+- House Rent Allowance: ₹${fmt(hra)}
+- Adhoc Allowance: ₹${fmt(adhoc)}
+${misc > 0 ? `- Miscellaneous Allowance: ₹${fmt(misc)}\n` : ''}${otPay > 0 ? `- Overtime Pay (${otHours}h): ₹${fmt(otPay)}\n` : ''}${food > 0 ? `- Food Allowance: ₹${fmt(food)}\n` : ''}Total Earnings: ₹${fmt(totalEarnings)}
+
+DEDUCTIONS:
+${latePenalty > 0 ? `- Late Penalty: ₹${fmt(latePenalty)}\n` : ''}${advance > 0 ? `- Advance Salary: ₹${fmt(advance)}\n` : ''}Total Deductions: ₹${fmt(totalDeductions)}
+
+NET PAYABLE: ₹${fmt(netPay)}
+IN WORDS: ${words}
+
+Attendance Summary: ${attSummary}
+--------------------------------------------------
+${COMPANY_INFO.name}
+Head Office: ${COMPANY_INFO.headOffice}
+Email: ${COMPANY_INFO.email} | Website: ${COMPANY_INFO.website}
+`;
+
+  return { html, text, payPeriod };
 }
 
 // ---------- routes ----------
@@ -788,7 +1097,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster,
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster, email, personal_email,
       (SELECT staff_type FROM users WHERE id=employees.user_id) AS staff_type
       FROM employees WHERE status='active' AND salary > 0`).all();
     // Active employees with NO salary set are silently excluded from payroll —
@@ -811,9 +1120,31 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
         // payroll_runs has no department column, so a finalised month's
         // snapshot rows come back with a blank Dept (table + Export Excel).
         // Overlay it from the live employee row already in hand.
-        if (snap) return { ...snap, staff_type: emp.staff_type, department: emp.department, designation: emp.designation, sunday_count: snap.sundays, locked: true };
+        if (snap) return {
+          ...snap,
+          staff_type: emp.staff_type,
+          department: emp.department,
+          designation: emp.designation,
+          sunday_count: snap.sundays,
+          locked: true,
+          email: emp.personal_email || emp.email || '',
+          personal_email: emp.personal_email || '',
+          work_email: emp.email || '',
+          email_sent_at: snap.email_sent_at,
+          email_sent_to: snap.email_sent_to,
+        };
       }
-      return { ...calculateForEmployee(db, settings, emp, month), staff_type: emp.staff_type };
+      return {
+        ...calculateForEmployee(db, settings, emp, month),
+        staff_type: emp.staff_type,
+        department: emp.department,
+        designation: emp.designation,
+        email: emp.personal_email || emp.email || '',
+        personal_email: emp.personal_email || '',
+        work_email: emp.email || '',
+        email_sent_at: null,
+        email_sent_to: null,
+      };
     });
 
     res.json({ month, settings, employees: out, excluded_no_salary: excludedNoSalary });
@@ -854,12 +1185,26 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
           ...snap,
           sunday_count: snap.sundays,
           locked: true,
+          email: emp.personal_email || emp.email || '',
+          personal_email: emp.personal_email || '',
+          work_email: emp.email || '',
+          email_sent_at: snap.email_sent_at,
+          email_sent_to: snap.email_sent_to,
           breakdown: (snapBreakdown && snapBreakdown.length > 0) ? snapBreakdown : live.breakdown,
         });
       }
     }
 
-    res.json({ month, settings, ...live });
+    res.json({
+      month,
+      settings,
+      ...live,
+      email: emp.personal_email || emp.email || '',
+      personal_email: emp.personal_email || '',
+      work_email: emp.email || '',
+      email_sent_at: null,
+      email_sent_to: null,
+    });
   } catch (err) {
     console.error('payroll detail error', err);
     res.status(500).json({ error: err.message });
@@ -1290,6 +1635,245 @@ router.delete('/holidays/:date', adminOnly, (req, res) => {
     logAuditEvent({ user: req.user, action: 'PAYROLL_HOLIDAY_REMOVE', entity_type: 'payroll', entity_label: date, method: 'DELETE', path: '/api/payroll/holidays', status_code: 200 });
     res.json({ message: `Holiday removed — ${date}` });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Salary Slip Email Endpoints (TSK-0924) ──────────────────────────────────
+
+// GET email configuration status
+router.get('/email-status', requirePermission('payroll', 'view'), (req, res) => {
+  try {
+    res.json({ configured: isConfigured() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send single salary slip via email
+router.post('/send-slip/:employee_id', requirePermission('payroll', 'edit'), async (req, res) => {
+  try {
+    const { month, email_override } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const db = getDb();
+    ensureHolidaysTable(db);
+    const settings = getSettings(db);
+    const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    const targetEmail = (email_override || emp.personal_email || emp.email || '').trim();
+    if (!targetEmail || !targetEmail.includes('@')) {
+      return res.status(400).json({ error: `No valid email address found for ${emp.name}. Please enter an email address.` });
+    }
+
+    // Prefer frozen finalised snapshot if finalised; else live calculation
+    const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    let slipData;
+    if (finalised) {
+      const snap = db.prepare('SELECT * FROM payroll_runs WHERE month=? AND employee_id=?').get(month, emp.id);
+      if (snap) {
+        const live = calculateForEmployee(db, settings, emp, month);
+        slipData = { ...live, ...snap, settings };
+      } else {
+        slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+      }
+    } else {
+      slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+    }
+
+    const { html, text, payPeriod } = generateSalarySlipEmailContent(slipData, month, emp);
+    const mailResult = await sendEmail({
+      to: targetEmail,
+      subject: `Salary Slip for ${payPeriod} — ${emp.name} (Secured Engineers)`,
+      html,
+      text,
+    });
+
+    if (mailResult.skipped) {
+      return res.status(422).json({
+        success: false,
+        skipped: true,
+        reason: mailResult.reason,
+        error: `Email sending skipped: ${mailResult.reason}. Please check Admin -> Email Settings.`,
+      });
+    }
+
+    // Persist email delivery timestamp in payroll_runs if finalised snapshot exists
+    if (finalised) {
+      db.prepare(`UPDATE payroll_runs SET email_sent_at=CURRENT_TIMESTAMP, email_sent_to=? WHERE month=? AND employee_id=?`)
+        .run(targetEmail, emp.id);
+    }
+
+    logAuditEvent({
+      user: req.user,
+      action: 'PAYROLL_SLIP_EMAIL_SENT',
+      entity_type: 'payroll',
+      entity_label: `${emp.name} (${month})`,
+      method: 'POST',
+      path: `/api/payroll/send-slip/${emp.id}`,
+      status_code: 200,
+    });
+
+    return res.json({
+      success: true,
+      message: `Salary slip sent successfully to ${targetEmail}`,
+      email_sent_to: targetEmail,
+      email_sent_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error sending salary slip email:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send bulk salary slips via email
+router.post('/send-bulk-slips', requirePermission('payroll', 'edit'), async (req, res) => {
+  try {
+    const { month, recipients } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({ error: 'recipients list is required' });
+    }
+
+    const db = getDb();
+    ensureHolidaysTable(db);
+    const settings = getSettings(db);
+    const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+
+    const results = [];
+    let sentCount = 0;
+    let failedCount = 0;
+    let skippedCount = 0;
+
+    for (const item of recipients) {
+      const empId = item.employee_id;
+      const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(empId);
+      if (!emp) {
+        results.push({ employee_id: empId, name: 'Unknown', status: 'failed', error: 'Employee not found' });
+        failedCount++;
+        continue;
+      }
+
+      const targetEmail = (item.email || emp.personal_email || emp.email || '').trim();
+      if (!targetEmail || !targetEmail.includes('@')) {
+        results.push({ employee_id: emp.id, name: emp.name, status: 'failed', error: 'No valid email' });
+        failedCount++;
+        continue;
+      }
+
+      let slipData;
+      if (finalised) {
+        const snap = db.prepare('SELECT * FROM payroll_runs WHERE month=? AND employee_id=?').get(month, emp.id);
+        if (snap) {
+          const live = calculateForEmployee(db, settings, emp, month);
+          slipData = { ...live, ...snap, settings };
+        } else {
+          slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+        }
+      } else {
+        slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+      }
+
+      const { html, text, payPeriod } = generateSalarySlipEmailContent(slipData, month, emp);
+
+      try {
+        const mailResult = await sendEmail({
+          to: targetEmail,
+          subject: `Salary Slip for ${payPeriod} — ${emp.name} (Secured Engineers)`,
+          html,
+          text,
+        });
+
+        if (mailResult.skipped) {
+          results.push({ employee_id: emp.id, name: emp.name, email: targetEmail, status: 'skipped', reason: mailResult.reason });
+          skippedCount++;
+        } else {
+          if (finalised) {
+            db.prepare(`UPDATE payroll_runs SET email_sent_at=CURRENT_TIMESTAMP, email_sent_to=? WHERE month=? AND employee_id=?`)
+              .run(targetEmail, emp.id);
+          }
+          results.push({ employee_id: emp.id, name: emp.name, email: targetEmail, status: 'sent' });
+          sentCount++;
+        }
+      } catch (sendErr) {
+        results.push({ employee_id: emp.id, name: emp.name, email: targetEmail, status: 'failed', error: sendErr.message });
+        failedCount++;
+      }
+    }
+
+    logAuditEvent({
+      user: req.user,
+      action: 'PAYROLL_BULK_SLIP_EMAIL',
+      entity_type: 'payroll',
+      entity_label: `${month} (${sentCount} sent, ${failedCount} failed, ${skippedCount} skipped)`,
+      method: 'POST',
+      path: '/api/payroll/send-bulk-slips',
+      status_code: 200,
+    });
+
+    res.json({
+      message: `Processed ${recipients.length} salary slips: ${sentCount} sent, ${skippedCount} skipped, ${failedCount} failed`,
+      sentCount,
+      skippedCount,
+      failedCount,
+      results,
+    });
+  } catch (err) {
+    console.error('Error in send-bulk-slips:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send test / preview salary slip email
+router.post('/send-test-slip', requirePermission('payroll', 'edit'), async (req, res) => {
+  try {
+    const { month, test_email, employee_id } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const targetEmail = (test_email || '').trim();
+    if (!targetEmail || !targetEmail.includes('@')) {
+      return res.status(400).json({ error: 'Valid test_email is required' });
+    }
+
+    const db = getDb();
+    ensureHolidaysTable(db);
+    const settings = getSettings(db);
+
+    let emp;
+    if (employee_id) {
+      emp = db.prepare('SELECT * FROM employees WHERE id=?').get(employee_id);
+    }
+    if (!emp) {
+      emp = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0 LIMIT 1`).get();
+    }
+    if (!emp) {
+      return res.status(404).json({ error: 'No active employee with salary found to generate sample slip' });
+    }
+
+    const slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+    const { html, text, payPeriod } = generateSalarySlipEmailContent(slipData, month, emp, true);
+
+    const mailResult = await sendEmail({
+      to: targetEmail,
+      subject: `[TEST SAMPLE] Salary Slip for ${payPeriod} — ${emp.name} (Secured Engineers)`,
+      html,
+      text,
+    });
+
+    if (mailResult.skipped) {
+      return res.status(422).json({
+        success: false,
+        skipped: true,
+        reason: mailResult.reason,
+        error: `Email skipped: ${mailResult.reason}. Please configure SMTP in Admin -> Email Settings.`,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Test salary slip email sent to ${targetEmail} (Sample Employee: ${emp.name})`,
+    });
+  } catch (err) {
+    console.error('Error in send-test-slip:', err);
     res.status(500).json({ error: err.message });
   }
 });

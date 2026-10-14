@@ -34,6 +34,7 @@ export function validateForm(form, keys, quick) {
   if (quick && !present(form.phone) && !present(form.email)) errors.phone = 'Enter a phone number or email address';
   for (const key of ['phone','emergency_contact_phone']) error(key, present(form[key]) && !/^(?:91)?[6-9]\d{9}$/.test(String(form[key]).replace(/\D/g, '')), 'Enter a 10-digit Indian mobile number, optionally with +91');
   error('email', present(form.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email), 'Enter a valid email address');
+  error('personal_email', present(form.personal_email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.personal_email), 'Enter a valid personal email address');
   for (const key of ['permanent_pin','current_pin']) error(key, present(form[key]) && !/^[1-9]\d{5}$/.test(form[key]), 'PIN must be six digits and cannot start with zero');
   error('pan_number', present(form.pan_number) && !/^[A-Z]{5}\d{4}[A-Z]$/.test(form.pan_number), 'PAN must be five letters, four digits and one letter');
   error('aadhaar_last4', present(form.aadhaar_last4) && !/^\d{4}$/.test(form.aadhaar_last4), 'Enter the last four digits only');
