@@ -23,11 +23,20 @@ function readFields(db, body) {
   const site = sites(db).find(s => s.value === normalize(body.site));
   if (!site) return { error: 'Site Name is required' };
   const indentNumber = typeof body.indent_number === 'string' ? body.indent_number.trim() : '';
-  if (!indentNumber || indentNumber.length > 100) return { error: 'Indent No. is required (maximum 100 characters)' };
+  if (!indentNumber || indentNumber === '0' || indentNumber === '00' || indentNumber.length > 100) {
+    return { error: 'A valid Indent No. is required (cannot be 0 or empty)' };
+  }
   const bill = typeof body.bill_number === 'string' ? body.bill_number.trim() : '';
   if (!bill || bill.length > 100) return { error: 'Bill Number is required (maximum 100 characters)' };
-  const indent = indentsForSite(db, site.value).find(i => normalize(i.indent_number) === normalize(indentNumber));
-  return { site, indentNumber, bill, indentId: indent ? indent.id : null };
+  const siteIndent = indentsForSite(db, site.value).find(i => normalize(i.indent_number) === normalize(indentNumber));
+  let indent = siteIndent;
+  if (!indent) {
+    indent = db.prepare('SELECT id, indent_number FROM indents WHERE LOWER(TRIM(indent_number))=?').get(normalize(indentNumber));
+  }
+  if (!indent) {
+    return { error: `Indent "${indentNumber}" was not found. Please pick an existing indent or raise it first.` };
+  }
+  return { site, indentNumber, bill, indentId: siteIndent ? siteIndent.id : null };
 }
 
 // Tell Lovely there is a receiving waiting (never the person who just saved it).
@@ -47,9 +56,11 @@ function notifyApprovers(db, row, actor, verb) {
 
 router.get('/sites', requirePermission('procurement', 'view'), (req, res) => res.json(sites(getDb())));
 router.get('/indents', requirePermission('procurement', 'view'), (req, res) => {
-  const site = sites(getDb()).find(s => s.value === normalize(req.query.site));
-  if (!site) return res.status(400).json({ error: 'Select a valid Business Book site' });
-  res.json(indentsForSite(getDb(), site.value));
+  const db = getDb();
+  const rawSite = req.query.site;
+  if (!rawSite) return res.json(indentsForSite(db, ''));
+  const site = sites(db).find(s => s.value === normalize(rawSite));
+  res.json(indentsForSite(db, site ? site.value : rawSite));
 });
 
 router.get('/', requirePermission('procurement', 'view'), (req, res) => {

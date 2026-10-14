@@ -1,5 +1,5 @@
 import NumberedTable from '../components/NumberedTable';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
@@ -38,6 +38,9 @@ export default function DispatchReceiving() {
   const [busyId, setBusyId] = useState(null);
   const [form, setForm] = useState(BLANK);
   const [search, setSearch] = useState('');
+  const [siteIndents, setSiteIndents] = useState([]);
+  const [indentsLoading, setIndentsLoading] = useState(false);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -47,13 +50,39 @@ export default function DispatchReceiving() {
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
+
+  const loadIndents = useCallback(async (siteValue) => {
+    if (!siteValue) {
+      setSiteIndents([]);
+      return;
+    }
+    setIndentsLoading(true);
+    try {
+      const res = await api.get(`/dispatch-receiving/indents?site=${encodeURIComponent(siteValue)}`);
+      setSiteIndents(res.data || []);
+    } catch (err) {
+      setSiteIndents([]);
+    } finally {
+      setIndentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open && form.site) {
+      loadIndents(form.site);
+    } else if (open && !form.site) {
+      setSiteIndents([]);
+    }
+  }, [open, form.site, loadIndents]);
+
   const filtered = rows.filter(r => `${r.site_name} ${r.indent_number} ${r.bill_number} ${r.status}`.toLowerCase().includes(search.trim().toLowerCase()));
   const pagination = usePagination(filtered, { resetKey: [search] });
 
-  const openAdd = () => { setEditing(null); setForm(BLANK); setOpen(true); };
+  const openAdd = () => { setEditing(null); setForm(BLANK); setSiteIndents([]); setOpen(true); };
   const openEdit = (r) => {
     setEditing(r);
-    setForm({ site: siteKey(r.site_name), indent_number: r.indent_number || '', bill_number: r.bill_number || '', file: null });
+    const rIndent = (r.indent_number === '0' || !r.indent_number) ? '' : r.indent_number;
+    setForm({ site: siteKey(r.site_name), indent_number: rIndent, bill_number: r.bill_number || '', file: null });
     setOpen(true);
   };
   // A saved site that is no longer in the list still shows while editing.
@@ -61,11 +90,23 @@ export default function DispatchReceiving() {
     ? [...sites, { value: siteKey(editing.site_name), label: editing.site_name }]
     : sites;
 
+  const indentOptions = (() => {
+    const list = siteIndents.map(i => ({ value: i.indent_number, label: i.indent_number }));
+    if (form.indent_number && form.indent_number !== '0' && !list.some(o => o.value === form.indent_number)) {
+      list.unshift({ value: form.indent_number, label: form.indent_number });
+    }
+    return list;
+  })();
+
   const save = async e => {
     e.preventDefault();
     if (saving) return;
-    if (!form.site || !form.indent_number.trim() || !form.bill_number.trim() || (!editing && !form.file)) {
-      return toast.error(editing ? 'Site, Indent No. and Bill Number are required' : 'All four fields are required');
+    const trimmedIndent = String(form.indent_number || '').trim();
+    if (!form.site || !trimmedIndent || trimmedIndent === '0' || !form.bill_number.trim() || (!editing && !form.file)) {
+      if (trimmedIndent === '0') {
+        return toast.error('Please select a valid Indent No. (cannot be 0)');
+      }
+      return toast.error(editing ? 'Site, valid Indent No. and Bill Number are required' : 'All four fields with a valid Indent No. are required');
     }
     setSaving(true);
     try {
@@ -76,7 +117,7 @@ export default function DispatchReceiving() {
         const upload = await api.post('/upload', data, { headers: { 'Content-Type': 'multipart/form-data' } });
         receivingUrl = upload.data.url;
       }
-      const body = { site: form.site, indent_number: form.indent_number.trim(), bill_number: form.bill_number.trim(), receiving_url: receivingUrl };
+      const body = { site: form.site, indent_number: trimmedIndent, bill_number: form.bill_number.trim(), receiving_url: receivingUrl };
       const res = editing ? await api.put(`/dispatch-receiving/${editing.id}`, body) : await api.post('/dispatch-receiving', body);
       toast.success(res.data?.message || 'Dispatch receiving saved'); setOpen(false); await load();
     } catch (err) { toast.error(err.response?.data?.error || 'Could not save dispatch receiving'); }
@@ -150,9 +191,55 @@ export default function DispatchReceiving() {
       <form onSubmit={save} className="space-y-4">
         {editing && editing.status !== 'pending' && <p className="text-xs rounded-md bg-amber-50 border border-amber-200 text-amber-800 p-2">This receiving is {editing.status}. Saving changes sends it back to Lovely for approval.</p>}
         <fieldset disabled={saving} className="space-y-4">
-          <div><label className="label">Site Name *</label><SearchableSelect options={siteOptions} value={form.site} placeholder="Select site…" onChange={site => setForm(f => ({ ...f, site: site?.value || '' }))} /></div>
-          {/* Typed by hand (mam 2026-09-10) — no dropdown */}
-          <div><label className="label" htmlFor="receiving-indent">Indent No. *</label><input id="receiving-indent" className="input" required maxLength={100} placeholder="Enter indent number" value={form.indent_number} onChange={e => setForm({ ...form, indent_number: e.target.value })} /></div>
+          <div>
+            <label className="label">Site Name *</label>
+            <SearchableSelect
+              options={siteOptions}
+              value={form.site}
+              placeholder="Select site…"
+              onChange={site => setForm(f => ({ ...f, site: site?.value || '', indent_number: '' }))}
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0" htmlFor="receiving-indent">Indent No. *</label>
+              <div className="flex items-center gap-2 text-xs">
+                {form.site && (
+                  <button
+                    type="button"
+                    onClick={() => loadIndents(form.site)}
+                    disabled={indentsLoading}
+                    title="Reload indents for this site"
+                    className="text-gray-500 hover:text-gray-700 flex items-center gap-1 font-medium disabled:opacity-50"
+                  >
+                    <span className={indentsLoading ? 'animate-spin' : ''}>🔄</span> Refresh
+                  </button>
+                )}
+                <a
+                  href="/procurement?tab=indents"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 hover:text-blue-800 font-medium hover:underline inline-flex items-center gap-0.5"
+                  title="Open Raise Indent in new tab"
+                >
+                  + Add Indent
+                </a>
+              </div>
+            </div>
+            <SearchableSelect
+              id="receiving-indent"
+              disabled={!form.site}
+              options={indentOptions}
+              value={form.indent_number}
+              placeholder={!form.site ? 'Select site first…' : indentsLoading ? 'Loading indents…' : indentOptions.length === 0 ? 'No indents found for this site (+ Add Indent)' : 'Search and select indent…'}
+              onChange={opt => setForm(f => ({ ...f, indent_number: opt?.value || '' }))}
+            />
+            {form.site && !indentsLoading && indentOptions.length === 0 && (
+              <p className="mt-1 text-xs text-amber-600">
+                No indents found for this site. Click <a href="/procurement?tab=indents" target="_blank" rel="noreferrer" className="underline font-semibold">+ Add Indent</a> to create one, then click Refresh.
+              </p>
+            )}
+          </div>
           <div><label className="label" htmlFor="receiving-bill">Bill Number *</label><input id="receiving-bill" className="input" required maxLength={100} value={form.bill_number} onChange={e => setForm({ ...form, bill_number: e.target.value })} /></div>
           <div><label className="label" htmlFor="receiving-file">Upload Receiving {editing ? '' : '*'}</label><input id="receiving-file" className="input" type="file" required={!editing} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" onChange={e => setForm({ ...form, file: e.target.files?.[0] || null })} />
             <p className="mt-1 text-xs text-gray-500">{editing ? <>Leave empty to keep the current file (<a className="text-blue-700 underline" href={editing.receiving_url} target="_blank" rel="noreferrer">view</a>).</> : 'Upload the receiving photo or PDF.'}</p></div>

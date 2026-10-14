@@ -1949,8 +1949,8 @@ router.put('/indents/:id', (req, res) => {
     let isReapprove = false;
     if ((status === 'approved' || status === 'rejected') && (!raiserFlow || crmPending)) {
       const cur2 = db.prepare(
-        `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by,
-                crm_status, indent_category, planning_id
+        `SELECT id, created_by, approval_policy, status, l1_status, l2_status, l1_by,
+                crm_status, indent_category, planning_id, review_revision
            FROM indents WHERE id=?`
       ).get(id);
 
@@ -4723,8 +4723,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   for (const linkedId of linkedIds) {
     const linkedIndent = db.prepare('SELECT * FROM indents WHERE id=?').get(linkedId);
     if (raiserApproval.usesRaiserApproval(linkedIndent)
-        && (linkedIndent.l2_status !== 'approved' || linkedIndent.approved_by !== linkedIndent.created_by)) {
-      return res.status(409).json({ error: 'The original raiser must approve this reviewed indent before a Vendor PO can be created.' });
+        && !raiserApproval.isApprovedByRaiserOrAdmin(db, linkedIndent)) {
+      return res.status(409).json({ error: 'The original raiser or an admin must approve this reviewed indent before a Vendor PO can be created.' });
     }
   }
 

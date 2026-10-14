@@ -65,13 +65,19 @@ function sites(db) {
 }
 
 function indentsForSite(db, site) {
+  const s = normalize(site);
+  if (!s) {
+    return db.prepare(`SELECT i.id, i.indent_number FROM indents i
+      WHERE TRIM(COALESCE(i.indent_number,'')) != '' AND i.indent_number != '0'
+      ORDER BY i.id DESC LIMIT 300`).all();
+  }
   return db.prepare(`SELECT i.id, i.indent_number FROM indents i
     LEFT JOIN order_planning op ON op.id=i.planning_id
     LEFT JOIN business_book bb ON bb.id=op.business_book_id
-    WHERE TRIM(COALESCE(i.indent_number,'')) != '' AND (
+    WHERE TRIM(COALESCE(i.indent_number,'')) != '' AND i.indent_number != '0' AND (
       LOWER(${bbSiteName('bb')})=? OR
       (op.business_book_id IS NULL AND LOWER(TRIM(i.site_name))=?)
-    ) ORDER BY i.id DESC`).all(normalize(site), normalize(site));
+    ) ORDER BY i.id DESC`).all(s, s);
 }
 
 // Who approves a receiving (mam 2026-09-11: "Lovely will approve this

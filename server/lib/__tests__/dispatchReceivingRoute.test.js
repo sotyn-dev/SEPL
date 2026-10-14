@@ -11,7 +11,7 @@ db.exec(`CREATE TABLE business_book(id INTEGER, project_name TEXT, company_name 
   CREATE TABLE notifications(id INTEGER PRIMARY KEY, user_id INTEGER, type TEXT, title TEXT, body TEXT, link_url TEXT, channel_sent TEXT, dedupe_key TEXT, read_at TEXT, created_at TEXT);
   INSERT INTO business_book VALUES(1,'Site A',NULL,NULL),(2,'Site B',NULL,NULL),(3,'','CONSERN PHARMA',NULL);
   INSERT INTO order_planning VALUES(1,1),(2,2);
-  INSERT INTO indents VALUES(1,1,'Site A','IND-1'),(2,2,'Site B','IND-2');
+  INSERT INTO indents VALUES(1,1,'Site A','IND-1'),(2,2,'Site B','IND-2'),(9,3,'CONSERN PHARMA','IND-9');
   INSERT INTO users VALUES(1,'Ajmer','engineer',1),(2,'Lovely Sharma','crm',1),(9,'Boss','admin',1);`);
 initialize(db);
 function stub(module, exports) { require.cache[require.resolve(module)] = { exports }; }
