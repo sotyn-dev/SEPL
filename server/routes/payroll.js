@@ -125,6 +125,22 @@ router.put('/settings', adminOnly, (req, res) => {
     }
   }
   if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+
+  // Salary breakdown percentages must sum to 100%
+  const pctKeys = ['basic_pct', 'conveyance_pct', 'hra_pct', 'adhoc_pct', 'misc_pct'];
+  if (pctKeys.some(k => req.body[k] !== undefined)) {
+    const cur = getSettings(db);
+    const bp = req.body.basic_pct !== undefined ? Number(req.body.basic_pct) : (cur.basic_pct || 0);
+    const cp = req.body.conveyance_pct !== undefined ? Number(req.body.conveyance_pct) : (cur.conveyance_pct || 0);
+    const hp = req.body.hra_pct !== undefined ? Number(req.body.hra_pct) : (cur.hra_pct || 0);
+    const ap = req.body.adhoc_pct !== undefined ? Number(req.body.adhoc_pct) : (cur.adhoc_pct || 0);
+    const mp = req.body.misc_pct !== undefined ? Number(req.body.misc_pct) : (cur.misc_pct || 0);
+    const totalPct = Math.round((bp + cp + hp + ap + mp) * 100) / 100;
+    if (Math.abs(totalPct - 100) > 0.05) {
+      return res.status(400).json({ error: `Salary slip breakdown percentages must equal 100% (currently ${totalPct}%)` });
+    }
+  }
+
   sets.push('updated_at = CURRENT_TIMESTAMP', 'updated_by = ?');
   vals.push(req.user.id);
   db.prepare(`UPDATE payroll_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
@@ -360,13 +376,16 @@ function calculateForEmployee(db, settings, employee, month) {
       holidayDays += 1;
       dayLabel = 'holiday_paid';
       const hrs = att ? (att.total_hours || 0) : 0;
-      if (att && employee.ot_eligible && hrs > settings.ot_threshold_hours) {
-        otHours += hrs - settings.ot_threshold_hours;
+      const dayOtHours = (att && employee.ot_eligible && hrs > settings.ot_threshold_hours)
+        ? round2(hrs - settings.ot_threshold_hours)
+        : 0;
+      if (dayOtHours > 0) {
+        otHours += dayOtHours;
       }
       breakdown.push({
         date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay,
         holiday_name: holidayByDate[dateStr],
-        ...(att ? { punch_in: att.punch_in_time, hours: hrs, holiday_worked: true } : {}),
+        ...(att ? { punch_in: att.punch_in_time, punch_out: att.punch_out_time || null, hours: hrs, ot_hours: dayOtHours, holiday_worked: true } : {}),
       });
       paidDays += dayPay;
       continue;
@@ -434,6 +453,10 @@ function calculateForEmployee(db, settings, employee, month) {
         label: dayLabel,
         pay: dayPay,
         admin_marked: true,
+        punch_in: att ? att.punch_in_time : null,
+        punch_out: att ? (att.punch_out_time || null) : null,
+        hours: att ? (att.total_hours || 0) : 0,
+        ot_hours: 0,
         ...(leaveType ? { applied_leave: leaveType } : {}),
       });
       continue;
@@ -456,6 +479,9 @@ function calculateForEmployee(db, settings, employee, month) {
 
       // Skip half-day if short leave was applied that day (and setting enabled)
       const shortLeaveSavesIt = isShortLeave && settings.skip_half_day_if_short_leave;
+      const dayOtHours = (employee.ot_eligible && hours > settings.ot_threshold_hours)
+        ? round2(hours - settings.ot_threshold_hours)
+        : 0;
 
       if ((veryLate || lowHoursHalf) && !shortLeaveSavesIt) {
         halfDays += 1;
@@ -473,15 +499,19 @@ function calculateForEmployee(db, settings, employee, month) {
           if (!shortLeaveSavesIt) {
             lateMarks += 1;
             lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
+            dayLabel = 'late';
+          } else {
+            // When short leave forgives the late arrival, label it short_leave
+            // so the breakdown matches the summary (Late: 0) with no contradiction.
+            dayLabel = 'short_leave';
           }
-          dayLabel = 'late';
         } else {
-          dayLabel = 'present';
+          dayLabel = (veryLate || lowHoursHalf || isShortLeave) ? 'short_leave' : 'present';
         }
         dayPay = 1;
         // Overtime — only for employees explicitly marked OT-eligible.
-        if (employee.ot_eligible && hours > settings.ot_threshold_hours) {
-          otHours += hours - settings.ot_threshold_hours;
+        if (dayOtHours > 0) {
+          otHours += dayOtHours;
         }
       }
       paidDays += dayPay;
@@ -491,7 +521,10 @@ function calculateForEmployee(db, settings, employee, month) {
         label: dayLabel,
         pay: dayPay,
         punch_in: att.punch_in_time,
+        punch_out: att.punch_out_time || null,
         hours,
+        ot_hours: dayOtHours,
+        short_leave_applied: isShortLeave,
         ...(leaveType ? { applied_leave: leaveType } : {}),
       });
       continue;
@@ -579,7 +612,7 @@ function calculateForEmployee(db, settings, employee, month) {
   let sundayWorked = 0;     // # of Sundays actually worked
   let sundayWorkedPay = 0;  // extra day-equivalents credited
   const SUN_WORK_LABELS = new Set([
-    'present', 'late', 'half_day_late', 'half_day_low_hours',
+    'present', 'late', 'half_day_late', 'half_day_low_hours', 'short_leave',
     'admin_present', 'admin_late', 'admin_half_day', 'admin_short_day',
   ]);
   for (const b of breakdown) {
@@ -598,7 +631,7 @@ function calculateForEmployee(db, settings, employee, month) {
       paidDays += b.pay;
       b.pay = round2(b.pay * 2);
     }
-    if (b.label === 'present' || b.label === 'late') {
+    if (b.label === 'present' || b.label === 'late' || b.label === 'short_leave') {
       b.label = 'sunday_worked';
     } else if (b.label === 'admin_present' || b.label === 'admin_late') {
       b.label = 'admin_sunday_worked';
@@ -648,6 +681,11 @@ function calculateForEmployee(db, settings, employee, month) {
   const hra = round2(grossEarned * (settings.hra_pct || 0) / 100);
   const adhoc = round2(grossEarned * (settings.adhoc_pct || 0) / 100);
   const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
+  const sumEarnings = round2(basicPay + conveyance + hra + adhoc + misc);
+  const diffEarnings = round2(grossEarned - sumEarnings);
+  const finalBasicPay = (Math.abs(diffEarnings) > 0 && Math.abs(diffEarnings) < 1)
+    ? round2(basicPay + diffEarnings)
+    : basicPay;
 
   // Deductions = automatic late penalty + any advance taken this month.
   const totalDeductions = round2(effLatePenalty + advance);
@@ -696,6 +734,7 @@ function calculateForEmployee(db, settings, employee, month) {
     paid_leaves: effPaidLeaves,
     paid_leaves_auto: paidLeaves,                     // before any manual override
     cl_overridden: clOverridden,
+    cl_override_diff: clOverridden ? round2(effPaidLeaves - paidLeaves) : 0,
     unpaid_leaves: unpaidLeaves,
     sunday_count: sundayCount,
     ot_eligible: !!employee.ot_eligible,
@@ -710,12 +749,12 @@ function calculateForEmployee(db, settings, employee, month) {
     ot_pay: round2(otPay),
     net_before_ot: netBeforeOt,   // salary before overtime is added
     // Earnings breakdown (Basic + Conveyance + HRA + Adhoc + Misc = gross)
-    basic_pay: basicPay,
+    basic_pay: finalBasicPay,
     conveyance: conveyance,
     hra: hra,
     adhoc: adhoc,
     misc: misc,
-    total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
+    total_earnings: round2(finalBasicPay + conveyance + hra + adhoc + misc),
     advance,
     food,
     late_penalty_only: round2(effLatePenalty),
