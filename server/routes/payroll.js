@@ -175,11 +175,16 @@ function calculateForEmployee(db, settings, employee, month) {
     const isFuture = year > tY || (year === tY && mm > tM);
     const baseSalary = employee.salary || 0;
     const grossEarned = isFuture ? 0 : baseSalary;
-    const basicPay  = round2(grossEarned * (settings.basic_pct       || 0) / 100);
-    const conveyance = round2(grossEarned * (settings.conveyance_pct || 0) / 100);
-    const hra       = round2(grossEarned * (settings.hra_pct         || 0) / 100);
-    const adhoc     = round2(grossEarned * (settings.adhoc_pct       || 0) / 100);
-    const misc      = round2(grossEarned * (settings.misc_pct        || 0) / 100);
+    const totalPct = (settings.basic_pct || 0) + (settings.conveyance_pct || 0) + (settings.hra_pct || 0) + (settings.adhoc_pct || 0) + (settings.misc_pct || 0);
+    const normFactor = (totalPct > 0 && Math.abs(totalPct - 100) > 0.01) ? (100 / totalPct) : 1;
+    const basicPay  = round2(grossEarned * ((settings.basic_pct       || 0) * normFactor) / 100);
+    const conveyance = round2(grossEarned * ((settings.conveyance_pct || 0) * normFactor) / 100);
+    const hra       = round2(grossEarned * ((settings.hra_pct         || 0) * normFactor) / 100);
+    const adhoc     = round2(grossEarned * ((settings.adhoc_pct       || 0) * normFactor) / 100);
+    const misc      = round2(grossEarned * ((settings.misc_pct        || 0) * normFactor) / 100);
+    const sumEarnings = round2(basicPay + conveyance + hra + adhoc + misc);
+    const diffEarnings = round2(grossEarned - sumEarnings);
+    const finalBasicPay = round2(basicPay + diffEarnings);
     return {
       employee_id: employee.id,
       employee_name: employee.name,
@@ -675,17 +680,18 @@ function calculateForEmployee(db, settings, employee, month) {
 
   // Salary breakdown — split the prorated gross into Basic / Conveyance /
   // HRA / Adhoc / Misc using the percentages in settings (matches mam's
-  // SEPL Tally slip format).
-  const basicPay = round2(grossEarned * (settings.basic_pct || 0) / 100);
-  const conveyance = round2(grossEarned * (settings.conveyance_pct || 0) / 100);
-  const hra = round2(grossEarned * (settings.hra_pct || 0) / 100);
-  const adhoc = round2(grossEarned * (settings.adhoc_pct || 0) / 100);
-  const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
+  // SEPL Tally slip format). If settings sum to something other than 100
+  // (e.g. legacy 100.1% in DB), normalize so total components always sum to grossEarned.
+  const totalPct = (settings.basic_pct || 0) + (settings.conveyance_pct || 0) + (settings.hra_pct || 0) + (settings.adhoc_pct || 0) + (settings.misc_pct || 0);
+  const normFactor = (totalPct > 0 && Math.abs(totalPct - 100) > 0.01) ? (100 / totalPct) : 1;
+  const basicPay = round2(grossEarned * ((settings.basic_pct || 0) * normFactor) / 100);
+  const conveyance = round2(grossEarned * ((settings.conveyance_pct || 0) * normFactor) / 100);
+  const hra = round2(grossEarned * ((settings.hra_pct || 0) * normFactor) / 100);
+  const adhoc = round2(grossEarned * ((settings.adhoc_pct || 0) * normFactor) / 100);
+  const misc = round2(grossEarned * ((settings.misc_pct || 0) * normFactor) / 100);
   const sumEarnings = round2(basicPay + conveyance + hra + adhoc + misc);
   const diffEarnings = round2(grossEarned - sumEarnings);
-  const finalBasicPay = (Math.abs(diffEarnings) > 0 && Math.abs(diffEarnings) < 1)
-    ? round2(basicPay + diffEarnings)
-    : basicPay;
+  const finalBasicPay = round2(basicPay + diffEarnings);
 
   // Deductions = automatic late penalty + any advance taken this month.
   const totalDeductions = round2(effLatePenalty + advance);
@@ -826,8 +832,34 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
     const settings = getSettings(db);
     const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
-    const result = calculateForEmployee(db, settings, emp, month);
-    res.json({ month, settings, ...result });
+    const live = calculateForEmployee(db, settings, emp, month);
+
+    // If month is finalised, return the frozen snapshot from payroll_runs so modal and slips never drift
+    const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    if (finalised) {
+      const snap = db.prepare(
+        `SELECT pr.*, u.name AS finalised_by_name FROM payroll_runs pr
+         LEFT JOIN users u ON u.id = pr.finalised_by
+         WHERE pr.month=? AND pr.employee_id=?`
+      ).get(month, emp.id);
+      if (snap) {
+        let snapBreakdown = null;
+        if (snap.breakdown_json) {
+          try { snapBreakdown = JSON.parse(snap.breakdown_json); } catch (_) {}
+        }
+        return res.json({
+          month,
+          settings,
+          ...live,
+          ...snap,
+          sunday_count: snap.sundays,
+          locked: true,
+          breakdown: (snapBreakdown && snapBreakdown.length > 0) ? snapBreakdown : live.breakdown,
+        });
+      }
+    }
+
+    res.json({ month, settings, ...live });
   } catch (err) {
     console.error('payroll detail error', err);
     res.status(500).json({ error: err.message });

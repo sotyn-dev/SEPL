@@ -1041,14 +1041,14 @@ export default function Payroll() {
           <div className="space-y-4 max-h-[75vh] overflow-y-auto">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="Base Salary" value={fmt(detail.base_salary)} color="text-gray-700" />
-              <Stat label="Per-Day Rate" value={fmt(detail.per_day_rate)} color="text-gray-700" />
+              <Stat label="Per-Day Rate" value={detail.per_day_rate != null ? `Rs ${Number(detail.per_day_rate).toFixed(2)}` : '-'} color="text-gray-700" />
               <Stat label="Paid Days" value={detail.paid_days} color="text-emerald-700" />
               <Stat label="Net Pay" value={fmt(detail.net_pay)} color="text-emerald-700 font-bold" />
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="Half Days" value={detail.half_days} color="text-orange-600" />
-              <Stat label="Absent" value={detail.absent_days} color="text-red-600" />
+              <Stat label="Absent" value={`${detail.absent_days || 0}${detail.unpaid_leaves > 0 ? ` (+${detail.unpaid_leaves} unpaid leave)` : ''}`} color="text-red-600" />
               <Stat label="Late" value={`${detail.late_marks || 0}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}${detail.late_penalty > 0 ? ` (-₹${fmt(detail.late_penalty)})` : (detail.late_marks > 0 ? ' (within grace: ₹0)' : '')}`} color="text-amber-600" />
             </div>
 
@@ -1069,13 +1069,56 @@ export default function Payroll() {
               </div>
               <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-gray-700 mt-2">
                 <span className="font-semibold text-emerald-800">Paid Days Formula: </span>
-                {detail.present_days} (Attendance) + {detail.sunday_count ?? 0} (Sundays){detail.paid_leaves ? ` + ${detail.paid_leaves} (Paid Leaves)` : ''}{detail.holiday_days ? ` + ${detail.holiday_days} (Holidays)` : ''}{detail.sunday_worked_pay ? ` + ${detail.sunday_worked_pay}d (Sun Bonus)` : ''} = <span className="font-bold text-emerald-700">{detail.paid_days} Paid Days</span>
+                {detail.present_days} (Attendance{detail.sunday_worked_pay > 0 ? `, incl. ${detail.sunday_worked_pay}d Sun bonus` : ''}) + {detail.sunday_count ?? 0} (Sundays){detail.paid_leaves ? ` + ${detail.paid_leaves} (Paid Leaves)` : ''}{detail.holiday_days ? ` + ${detail.holiday_days} (Holidays)` : ''} = <span className="font-bold text-emerald-700">{detail.paid_days} Paid Days</span>
                 {detail.cl_overridden && (
                   <span className="block text-[11px] text-purple-700 mt-0.5">
                     * Casual Leave was manually adjusted to {detail.paid_leaves} days (auto was {detail.paid_leaves_auto ?? 1}).
                   </span>
                 )}
               </div>
+
+              {/* Deductions & Adjustments Summary */}
+              {((detail.absent_days || 0) + (detail.unpaid_leaves || 0) > 0 || (detail.half_days || 0) > 0 || detail.cl_overridden || detail.paid_days_overridden) && (
+                <div className="bg-slate-50 border border-slate-200 rounded p-2.5 text-xs text-gray-700 mt-2 space-y-1.5">
+                  <div className="flex justify-between items-center font-semibold text-slate-800 border-b pb-1">
+                    <span>Deductions & Adjustments Summary</span>
+                    <span className="text-[11px] font-normal text-gray-500">{detail.total_days_in_month || 30} Calendar Days</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                    <div>
+                      <span className="text-gray-500 block">Unattended Days (0 Pay):</span>
+                      <span className="font-medium text-red-600">
+                        {(detail.absent_days || 0) + (detail.unpaid_leaves || 0)} Days
+                        {detail.unpaid_leaves > 0 ? ` (${detail.absent_days} absent + ${detail.unpaid_leaves} unpaid leave)` : ''}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block">Half Days (Late/Cutoff):</span>
+                      <span className="font-medium text-orange-600">
+                        {detail.half_days || 0} Days (-{(detail.half_days || 0) * 0.5}d)
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block">{detail.cl_overridden ? 'Admin Adjustment:' : 'Paid Leaves:'}</span>
+                      <span className="font-medium text-purple-700">
+                        {detail.cl_overridden ? `+${detail.paid_leaves} Days (Auto was ${detail.paid_leaves_auto ?? 0})` : `${detail.paid_leaves || 0} Days`}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block">Net Days Deducted:</span>
+                      <span className="font-bold text-red-700">
+                        -{Math.max(0, Math.round(((detail.total_days_in_month || 30) - detail.paid_days) * 100) / 100)} Days
+                        {((detail.total_days_in_month || 30) - detail.paid_days) > 0 ? ` (-${fmt(Math.round(((detail.total_days_in_month || 30) - detail.paid_days) * (detail.per_day_rate || 0)))})` : ''}
+                      </span>
+                    </div>
+                  </div>
+                  {detail.cl_overridden && (
+                    <div className="text-[11px] text-purple-800 bg-purple-50/70 border border-purple-200 rounded px-2 py-1 mt-1">
+                      <b>Note:</b> Admin adjustment credited +{detail.paid_leaves} days to excuse late half-days / approved leave, resulting in net <b>{detail.paid_days} Paid Days</b> out of {detail.total_days_in_month || 30}.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
