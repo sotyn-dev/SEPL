@@ -117,7 +117,7 @@ const SETTING_GROUPS = [
       { key: 'cl_per_month', label: 'Casual Leave', help: 'Paid CL allowance per month', type: 'number', step: 0.5 },
       { key: 'sl_per_month', label: 'Sick Leave', help: 'Paid SL allowance per month', type: 'number', step: 0.5 },
       { key: 'pl_per_month', label: 'Privilege / Earned Leave', help: 'Paid PL/EL allowance per month', type: 'number', step: 0.5 },
-      { key: 'short_leave_per_month', label: 'Short Leaves / Month', help: 'Allowed short-leave count', type: 'number' },
+      { key: 'short_leave_per_month', label: 'Short Leaves / Month', help: 'Max 4 hours per month across all requests (no instance limit)', type: 'number' },
     ]
   },
   {
@@ -143,6 +143,8 @@ const LABEL_PILL = {
   not_joined: 'bg-gray-100 text-gray-500',
   present: 'bg-emerald-100 text-emerald-700',
   late: 'bg-amber-100 text-amber-700',
+  short_leave: 'bg-purple-100 text-purple-700 font-medium',
+  short_leave_excused: 'bg-purple-100 text-purple-700 font-medium',
   half_day_late: 'bg-orange-100 text-orange-700',
   half_day_low_hours: 'bg-orange-100 text-orange-700',
   absent_no_punch: 'bg-red-100 text-red-700',
@@ -370,6 +372,12 @@ export default function Payroll() {
   };
 
   const saveSettings = async () => {
+    // Validate breakdown percentage equals 100%
+    const totalPct = Math.round(((settings.basic_pct || 0) + (settings.conveyance_pct || 0) + (settings.hra_pct || 0) + (settings.adhoc_pct || 0) + (settings.misc_pct || 0)) * 100) / 100;
+    if (Math.abs(totalPct - 100) > 0.05) {
+      toast.error(`Salary slip breakdown percentages must equal 100% (currently ${totalPct}%)`);
+      return;
+    }
     try {
       const res = await api.put('/payroll/settings', settings);
       setSavedSettings(res.data.settings);
@@ -653,7 +661,7 @@ export default function Payroll() {
                   <th className="text-right" title="Food allowance — added to net pay">Food</th>
                   <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay ₹</th>
                   <th className="text-center" title="Accounts marks each person Paid after the month is finalised">Paid</th>
-                  <th></th>
+                  <th className="text-center w-20 min-w-[76px]">Slip</th>
                 </tr>
               </thead>
               <tbody>
@@ -752,9 +760,11 @@ export default function Payroll() {
                         </label>
                       ) : <span className="text-[10px] text-gray-300" title="Finalise the month to mark salary paid">—</span>}
                     </td>
-                    <td className="space-x-1 whitespace-nowrap">
-                      <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-[11px] px-1.5 py-1" title="Detail — full day-by-day calculation"><FiEye size={12} /></button>
-                      <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-[11px] px-1.5 py-1" title="Printable SEPL salary slip"><LuIndianRupee size={12} /></a>
+                    <td className="text-center whitespace-nowrap min-w-[76px] w-20">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-[11px] px-1.5 py-1" title="Detail — full day-by-day calculation"><FiEye size={12} /></button>
+                        <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-[11px] px-1.5 py-1" title="Printable SEPL salary slip"><LuIndianRupee size={12} /></a>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1039,7 +1049,7 @@ export default function Payroll() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="Half Days" value={detail.half_days} color="text-orange-600" />
               <Stat label="Absent" value={detail.absent_days} color="text-red-600" />
-              <Stat label="Late" value={`${detail.late_marks || 0}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}${detail.late_penalty > 0 ? ` (-₹${fmt(detail.late_penalty)})` : ''}`} color="text-amber-600" />
+              <Stat label="Late" value={`${detail.late_marks || 0}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}${detail.late_penalty > 0 ? ` (-₹${fmt(detail.late_penalty)})` : (detail.late_marks > 0 ? ' (within grace: ₹0)' : '')}`} color="text-amber-600" />
             </div>
 
             <p className="text-xs text-gray-500">
@@ -1053,9 +1063,18 @@ export default function Payroll() {
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
                 <Stat label="Sundays" value={`${detail.sunday_count ?? 0}${detail.sunday_worked > 0 ? ` (+${detail.sunday_worked_pay}d)` : ''}`} color="text-blue-600" />
-                <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
+                <Stat label="Paid CL/Leave" value={`${detail.paid_leaves}${detail.cl_overridden ? ' (Manual)' : ''}`} color="text-purple-600" />
                 <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
                 <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+              </div>
+              <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-gray-700 mt-2">
+                <span className="font-semibold text-emerald-800">Paid Days Formula: </span>
+                {detail.present_days} (Attendance) + {detail.sunday_count ?? 0} (Sundays){detail.paid_leaves ? ` + ${detail.paid_leaves} (Paid Leaves)` : ''}{detail.holiday_days ? ` + ${detail.holiday_days} (Holidays)` : ''}{detail.sunday_worked_pay ? ` + ${detail.sunday_worked_pay}d (Sun Bonus)` : ''} = <span className="font-bold text-emerald-700">{detail.paid_days} Paid Days</span>
+                {detail.cl_overridden && (
+                  <span className="block text-[11px] text-purple-700 mt-0.5">
+                    * Casual Leave was manually adjusted to {detail.paid_leaves} days (auto was {detail.paid_leaves_auto ?? 1}).
+                  </span>
+                )}
               </div>
             </div>
 
@@ -1083,7 +1102,7 @@ export default function Payroll() {
               <Stat label="CL Used" value={`${detail.cl_used} / ${detail.settings?.cl_per_month ?? '?'}`} color="text-purple-600" />
               <Stat label="SL Used" value={`${detail.sl_used} / ${detail.settings?.sl_per_month ?? '?'}`} color="text-purple-600" />
               <Stat label="PL Used" value={`${detail.pl_used} / ${detail.settings?.pl_per_month ?? '?'}`} color="text-purple-600" />
-              <Stat label="Short Leave" value={detail.short_leave_used} color="text-purple-600" />
+              <Stat label="Short Leave" value={`${detail.short_leave_used} (max 4h/mo)`} color="text-purple-600" />
             </div>
 
             <div>
@@ -1096,7 +1115,9 @@ export default function Payroll() {
                       <th className="text-left p-2">Day</th>
                       <th className="text-left p-2">Status</th>
                       <th className="text-left p-2">Punch In</th>
-                      <th className="text-right p-2">Hrs</th>
+                      <th className="text-left p-2">Punch Out</th>
+                      <th className="text-right p-2">Total Hrs</th>
+                      <th className="text-right p-2">OT Hrs</th>
                       <th className="text-right p-2">Pay</th>
                     </tr>
                   </thead>
@@ -1112,9 +1133,16 @@ export default function Payroll() {
                               (applied {d.applied_leave} leave, attended)
                             </span>
                           )}
+                          {d.short_leave_applied && (
+                            <span className="block text-[9px] text-purple-600 font-normal">
+                              (short leave applied)
+                            </span>
+                          )}
                         </td>
                         <td className="p-2">{d.punch_in ? fmtTime(d.punch_in, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                        <td className="p-2">{d.punch_out ? fmtTime(d.punch_out, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                         <td className="p-2 text-right">{d.hours || '-'}</td>
+                        <td className="p-2 text-right text-blue-600 font-medium">{d.ot_hours ? `${d.ot_hours} h` : '-'}</td>
                         <td className="p-2 text-right font-semibold">
                           {d.pay}
                           {d.sunday_bonus ? (
