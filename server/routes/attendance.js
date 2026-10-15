@@ -272,29 +272,8 @@ router.get('/my-month', (req, res) => {
   });
 });
 
-// GET the logged-in user's OWN attendance over a start→end date range
-// (mam 2026-06-12: "someone show their own previous attendance ... start to
-// end date").  Self-service — no admin permission needed; always scoped to
-// req.user.id so a user can only ever see their own rows.  Silent auto-mark
-// allow-list rows stay hidden, same as /my-today and /my-month.
-router.get('/my-history', (req, res) => {
-  const db = getDb();
-  const today = istTodayStr();
-  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
-  let from = ok(req.query.from) ? req.query.from : today;
-  let to = ok(req.query.to) ? req.query.to : today;
-  if (from > to) { const t = from; from = to; to = t; }   // tolerate swapped range
-  const rows = db.prepare(
-    `SELECT * FROM attendance
-       WHERE user_id=? AND date BETWEEN ? AND ?
-         AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')
-       ORDER BY date DESC, punch_in_time DESC`
-  ).all(req.user.id, from, to);
-  res.json(rows);
-});
-
 // Full Day-by-Day Attendance Muster for a User across date range.
-// Merges punches, approved leave requests, weekly offs (Sundays), absent days, and future dates.
+// Merges punches, approved leave requests, weekly offs (Sundays), company holidays, absent days, and future dates.
 function computeUserMuster(db, userId, dateFrom, dateTo) {
   const targetUser = db.prepare(`
     SELECT u.id, u.name, u.email, u.department, u.phone, u.staff_type, u.avatar_url,
@@ -342,6 +321,12 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
        AND NOT (to_date < ? OR from_date > ?)
   `).all(userId, from, to);
 
+  const holByDate = new Map();
+  try {
+    const holRows = db.prepare(`SELECT date, name FROM payroll_holidays WHERE date BETWEEN ? AND ?`).all(from, to);
+    for (const h of holRows) holByDate.set(h.date, h.name);
+  } catch (_) {}
+
   let lateCutoffMin = 9 * 60 + 46;
   try {
     const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
@@ -362,6 +347,7 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     absent: 0,
     on_leave: 0,
     week_offs: 0,
+    holidays: 0,
     total_hours: 0,
     missed_punch_out: 0,
     auto_punched_in: 0,
@@ -377,6 +363,8 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     const dow = curDate.getDay();
     const isSunday = dow === 0;
     const isFuture = dStr > todayStr;
+    const isHoliday = holByDate.has(dStr);
+    const holidayName = holByDate.get(dStr);
     const att = attByDate.get(dStr);
     const dayLeave = leaves.find(l => dStr >= l.from_date && dStr <= l.to_date);
 
@@ -417,6 +405,8 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
         missedPunchOut = true;
         summary.missed_punch_out++;
       }
+    } else if (isHoliday) {
+      status = 'holiday';
     } else if (dayLeave && dayLeave.leave_type !== 'short_leave') {
       status = 'on_leave';
     } else if (isSunday) {
@@ -428,14 +418,16 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     }
 
     summary.total_days++;
-    if (!isSunday) summary.working_days++;
+    if (!isSunday && !isHoliday) summary.working_days++;
 
-    if (status === 'present' || status === 'late' || (isSunday && att)) {
+    if (status === 'present' || status === 'late' || (isSunday && att) || (isHoliday && att)) {
       summary.present++;
       if (isLate) summary.late++;
     } else if (status === 'half_day') {
       summary.half_day++;
       summary.present += 0.5;
+    } else if (status === 'holiday') {
+      summary.holidays++;
     } else if (status === 'on_leave') {
       summary.on_leave++;
     } else if (status === 'weekend') {
@@ -474,6 +466,8 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       proof_url: att?.proof_url || null,
       remarks: att?.remarks || null,
       attendance_id: att?.id || null,
+      is_holiday: isHoliday,
+      holiday_name: holidayName || null,
       leave: dayLeave ? {
         id: dayLeave.id,
         leave_type: dayLeave.leave_type,
@@ -499,6 +493,21 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     days
   };
 }
+
+// GET the logged-in user's OWN complete day-by-day attendance muster
+// (Punches, Leaves, Weekly Offs, Company Holidays, and Absences with full date continuity).
+// Self-service — no admin permission needed; always scoped to req.user.id.
+router.get('/my-history', (req, res) => {
+  const db = getDb();
+  const today = istTodayStr();
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  let from = ok(req.query.from) ? req.query.from : today;
+  let to = ok(req.query.to) ? req.query.to : today;
+  if (from > to) { const t = from; from = to; to = t; }   // tolerate swapped range
+  const muster = computeUserMuster(db, req.user.id, from, to);
+  if (!muster) return res.status(404).json({ error: 'User not found' });
+  res.json(muster);
+});
 
 // GET /attendance/user-muster — day-by-day complete muster for admin By User view
 router.get('/user-muster', requirePermission('attendance', 'view'), (req, res) => {

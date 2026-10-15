@@ -15,12 +15,33 @@ import {
   FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus,
   FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown,
   FiCornerUpLeft, FiCornerUpRight, FiDownload, FiImage, FiEdit2, FiStar,
-  FiArchive, FiRotateCcw, FiMoreVertical
+  FiArchive, FiRotateCcw, FiMoreVertical, FiSmile
 } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
 import { getToken } from '../lib/tokenStore';
+
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '👏', '🔥'];
+
+const COMPOSER_EMOJIS = [
+  '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇',
+  '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚',
+  '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔',
+  '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥',
+  '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮',
+  '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓',
+  '🧐', '😕', '😟', '🙁', '😮', '😯', '😲', '😳', '🥺', '😦',
+  '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞',
+  '👍', '👎', '👏', '🙌', '👐', '🤲', '🤝', '👊', '✊', '🤛',
+  '🤜', '🤞', '✌️', '🤟', '🤘', '👌', '🤏', '👈', '👉', '👆',
+  '👇', '☝️', '✋', '🤚', '🖐️', '🖖', '👋', '🤙', '💪', '🙏',
+  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔',
+  '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '💯',
+  '✨', '⭐', '🌟', '💥', '💢', '⚡', '🔥', '🎉', '🎊', '🚀',
+  '💡', '🔔', '📢', '🔒', '🔑', '📝', '📁', '📊', '📈', '📦',
+  '✅', '❌', '❓', '❗', '⚠️', '🚩', '📍', '📌', '📅', '⏰',
+];
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const HEADER = '#1e3a8a';                          // header royal blue
@@ -127,7 +148,16 @@ function previewOf(m) {
   return { icon: '📎', label: name || 'Attachment', text };
 }
 
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward, onReact }) {
+  const [reactMsgId, setReactMsgId] = useState(null);
+
+  useEffect(() => {
+    if (!reactMsgId) return;
+    const onWinClick = () => setReactMsgId(null);
+    window.addEventListener('click', onWinClick);
+    return () => window.removeEventListener('click', onWinClick);
+  }, [reactMsgId]);
+
   // Current-date labels for the Today/Yesterday separators — an intentional read
   // of "now" at render time (the one impure call, isolated).
   // eslint-disable-next-line react-hooks/purity
@@ -219,7 +249,37 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''}`}>
+                <div className={`group relative max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''}`}>
+                  {/* Floating quick emoji reaction popup */}
+                  {reactMsgId === m.id && (
+                    <div
+                      className={`absolute z-30 bottom-full mb-1 flex items-center gap-1 bg-white/95 backdrop-blur-xs border border-gray-200 rounded-full shadow-lg px-2 py-1 select-none ${
+                        own ? 'right-0' : 'left-0'
+                      }`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {QUICK_REACTIONS.map((em) => {
+                        const isMine = (m.reactions || []).some(r => r.user_id === userId && r.emoji === em);
+                        return (
+                          <button
+                            key={em}
+                            type="button"
+                            onClick={() => {
+                              onReact?.(m.id, em);
+                              setReactMsgId(null);
+                            }}
+                            className={`text-lg hover:scale-130 active:scale-100 transition-transform p-1 leading-none rounded-full ${
+                              isMine ? 'bg-blue-100 ring-1 ring-blue-400' : 'hover:bg-gray-100'
+                            }`}
+                            title={isMine ? `Remove ${em}` : `React ${em}`}
+                          >
+                            {em}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {!own && <div className="text-[11px] font-semibold text-blue-700 mb-0.5">{m.sender_name}</div>}
                   {/* WhatsApp-style "Forwarded" tag — sits inside the bubble,
                       above the content, so it reads as one combined message. */}
@@ -247,7 +307,52 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                         ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
                         : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
                   {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
+
+                  {/* Reaction badges on message */}
+                  {Array.isArray(m.reactions) && m.reactions.length > 0 && (() => {
+                    const map = {};
+                    for (const r of m.reactions) {
+                      if (!map[r.emoji]) map[r.emoji] = { emoji: r.emoji, count: 0, names: [], hasMine: false };
+                      map[r.emoji].count++;
+                      map[r.emoji].names.push(r.user_name || 'Someone');
+                      if (r.user_id === userId) map[r.emoji].hasMine = true;
+                    }
+                    const groups = Object.values(map);
+                    if (!groups.length) return null;
+                    return (
+                      <div className="flex flex-wrap gap-1 mt-1 select-none">
+                        {groups.map(g => (
+                          <button
+                            key={g.emoji}
+                            type="button"
+                            onClick={() => onReact?.(m.id, g.emoji)}
+                            title={g.names.map(n => (n === (members.find(x => x.user_id === userId)?.name) ? 'You' : n)).join(', ')}
+                            className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition cursor-pointer ${
+                              g.hasMine
+                                ? 'bg-blue-100/90 border-blue-300 text-blue-900 font-semibold shadow-xs'
+                                : 'bg-white/90 border-gray-200 text-gray-700 hover:bg-gray-100'
+                            }`}
+                          >
+                            <span>{g.emoji}</span>
+                            <span className="font-semibold">{g.count}</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setReactMsgId(reactMsgId === m.id ? null : m.id);
+                      }}
+                      className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-amber-500 transition-colors"
+                      title="React with emoji"
+                    >
+                      <FiSmile size={11} />
+                    </button>
                     <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Reply"><FiCornerUpLeft size={11} /></button>
                     <button onClick={() => onForward(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Forward"><FiCornerUpRight size={11} /></button>
                     {/* Native download of the attachment. `download` works because
@@ -347,6 +452,7 @@ export default function SiteChat() {
   const [showJumpDown, setShowJumpDown] = useState(false);  // floating "jump to latest" button when scrolled up
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
+  const [showComposerEmoji, setShowComposerEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
   const [editingId, setEditingId] = useState(null);   // id of the message being edited inline
   const [busy, setBusy] = useState(false);
@@ -547,6 +653,14 @@ export default function SiteChat() {
     // auto-scroll effect keeps the view pinned to the bottom only if the reader
     // is already there (perf pass — S3-client).
     socket.on('message', (row) => { if (row && row.group_id != null) setSel(s => { if (s && s.id === row.group_id) appendMsg(row); return s; }); });
+    socket.on('reaction', ({ message_id, group_id, reactions }) => {
+      setSel(s => {
+        if (s && s.id === group_id) {
+          setMsgs(ms => ms.map(m => m.id === message_id ? { ...m, reactions } : m));
+        }
+        return s;
+      });
+    });
     // 'changed' (read receipts, deletes, membership, last-message) still needs a
     // reconcile fetch, but a BURST of them now collapses into a single trailing
     // reload instead of one-reload-per-event — that reload storm was what made
@@ -668,6 +782,38 @@ export default function SiteChat() {
   // (day-label, quotePreview, and renderBody now live in the memoised MessageList
   // / module scope so composer keystrokes don't recompute them per message.)
 
+  // Dynamic textarea auto-resizing
+  const adjustTaHeight = useCallback((el) => {
+    if (!el) return;
+    el.style.height = 'auto';
+    const newHeight = Math.min(Math.max(el.scrollHeight, 38), 140);
+    el.style.height = `${newHeight}px`;
+  }, []);
+
+  const handleReact = useCallback(async (msgId, emoji) => {
+    if (!sel || !msgId || !emoji) return;
+    // Optimistic UI reaction update
+    setMsgs(ms => ms.map(m => {
+      if (m.id !== msgId) return m;
+      const cur = Array.isArray(m.reactions) ? m.reactions : [];
+      const hasSame = cur.some(r => r.user_id === user?.id && r.emoji === emoji);
+      const filtered = cur.filter(r => r.user_id !== user?.id);
+      const nextReactions = hasSame
+        ? filtered
+        : [...filtered, { message_id: msgId, user_id: user?.id, user_name: user?.name, emoji }];
+      return { ...m, reactions: nextReactions };
+    }));
+
+    try {
+      const res = await api.post(`/site-chat/${sel.id}/messages/${msgId}/reactions`, { emoji });
+      if (res.data?.reactions) {
+        setMsgs(ms => ms.map(m => m.id === msgId ? { ...m, reactions: res.data.reactions } : m));
+      }
+    } catch {
+      toast.error('Failed to update reaction');
+    }
+  }, [sel, user]);
+
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
     const body = text;                                // capture before we clear the box
@@ -679,8 +825,8 @@ export default function SiteChat() {
     // (WhatsApp-style) instead of after the round-trip. Clearing after the await
     // let a trailing mobile predictive-keyboard input event land after setText('')
     // and repopulate the just-sent text, so it stayed in the box (mam 2026-07-10).
-    setText(''); setMention(null); setReplyTo(null);
-    if (taRef.current) taRef.current.value = '';      // belt-and-suspenders vs the IME buffer
+    setText(''); setMention(null); setReplyTo(null); setShowComposerEmoji(false);
+    if (taRef.current) { taRef.current.value = ''; taRef.current.style.height = 'auto'; } // belt-and-suspenders vs the IME buffer
     justSentRef.current = { body, at: Date.now() };   // arm the guard for the trailing IME re-inject
     try {
       const r = await api.post(`/site-chat/${sel.id}`, payload);
@@ -818,6 +964,7 @@ export default function SiteChat() {
       return;                                         // do NOT setText(val)
     }
     setText(val);
+    adjustTaHeight(e.target);
     const pos = e.target.selectionStart ?? val.length;
     const m = val.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
     setMention(m ? { query: m[1], start: pos - m[1].length - 1 } : null);
@@ -832,7 +979,142 @@ export default function SiteChat() {
     const after = text.slice(pos);
     const inserted = `@${name} `;
     setText(before + inserted + after); setMention(null);
-    requestAnimationFrame(() => { if (ta) { const c = (before + inserted).length; ta.focus(); ta.setSelectionRange(c, c); } });
+    requestAnimationFrame(() => {
+      if (ta) {
+        const c = (before + inserted).length;
+        ta.focus();
+        ta.setSelectionRange(c, c);
+        adjustTaHeight(ta);
+      }
+    });
+  };
+
+  // Keyboard navigation & WhatsApp-style automatic numbering
+  const handleKeyDown = (e) => {
+    if (mention && mentionList.length) {
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+    }
+    if (e.key === 'Escape') {
+      if (showComposerEmoji) { e.preventDefault(); setShowComposerEmoji(false); return; }
+      if (editingId) { e.preventDefault(); cancelEdit(); return; }
+    }
+
+    if (e.key === 'Enter') {
+      const ta = taRef.current;
+      // Auto-numbering on Shift+Enter: WhatsApp style
+      if (e.shiftKey && ta) {
+        const pos = ta.selectionStart;
+        const val = ta.value;
+        const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+        const currentLine = val.slice(lineStart, pos);
+
+        // Pattern 1: Numbered list item like "1.", "1)", "1-", "1 item", or just "1" alone on the line
+        const numMatch = currentLine.match(/^(\s*)(\d{1,3})(?:([\.\)\-])\s*(.*)|(\s+)(.*)|$)/);
+        // Pattern 2: Bullet item like "- ", "* ", "• "
+        const bulletMatch = currentLine.match(/^(\s*)([\*\-•])\s+(.*)$/);
+
+        if (numMatch) {
+          const indent = numMatch[1] || '';
+          const numStr = numMatch[2];
+          const delim = numMatch[3] || '.';
+          const content = (numMatch[4] ?? numMatch[6] ?? '').trim();
+          const num = parseInt(numStr, 10);
+
+          // If num > 1 and has no text content (user pressed Shift+Enter on empty "2. " or "3. ")
+          // cancel the list item and leave a clean blank line (WhatsApp list exit)
+          if (num > 1 && !content) {
+            e.preventDefault();
+            const beforeLine = val.slice(0, lineStart);
+            const afterPos = val.slice(pos);
+            const nextVal = beforeLine + afterPos;
+            setText(nextVal);
+            setTimeout(() => {
+              if (taRef.current) {
+                taRef.current.selectionStart = taRef.current.selectionEnd = lineStart;
+                adjustTaHeight(taRef.current);
+              }
+            }, 0);
+            return;
+          }
+
+          // Advance to the next number: e.g. 1 -> 2, 2 -> 3
+          e.preventDefault();
+          const nextNum = num + 1;
+          let beforePos = val.slice(0, pos);
+          // If user typed "1" with no punctuation or space, clean up line 1 with standard delim
+          if (!numMatch[3] && !numMatch[5] && !content) {
+            beforePos = val.slice(0, pos) + delim + ' ';
+          } else if (numMatch[3] && !numMatch[5] && !content) {
+            beforePos = val.slice(0, pos) + ' ';
+          }
+          const insert = `\n${indent}${nextNum}${delim} `;
+          const nextVal = beforePos + insert + val.slice(pos);
+          setText(nextVal);
+          setTimeout(() => {
+            if (taRef.current) {
+              const nextCursor = beforePos.length + insert.length;
+              taRef.current.selectionStart = taRef.current.selectionEnd = nextCursor;
+              adjustTaHeight(taRef.current);
+            }
+          }, 0);
+          return;
+        } else if (bulletMatch) {
+          const [full, indent, bullet, contentRaw] = bulletMatch;
+          const content = (contentRaw || '').trim();
+          if (!content) {
+            e.preventDefault();
+            const beforeLine = val.slice(0, lineStart);
+            const afterPos = val.slice(pos);
+            const nextVal = beforeLine + afterPos;
+            setText(nextVal);
+            setTimeout(() => {
+              if (taRef.current) {
+                taRef.current.selectionStart = taRef.current.selectionEnd = lineStart;
+                adjustTaHeight(taRef.current);
+              }
+            }, 0);
+            return;
+          }
+          e.preventDefault();
+          const insert = `\n${indent}${bullet} `;
+          const nextVal = val.slice(0, pos) + insert + val.slice(pos);
+          setText(nextVal);
+          setTimeout(() => {
+            if (taRef.current) {
+              const nextCursor = pos + insert.length;
+              taRef.current.selectionStart = taRef.current.selectionEnd = nextCursor;
+              adjustTaHeight(taRef.current);
+            }
+          }, 0);
+          return;
+        }
+      }
+
+      if (!e.shiftKey) {
+        e.preventDefault();
+        editingId ? saveEdit() : send();
+      }
+    }
+  };
+
+  const insertEmoji = (em) => {
+    const ta = taRef.current;
+    if (!ta) {
+      setText(t => t + em);
+      return;
+    }
+    const pos = ta.selectionStart ?? text.length;
+    const nextVal = text.slice(0, pos) + em + text.slice(pos);
+    setText(nextVal);
+    setTimeout(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        const nextPos = pos + em.length;
+        taRef.current.selectionStart = taRef.current.selectionEnd = nextPos;
+        adjustTaHeight(taRef.current);
+      }
+    }, 0);
   };
   // (renderBody / @mention highlighting now lives in the memoised MessageList.)
 
@@ -852,16 +1134,34 @@ export default function SiteChat() {
     setReplyTo(null);                 // can't reply and edit at once
     setEditingId(m.id);
     setText(m.body || '');
-    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); const n = (m.body || '').length; ta.setSelectionRange(n, n); } });
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (ta) {
+        ta.focus();
+        const n = (m.body || '').length;
+        ta.setSelectionRange(n, n);
+        adjustTaHeight(ta);
+      }
+    });
+  }, [adjustTaHeight]);
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setText('');
+    if (taRef.current) taRef.current.style.height = 'auto';
   }, []);
-  const cancelEdit = useCallback(() => { setEditingId(null); setText(''); }, []);
   const saveEdit = useCallback(async () => {
     if (!sel || editingId == null) return;
     const b = text.trim();
     if (!b) return;                                     // empty → ignore (use ✕ to cancel)
     const orig = msgs.find(x => x.id === editingId);
     if (orig && b === (orig.body || '')) { cancelEdit(); return; }   // unchanged → just close
-    try { await api.put(`/site-chat/${sel.id}/messages/${editingId}`, { body: b }); setEditingId(null); setText(''); loadThread(sel.id); }
+    try {
+      await api.put(`/site-chat/${sel.id}/messages/${editingId}`, { body: b });
+      setEditingId(null);
+      setText('');
+      if (taRef.current) taRef.current.style.height = 'auto';
+      loadThread(sel.id);
+    }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to edit'); }
   }, [sel?.id, editingId, text, msgs, loadThread, cancelEdit]);
   const saveRename = async () => {
@@ -1209,7 +1509,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} />
                   </div>
 
                   <div ref={endRef} />
@@ -1282,6 +1582,30 @@ export default function SiteChat() {
                       ))}
                     </div>
                   )}
+                  {/* Emoji picker drawer for composer */}
+                  {showComposerEmoji && (
+                    <div className="absolute bottom-full left-2 right-2 mb-1 bg-white border border-gray-200 rounded-xl shadow-xl p-3 z-30 max-h-56 overflow-y-auto">
+                      <div className="flex items-center justify-between pb-1.5 mb-2 border-b">
+                        <span className="text-xs font-semibold text-gray-600">Emojis</span>
+                        <button type="button" onClick={() => setShowComposerEmoji(false)} className="text-gray-400 hover:text-gray-600 p-0.5">
+                          <FiX size={14} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-8 sm:grid-cols-12 md:grid-cols-16 gap-1 text-xl select-none">
+                        {COMPOSER_EMOJIS.map((em, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => insertEmoji(em)}
+                            className="hover:scale-125 active:scale-100 transition-transform p-1 rounded hover:bg-gray-100 flex items-center justify-center leading-none"
+                          >
+                            {em}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {recording ? (
                     <>
                       <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
@@ -1301,15 +1625,17 @@ export default function SiteChat() {
                         <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
                           onChange={onTextChange}
                           onPaste={onPaste}
-                          onKeyDown={e => {
-                            if (mention && mentionList.length) {
-                              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
-                              if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
-                            }
-                            if (e.key === 'Escape' && editingId) { e.preventDefault(); cancelEdit(); return; }
-                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editingId ? saveEdit() : send(); }
-                          }} />
+                          onKeyDown={handleKeyDown} />
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowComposerEmoji(v => !v)}
+                        disabled={busy}
+                        className={`flex-shrink-0 p-2 transition rounded-full ${showComposerEmoji ? 'text-blue-600 bg-blue-100' : 'text-gray-500 hover:text-amber-500'}`}
+                        title="Add emoji"
+                      >
+                        <FiSmile size={18} />
+                      </button>
                       {editingId
                         ? <button onClick={saveEdit} disabled={busy || !text.trim()} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }} title="Save edit"><FiSend size={16} /></button>
                         : text.trim()
