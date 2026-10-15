@@ -337,26 +337,34 @@ export function EscalationLadderModal({ onClose }) {
 // ─── S5: Supply Block Override Modal ───────────────────────────────────
 export function SupplyBlockOverrideModal({ site, onClose, onSaved }) {
   const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!site?.id) return;
-    api.get(`/collections/sop16/supply-block-status/${site.id}`)
+    const siteKey = site?.id || site?.name || site?.client_name;
+    if (!siteKey) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    api.get(`/collections/sop16/supply-block-status/${encodeURIComponent(siteKey)}`)
       .then(r => setStatus(r.data))
-      .catch(() => {});
-  }, [site?.id]);
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [site?.id, site?.name, site?.client_name]);
 
   const submitOverride = async (e) => {
     e.preventDefault();
     if (!reason.trim()) return toast.error('A written justification note is mandatory');
     setBusy(true);
     try {
+      const targetId = status?.site_id || site?.id || site?.name || site?.client_name;
       await api.post('/collections/sop16/supply-block-override', {
-        site_id: site.id,
+        site_id: targetId,
         override_reason: reason.trim()
       });
-      toast.success(`Exception override granted for ${site.name}`);
+      toast.success(`Exception override granted for ${status?.site_name || site?.name || 'site'}`);
       if (onSaved) onSaved();
       onClose();
     } catch (err) {
@@ -366,57 +374,63 @@ export function SupplyBlockOverrideModal({ site, onClose, onSaved }) {
     }
   };
 
-  return (
-    <Modal isOpen onClose={onClose} title={`SOP-16.5 · Material Supply Stop Status (${site?.name})`}>
-      <form onSubmit={submitOverride} className="space-y-4 text-xs">
-        <div className={`p-3 rounded-lg border ${
-          status?.blocked
-            ? 'bg-red-50 border-red-200 text-red-900'
-            : status?.has_override
-            ? 'bg-amber-50 border-amber-200 text-amber-900'
-            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
-        }`}>
-          <div className="font-bold flex items-center gap-1.5 text-sm">
-            {status?.blocked ? <FiLock className="text-red-600" /> : <FiUnlock className="text-emerald-600" />}
-            {status?.blocked ? 'Material Supply Blocked (60+ Days Overdue)' :
-             status?.has_override ? 'Material Supply Authorized (Head Exception Override Active)' :
-             'Material Supply Open (Payment Health OK)'}
-          </div>
-          <p className="mt-1 leading-relaxed">
-            {status?.blocked ? status.reason :
-             status?.has_override ? `Overridden by ${status.overridden_by_name}: "${status.override_reason}"` :
-             `Client is within payment terms. Oldest overdue: ${status?.max_days || 0} days.`}
-          </p>
-        </div>
+  const displayName = status?.site_name || site?.name || site?.client_name || 'Site';
 
-        {status?.blocked && (
-          <div className="space-y-2 border-t pt-3">
-            <label className="font-semibold text-gray-700 block">
-              Department Head Exception Justification <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              className="textarea text-xs w-full"
-              rows={3}
-              placeholder="State legitimate project reason why new material supply should continue despite >60 days overdue (e.g. Critical handover deadline, client promise letter attached, etc.)"
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              required
-            />
-            <p className="text-[10px] text-gray-400">
-              Only authorized by Department Head (Nitin Jain) or Admin. Action is permanently logged in the audit trail.
+  return (
+    <Modal isOpen onClose={onClose} title={`SOP-16.5 · Material Supply Stop Status (${displayName})`}>
+      {loading ? (
+        <div className="py-8 text-center text-gray-400 text-xs">Checking material supply block status…</div>
+      ) : (
+        <form onSubmit={submitOverride} className="space-y-4 text-xs">
+          <div className={`p-3 rounded-lg border ${
+            status?.blocked
+              ? 'bg-red-50 border-red-200 text-red-900'
+              : status?.has_override
+              ? 'bg-amber-50 border-amber-200 text-amber-900'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}>
+            <div className="font-bold flex items-center gap-1.5 text-sm">
+              {status?.blocked ? <FiLock className="text-red-600" /> : <FiUnlock className="text-emerald-600" />}
+              {status?.blocked ? 'Material Supply Blocked (60+ Days Overdue)' :
+               status?.has_override ? 'Material Supply Authorized (Head Exception Override Active)' :
+               'Material Supply Open (Payment Health OK)'}
+            </div>
+            <p className="mt-1 leading-relaxed">
+              {status?.blocked ? status.reason :
+               status?.has_override ? `Overridden by ${status.overridden_by_name}: "${status.override_reason}"` :
+               `Client is within payment terms. Oldest overdue: ${status?.max_days || 0} days.`}
             </p>
           </div>
-        )}
 
-        <div className="flex justify-end gap-2 pt-2 border-t">
-          <button type="button" onClick={onClose} className="btn btn-secondary text-xs">Close</button>
           {status?.blocked && (
-            <button type="submit" disabled={busy} className="btn btn-primary text-xs flex items-center gap-1.5">
-              <FiCheckCircle size={13} /> {busy ? 'Authorizing…' : 'Grant Head Exception Override'}
-            </button>
+            <div className="space-y-2 border-t pt-3">
+              <label className="font-semibold text-gray-700 block">
+                Department Head Exception Justification <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                className="textarea text-xs w-full"
+                rows={3}
+                placeholder="State legitimate project reason why new material supply should continue despite >60 days overdue (e.g. Critical handover deadline, client promise letter attached, etc.)"
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+                required
+              />
+              <p className="text-[10px] text-gray-400">
+                Only authorized by Department Head (Nitin Jain) or Admin. Action is permanently logged in the audit trail.
+              </p>
+            </div>
           )}
-        </div>
-      </form>
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button type="button" onClick={onClose} className="btn btn-secondary text-xs">Close</button>
+            {status?.blocked && (
+              <button type="submit" disabled={busy} className="btn btn-primary text-xs flex items-center gap-1.5">
+                <FiCheckCircle size={13} /> {busy ? 'Authorizing…' : 'Grant Head Exception Override'}
+              </button>
+            )}
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }
