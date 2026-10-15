@@ -553,6 +553,8 @@ export default function Leads() {
 
       {tab === 'responsible' && <ResponsibilityTab module="sales_funnel" title="Sales Funnel" />}
 
+      {dashboard?.excludedTestCount > 0 && <p className="text-sm text-gray-600" role="status">Dashboard metrics and stage counts exclude {dashboard.excludedTestCount} verified website delivery tests. Lead lists retain those records for audit.</p>}
+
       {/* The page must never be a silent blank. If the dashboard fetch failed,
           say so and offer a retry instead of rendering nothing (TSK-0397). */}
       {tab === 'dashboard' && dashLoaded && !dashboard && (
@@ -1446,7 +1448,7 @@ export default function Leads() {
             <div>
               <label className="label">State</label>
               <SearchableSelect
-                options={STATES.map(s => ({ value: s, label: s }))}
+                options={[...new Set([...STATES, ...(form.state ? [form.state] : [])])].map(s => ({ value: s, label: s }))}
                 value={form.state || ''} valueKey="value" displayKey="label"
                 placeholder="Pick state"
                 onChange={(opt) => { F('state', opt?.value || ''); F('district', ''); }}
@@ -1455,7 +1457,7 @@ export default function Leads() {
             <div>
               <label className="label">District</label>
               <SearchableSelect
-                options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
+                options={[...new Set([...(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []), ...(form.district ? [form.district] : [])])].map(d => ({ value: d, label: d }))}
                 value={form.district || ''} valueKey="value" displayKey="label"
                 placeholder={form.state ? 'Pick district' : 'Pick a state first'}
                 onChange={(opt) => F('district', opt?.value || '')}
@@ -1515,6 +1517,7 @@ export default function Leads() {
                   the right team picks it up. */}
               <select className="select" required value={form.category || ''} onChange={e => F('category', e.target.value)}>
                 <option value="">Select Category</option>
+                {form.category && !CATEGORIES.includes(form.category) && <option value={form.category}>{form.category} (existing value)</option>}
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
