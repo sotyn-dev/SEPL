@@ -167,12 +167,12 @@ router.put('/raci', (req, res) => {
   res.json({ message: 'SOP-16 RACI roles updated successfully', ...getCollectionRaci(db) });
 });
 
-// Helper to resolve a site from either `sites` table ID or `business_book` ID
+// Helper to resolve a site from either `sites` table ID, `business_book` ID, or name string
 function resolveSite(db, siteId) {
   if (!siteId) return null;
   const numId = Number(siteId);
-  let site = db.prepare('SELECT id, name, client_name FROM sites WHERE id=?').get(numId);
-  if (!site) {
+  let site = (!isNaN(numId) && numId > 0) ? db.prepare('SELECT id, name, client_name FROM sites WHERE id=?').get(numId) : null;
+  if (!site && !isNaN(numId) && numId > 0) {
     // Check if it's a business_book ID
     const bb = db.prepare('SELECT id, company_name, project_name, client_name FROM business_book WHERE id=?').get(numId);
     if (bb) {
@@ -183,6 +183,30 @@ function resolveSite(db, siteId) {
         const ins = db.prepare('INSERT INTO sites (name, client_name, business_book_id) VALUES (?,?,?)')
           .run(matchName, bb.client_name || matchName, bb.id);
         site = { id: ins.lastInsertRowid, name: matchName, client_name: bb.client_name || matchName };
+      }
+    }
+  }
+  // Fallback: match by name or client_name string
+  if (!site && typeof siteId === 'string' && siteId.trim()) {
+    const trimmed = siteId.trim();
+    site = db.prepare('SELECT id, name, client_name FROM sites WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) OR LOWER(TRIM(client_name))=LOWER(TRIM(?)) LIMIT 1').get(trimmed, trimmed);
+    if (!site) {
+      const bb = db.prepare('SELECT id, company_name, project_name, client_name FROM business_book WHERE LOWER(TRIM(company_name))=LOWER(TRIM(?)) OR LOWER(TRIM(project_name))=LOWER(TRIM(?)) OR LOWER(TRIM(client_name))=LOWER(TRIM(?)) LIMIT 1').get(trimmed, trimmed, trimmed);
+      if (bb) {
+        const matchName = bb.project_name || bb.company_name;
+        site = db.prepare('SELECT id, name, client_name FROM sites WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) OR business_book_id=?').get(matchName, bb.id);
+        if (!site) {
+          const ins = db.prepare('INSERT INTO sites (name, client_name, business_book_id) VALUES (?,?,?)')
+            .run(matchName, bb.client_name || matchName, bb.id);
+          site = { id: ins.lastInsertRowid, name: matchName, client_name: bb.client_name || matchName };
+        }
+      } else {
+        // Look up matching receivables to inherit site_name / client_name
+        const rec = db.prepare('SELECT site_name, client_name FROM receivables WHERE LOWER(TRIM(site_name))=LOWER(TRIM(?)) OR LOWER(TRIM(client_name))=LOWER(TRIM(?)) LIMIT 1').get(trimmed, trimmed);
+        const nameToUse = rec?.site_name || rec?.client_name || trimmed;
+        const clientToUse = rec?.client_name || trimmed;
+        const ins = db.prepare('INSERT INTO sites (name, client_name) VALUES (?,?)').run(nameToUse, clientToUse);
+        site = { id: ins.lastInsertRowid, name: nameToUse, client_name: clientToUse };
       }
     }
   }
@@ -424,15 +448,16 @@ function checkSiteMaterialBlock(db, siteId) {
   const overdueRow = db.prepare(`
     SELECT MAX(ageing_days) as max_days, SUM(outstanding_amount) as total_overdue
     FROM receivables
-    WHERE (site_id = ? OR LOWER(TRIM(site_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?)))
+    WHERE (site_id = ? OR LOWER(TRIM(site_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?))
+           OR LOWER(TRIM(site_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(client_name)) = LOWER(TRIM(?)))
       AND outstanding_amount > 0
-  `).get(resolvedId, site.name, site.client_name);
+  `).get(resolvedId, site.name || '', site.client_name || '', site.client_name || '', site.name || '');
 
   const maxDays = Number(overdueRow?.max_days || 0);
   const totalOverdue = Number(overdueRow?.total_overdue || 0);
 
   if (maxDays < 60) {
-    return { blocked: false, max_days: maxDays, total_overdue: totalOverdue };
+    return { blocked: false, site_id: resolvedId, site_name: site.name, client_name: site.client_name, max_days: maxDays, total_overdue: totalOverdue };
   }
 
   // Check if active override exists
@@ -440,6 +465,9 @@ function checkSiteMaterialBlock(db, siteId) {
   if (blockRow?.has_override === 1) {
     return {
       blocked: false,
+      site_id: resolvedId,
+      site_name: site.name,
+      client_name: site.client_name,
       max_days: maxDays,
       total_overdue: totalOverdue,
       has_override: true,
@@ -451,6 +479,9 @@ function checkSiteMaterialBlock(db, siteId) {
 
   return {
     blocked: true,
+    site_id: resolvedId,
+    site_name: site.name,
+    client_name: site.client_name,
     max_days: maxDays,
     total_overdue: totalOverdue,
     has_override: false,
@@ -579,5 +610,6 @@ router.get('/receipt-by-collection/:collection_id', (req, res) => {
 module.exports = {
   router,
   getCollectionRaci,
-  checkSiteMaterialBlock
+  checkSiteMaterialBlock,
+  resolveSite
 };

@@ -1655,8 +1655,8 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
 
   // SOP-16.5: 60-Day Overdue Material Supply Stop Guard
   try {
-    const { checkSiteMaterialBlock } = require('./collectionEngine');
-    const siteObj = db.prepare('SELECT id FROM sites WHERE name=?').get(site_name);
+    const { checkSiteMaterialBlock, resolveSite } = require('./collectionEngine');
+    const siteObj = resolveSite(db, site_name);
     if (siteObj?.id) {
       const blockCheck = checkSiteMaterialBlock(db, siteObj.id);
       if (blockCheck.blocked) {

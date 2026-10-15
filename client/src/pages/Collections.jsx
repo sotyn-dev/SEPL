@@ -90,7 +90,8 @@ export default function Collections() {
       if (sites.length > 0) setSelectedWorkflowSite(sites[0]);
       else return toast.error('No sites available');
     } else {
-      setSelectedWorkflowSite(siteObj);
+      const siteId = siteObj.id || siteObj.name || siteObj.client_name;
+      setSelectedWorkflowSite({ ...siteObj, id: siteId });
     }
     setSupplyBlockModalOpen(true);
   };
@@ -519,7 +520,7 @@ export default function Collections() {
                         {r.ageing_days > 60 && (
                           <button
                             type="button"
-                            onClick={() => openSupplyBlockForSite({ id: r.site_id, name: r.site_name || r.client_name, client_name: r.client_name })}
+                            onClick={() => openSupplyBlockForSite({ id: r.site_id || r.site_name || r.client_name, name: r.site_name || r.client_name, client_name: r.client_name })}
                             className="block mt-1 text-[9px] font-bold bg-rose-600 hover:bg-rose-700 text-white px-1.5 py-0.5 rounded shadow-sm text-center"
                             title="SOP-16.5: 60-Day Supply Stop Active. Click to view or override."
                           >
