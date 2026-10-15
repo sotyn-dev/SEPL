@@ -138,11 +138,15 @@ export default function Attendance() {
   const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
   const [userDateFrom, setUserDateFrom] = useState(firstOfMonth);
   const [userDateTo, setUserDateTo] = useState(today);
-  // "My History" tab — every employee can review their OWN past attendance
-  // over a start→end date range (mam 2026-06-12).
+  // "My History" tab — every employee can review their OWN complete past attendance
+  // roster (punches, leaves, week-offs, company holidays, absences) over a date range.
   const [myHistFrom, setMyHistFrom] = useState(firstOfMonth);
   const [myHistTo, setMyHistTo] = useState(today);
+  const [myHistoryMuster, setMyHistoryMuster] = useState(null);
   const [myHistory, setMyHistory] = useState([]);
+  const [myHistFilter, setMyHistFilter] = useState('all');
+  const [myHistLoading, setMyHistLoading] = useState(false);
+  const [myHistSortDesc, setMyHistSortDesc] = useState(true);
   // Monthly Attendance Grid (mam 2026-06-13) — mark present/absent/half/leave
   // for everyone in one screen so no-punch days don't drag payroll to absent.
   const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
@@ -261,13 +265,23 @@ export default function Attendance() {
     }
   };
 
-  // Load the logged-in user's own attendance when the My History tab /
+  // Load the logged-in user's own complete attendance muster when the My History tab /
   // its date range changes. Self-service — works for every employee.
   useEffect(() => {
     if (tab !== 'myhistory') return;
+    setMyHistLoading(true);
     api.get(`/attendance/my-history?from=${myHistFrom}&to=${myHistTo}`)
-      .then(r => setMyHistory(r.data || []))
-      .catch(() => setMyHistory([]));
+      .then(r => {
+        const data = r.data || {};
+        setMyHistoryMuster(data);
+        const days = Array.isArray(data.days) ? data.days : (Array.isArray(data) ? data : []);
+        setMyHistory(days);
+      })
+      .catch(() => {
+        setMyHistoryMuster(null);
+        setMyHistory([]);
+      })
+      .finally(() => setMyHistLoading(false));
   }, [tab, myHistFrom, myHistTo]);
 
   useEffect(() => { load(); }, [load]);
@@ -1267,109 +1281,376 @@ export default function Attendance() {
       )}
 
       {/* BY USER TAB — pick a person, see their in/out/hours over a range */}
-      {/* MY HISTORY — self-service: every employee can review their OWN past
-          attendance over a start→end date range (mam 2026-06-12). */}
-      {tab === 'myhistory' && (
-        <div className="space-y-4">
-          <div className="card p-3">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-              <div>
-                <label className="label">From</label>
-                <input type="date" className="input" value={myHistFrom} max={myHistTo} onChange={e => setMyHistFrom(e.target.value)} />
+      {/* MY HISTORY — self-service: every employee can review their OWN complete past
+          attendance roster (punches, leaves, week-offs, holidays, absences) over date range. */}
+      {tab === 'myhistory' && (() => {
+        const histSummary = myHistoryMuster?.summary || {
+          total_days: myHistory.length,
+          working_days: myHistory.filter(r => !r.is_sunday && r.status !== 'holiday').length,
+          present: myHistory.filter(r => r.status === 'present' || r.status === 'late' || (r.is_sunday && r.punch_in_time)).length,
+          late: myHistory.filter(r => r.is_late || r.status === 'late').length,
+          absent: myHistory.filter(r => r.status === 'absent').length,
+          half_day: myHistory.filter(r => r.status === 'half_day').length,
+          on_leave: myHistory.filter(r => r.status === 'on_leave').length,
+          week_offs: myHistory.filter(r => r.status === 'weekend').length,
+          holidays: myHistory.filter(r => r.status === 'holiday').length,
+          total_hours: +(myHistory.reduce((s, r) => s + (+r.total_hours || 0), 0)).toFixed(1),
+          avg_hours: 0,
+          attendance_rate: 0,
+          missed_punch_out: myHistory.filter(r => r.missed_punch_out).length,
+        };
+
+        const filteredMyHistory = myHistory.filter(d => {
+          if (myHistFilter === 'all') return true;
+          if (myHistFilter === 'present') return d.status === 'present' || d.status === 'late' || (d.is_sunday && d.punch_in_time);
+          if (myHistFilter === 'late') return d.is_late || d.status === 'late';
+          if (myHistFilter === 'absent') return d.status === 'absent';
+          if (myHistFilter === 'half_day') return d.status === 'half_day';
+          if (myHistFilter === 'leave') return d.status === 'on_leave';
+          if (myHistFilter === 'weekend') return d.status === 'weekend';
+          if (myHistFilter === 'holiday') return d.status === 'holiday';
+          return true;
+        });
+
+        const displayedHistory = [...filteredMyHistory].sort((a, b) => {
+          return myHistSortDesc
+            ? (b.date || '').localeCompare(a.date || '')
+            : (a.date || '').localeCompare(b.date || '');
+        });
+
+        return (
+          <div className="space-y-4">
+            {/* Range Controls & Quick Filters */}
+            <div className="card p-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                <div>
+                  <label className="label">From Date</label>
+                  <input type="date" className="input" value={myHistFrom} max={myHistTo} onChange={e => setMyHistFrom(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">To Date</label>
+                  <input type="date" className="input" value={myHistTo} max={today} onChange={e => setMyHistTo(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Quick Range</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary text-xs flex-1"
+                      onClick={() => { setMyHistFrom(firstOfMonth); setMyHistTo(today); }}
+                    >
+                      This Month
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary text-xs flex-1"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - 29);
+                        setMyHistFrom(d.toISOString().split('T')[0]);
+                        setMyHistTo(today);
+                      }}
+                    >
+                      Last 30 Days
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="label">&nbsp;</label>
+                  <button
+                    type="button"
+                    disabled={myHistory.length === 0}
+                    className="btn btn-secondary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-40"
+                    onClick={() => exportCsv(
+                      `my-attendance-${myHistFrom}_to_${myHistTo}`,
+                      ['Date', 'Day', 'Status', 'In Time', 'Out Time', 'Hours', 'Site / Description', 'Details'],
+                      displayedHistory.map(r => [
+                        r.date,
+                        r.day_name || '',
+                        r.status === 'on_leave' ? `Leave (${r.leave?.leave_type || 'Approved'})` :
+                        r.status === 'weekend' ? 'Week-Off' :
+                        r.status === 'holiday' ? `Holiday (${r.holiday_name || 'Public'})` :
+                        (r.status || '').toUpperCase(),
+                        r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                        r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : (r.missed_punch_out ? 'Missed Out' : ''),
+                        r.total_hours != null ? r.total_hours : '',
+                        r.site_name || (r.leave ? `Leave: ${r.leave.leave_type}` : r.holiday_name ? `Holiday: ${r.holiday_name}` : r.is_sunday ? 'Weekly Off' : (r.status === 'absent' ? 'Absent' : '')),
+                        r.holiday_name || (r.leave?.reason || r.remarks || '')
+                      ])
+                    )}
+                  >
+                    <FiDownload /> Export CSV
+                  </button>
+                </div>
               </div>
-              <div>
-                <label className="label">To</label>
-                <input type="date" className="input" value={myHistTo} max={today} onChange={e => setMyHistTo(e.target.value)} />
+            </div>
+
+            {/* Complete Executive KPI Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2">
+              <div className="card p-2.5 border-l-4 border-gray-400">
+                <div className="text-[10px] text-gray-500 uppercase font-semibold">Total Days</div>
+                <div className="text-xl font-bold text-gray-800">{histSummary.total_days}</div>
+                <div className="text-[10px] text-gray-400">{histSummary.working_days} working</div>
               </div>
-              <div>
-                <label className="label">&nbsp;</label>
-                <button type="button" className="btn btn-secondary text-sm w-full" onClick={() => { setMyHistFrom(firstOfMonth); setMyHistTo(today); }}>This month</button>
+              <div className="card p-2.5 border-l-4 border-emerald-500">
+                <div className="text-[10px] text-emerald-600 uppercase font-semibold">Present</div>
+                <div className="text-xl font-bold text-emerald-600">{histSummary.present}</div>
+                <div className="text-[10px] text-emerald-600 font-medium">{histSummary.attendance_rate}% rate</div>
               </div>
-              <div>
-                <label className="label">&nbsp;</label>
-                <button type="button" disabled={myHistory.length === 0} className="btn btn-secondary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-40"
-                  onClick={() => exportCsv(`my-attendance-${myHistFrom}_to_${myHistTo}`,
-                    ['Date','In','Out','Hours','Site','Status'],
-                    myHistory.map(r => [
-                      r.date,
-                      r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
-                      r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
-                      r.total_hours || 0, r.site_name || '', r.status || '',
-                    ]))}>
-                  <FiDownload /> Export
+              <div className="card p-2.5 border-l-4 border-amber-500">
+                <div className="text-[10px] text-amber-600 uppercase font-semibold">Late Marks</div>
+                <div className="text-xl font-bold text-amber-600">{histSummary.late}</div>
+                <div className="text-[10px] text-gray-400">&gt; cut-off time</div>
+              </div>
+              <div className={`card p-2.5 border-l-4 ${histSummary.absent > 0 ? 'border-red-500 bg-red-50/20' : 'border-gray-300'}`}>
+                <div className="text-[10px] text-red-600 uppercase font-semibold">Absent</div>
+                <div className="text-xl font-bold text-red-600">{histSummary.absent}</div>
+                <div className="text-[10px] text-red-500 font-medium">{histSummary.absent > 0 ? 'No punch / leave' : 'None'}</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-orange-500">
+                <div className="text-[10px] text-orange-600 uppercase font-semibold">Half Day</div>
+                <div className="text-xl font-bold text-orange-600">{histSummary.half_day}</div>
+                <div className="text-[10px] text-gray-400">0.5 day mark</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-purple-500">
+                <div className="text-[10px] text-purple-600 uppercase font-semibold">Leave</div>
+                <div className="text-xl font-bold text-purple-600">{histSummary.on_leave}</div>
+                <div className="text-[10px] text-gray-400">Approved leaves</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-blue-500">
+                <div className="text-[10px] text-blue-600 uppercase font-semibold">Week-Offs</div>
+                <div className="text-xl font-bold text-blue-600">{histSummary.week_offs}</div>
+                <div className="text-[10px] text-gray-400">Sundays / Offs</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-cyan-500">
+                <div className="text-[10px] text-cyan-600 uppercase font-semibold">Holidays</div>
+                <div className="text-xl font-bold text-cyan-600">{histSummary.holidays || 0}</div>
+                <div className="text-[10px] text-gray-400">Declared Off</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-teal-500">
+                <div className="text-[10px] text-teal-600 uppercase font-semibold">Total Hours</div>
+                <div className="text-xl font-bold text-teal-700">{histSummary.total_hours}h</div>
+                <div className="text-[10px] text-gray-400">{histSummary.avg_hours}h / day avg</div>
+              </div>
+            </div>
+
+            {/* Helpful Alerts / Action Notices */}
+            {histSummary.absent > 0 && (
+              <div className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FiAlertTriangle className="text-red-600 shrink-0" size={16} />
+                  <span>
+                    You have <b>{histSummary.absent}</b> unmarked absent day(s) in this date range. If you were on leave or away on official duty, please apply for leave or regularisation.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTab('leaves')}
+                  className="btn btn-secondary text-xs py-1 px-3 border-red-300 text-red-700 hover:bg-red-100 whitespace-nowrap"
+                >
+                  Apply Leave
                 </button>
               </div>
-            </div>
-          </div>
-
-          {/* Summary cards */}
-          {(() => {
-            const total = myHistory.length;
-            const present = myHistory.filter(r => r.punch_in_time).length;
-            const late = myHistory.filter(r => r.status === 'late').length;
-            const halfDay = myHistory.filter(r => r.status === 'half_day').length;
-            const totalHours = myHistory.reduce((s, r) => s + (r.total_hours || 0), 0);
-            const avgHours = present > 0 ? (totalHours / present).toFixed(1) : '0';
-            return (
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Records</div><div className="text-2xl font-bold">{total}</div></div>
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Present</div><div className="text-2xl font-bold text-emerald-600">{present}</div></div>
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Late</div><div className="text-2xl font-bold text-amber-600">{late}</div></div>
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Half Day</div><div className="text-2xl font-bold text-orange-600">{halfDay}</div></div>
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Total Hours</div><div className="text-2xl font-bold">{totalHours.toFixed(1)}</div></div>
-                <div className="card p-3"><div className="text-[11px] text-gray-500">Avg Hours / day</div><div className="text-2xl font-bold">{avgHours}</div></div>
+            )}
+            {histSummary.missed_punch_out > 0 && (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-center gap-2">
+                <FiAlertTriangle className="text-amber-600 shrink-0" size={16} />
+                <span>
+                  <b>{histSummary.missed_punch_out}</b> day(s) have a punch-in recorded without a punch-out. Please contact your manager or HR to regularize your shift timing.
+                </span>
               </div>
-            );
-          })()}
+            )}
 
-          {/* Detail table */}
-          <div className="card p-0 overflow-x-auto">
-            <div className="p-3 border-b"><h4 className="font-semibold text-sm">My Attendance · {myHistFrom} → {myHistTo}</h4></div>
-            <div className="overflow-x-auto">
-              <NumberedTable className="text-sm w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-2 py-2 text-left">Date</th>
-                    <th className="px-2 py-2">In</th>
-                    <th className="px-2 py-2">Out</th>
-                    <th className="px-2 py-2">Hours</th>
-                    <th className="px-2 py-2 text-left">Site</th>
-                    <th className="px-2 py-2">Status</th>
-                    <th className="px-2 py-2">Photos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {myHistory.map(r => (
-                    <tr key={r.id} className="border-b">
-                      <td className="px-2 py-2 font-medium">{r.date}</td>
-                      <td className="px-2 py-2 text-center text-xs text-emerald-600">
-                        {fmtT(r.punch_in_time)}
-                        {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
-                      </td>
-                      <td className="px-2 py-2 text-center text-xs text-red-600">
-                        {fmtT(r.punch_out_time)}
-                        {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
-                      </td>
-                      <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
-                      <td className="px-2 py-2 text-xs">{r.site_name || '-'}</td>
-                      <td className="px-2 py-2 text-center"><StatusBadge status={r.status} /></td>
-                      <td className="px-2 py-2">
-                        <div className="flex gap-1 justify-center">
-                          {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch In" />}
-                          {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch Out" />}
-                        </div>
-                      </td>
-                    </tr>
+            {/* Complete Daily Attendance Roster Table */}
+            <div className="card p-0 overflow-x-auto">
+              <div className="flex flex-wrap items-center justify-between p-3 border-b gap-2 bg-gray-50/70">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs font-semibold text-gray-600 mr-1">Filter:</span>
+                  {[
+                    { id: 'all', label: `All (${histSummary.total_days})` },
+                    { id: 'present', label: `Present (${histSummary.present})` },
+                    { id: 'late', label: `Late (${histSummary.late})` },
+                    { id: 'absent', label: `Absent (${histSummary.absent})`, alert: histSummary.absent > 0 },
+                    { id: 'half_day', label: `Half Day (${histSummary.half_day})` },
+                    { id: 'leave', label: `Leave (${histSummary.on_leave})` },
+                    { id: 'weekend', label: `Week-Off (${histSummary.week_offs})` },
+                    { id: 'holiday', label: `Holiday (${histSummary.holidays || 0})` },
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setMyHistFilter(f.id)}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition ${
+                        myHistFilter === f.id
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : f.alert
+                          ? 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'
+                          : 'bg-white border text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
                   ))}
-                  {myHistory.length === 0 && (
-                    <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
-                  )}
-                </tbody>
-              </NumberedTable>
+                </div>
+                <span className="text-[11px] text-gray-400">
+                  Showing {displayedHistory.length} of {myHistory.length} days
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <NumberedTable className="text-sm w-full">
+                  <thead className="bg-gray-50 text-xs">
+                    <tr>
+                      <th
+                        className="px-2.5 py-2 text-left cursor-pointer hover:bg-gray-100 select-none"
+                        onClick={() => setMyHistSortDesc(!myHistSortDesc)}
+                        title="Click to toggle date sort order"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Date</span>
+                          <span className="text-[10px] text-gray-500">{myHistSortDesc ? '▼ (Newest)' : '▲ (Oldest)'}</span>
+                        </div>
+                      </th>
+                      <th className="px-2 py-2 text-center">In</th>
+                      <th className="px-2 py-2 text-center">Out</th>
+                      <th className="px-2 py-2 text-center">Hours</th>
+                      <th className="px-2 py-2 text-left">Site / Details</th>
+                      <th className="px-2 py-2 text-center">Status</th>
+                      <th className="px-2 py-2 text-center">Photos / Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myHistLoading && (
+                      <tr><td colSpan="7" className="text-center py-8 text-gray-500 text-sm">Loading attendance history…</td></tr>
+                    )}
+                    {!myHistLoading && displayedHistory.map(r => {
+                      const isSun = r.is_sunday;
+                      const isAbs = r.status === 'absent';
+                      const isFut = r.status === 'future';
+                      const isHol = r.status === 'holiday';
+                      const isLeave = r.status === 'on_leave';
+                      return (
+                        <tr
+                          key={r.date}
+                          className={`border-b transition hover:bg-gray-50/80 ${
+                            isAbs ? 'bg-red-50/30' :
+                            isHol ? 'bg-cyan-50/20' :
+                            isSun ? 'bg-blue-50/20' :
+                            isLeave ? 'bg-purple-50/20' :
+                            isFut ? 'opacity-60 bg-gray-50/40' : ''
+                          }`}
+                        >
+                          <td className="px-2.5 py-2 font-medium">
+                            <div className="flex items-center gap-1.5">
+                              <span>{r.date}</span>
+                              <span className={`text-[10px] font-semibold px-1 rounded ${isSun ? 'bg-red-100 text-red-700' : isHol ? 'bg-cyan-100 text-cyan-700' : 'bg-gray-100 text-gray-600'}`}>
+                                {r.day_name || (new Date(r.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' }))}
+                              </span>
+                              {r.admin_marked && (
+                                <span className="text-[9px] bg-blue-100 text-blue-700 px-1 rounded" title="Admin marked">ADM</span>
+                              )}
+                              {r.regularized_at && (
+                                <span
+                                  className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 cursor-help"
+                                  title={
+                                    r.regularized_by_name
+                                      ? `Regularized by ${r.regularized_by_name}${r.remarks ? ` — ${r.remarks}` : ''}`
+                                      : (r.remarks ? `Regularized: ${r.remarks}` : 'Regularized with approval')
+                                  }
+                                >
+                                  REG
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-center text-xs">
+                            {r.punch_in_time ? (
+                              <span className="text-emerald-700 font-medium">
+                                {fmtT(r.punch_in_time)}
+                                {r.auto_punched_in && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-center text-xs">
+                            {r.punch_out_time ? (
+                              <span className="text-red-700 font-medium">
+                                {fmtT(r.punch_out_time)}
+                                {r.auto_punched_out && <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                              </span>
+                            ) : r.missed_punch_out ? (
+                              <span className="text-[11px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-medium" title="Punch-in recorded, but punch-out was missed">
+                                Missed Out
+                              </span>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-center text-xs font-semibold">
+                            {r.total_hours != null ? `${r.total_hours}h` : '—'}
+                          </td>
+                          <td className="px-2 py-2 text-xs text-gray-700">
+                            {r.site_name || (r.leave ? `Leave: ${r.leave.leave_type}${r.leave.reason ? ` (${r.leave.reason})` : ''}` : isHol ? `Holiday: ${r.holiday_name || 'Declared'}` : isSun ? 'Weekly Off' : isAbs ? 'Unmarked Absence' : '—')}
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            {r.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
+                            {r.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({r.late_minutes ? `${r.late_minutes}m` : 'Late'})</span>}
+                            {r.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
+                            {r.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({r.leave?.leave_type || 'Approved'})</span>}
+                            {r.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
+                            {r.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={r.holiday_name}>Holiday ({r.holiday_name || 'Declared'})</span>}
+                            {r.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
+                            {r.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex gap-1 justify-center items-center">
+                              {r.punch_in_photo && (
+                                <img
+                                  src={r.punch_in_photo}
+                                  alt="In"
+                                  onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })}
+                                  className="w-7 h-7 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
+                                  title="Punch In Photo"
+                                />
+                              )}
+                              {r.punch_out_photo && (
+                                <img
+                                  src={r.punch_out_photo}
+                                  alt="Out"
+                                  onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })}
+                                  className="w-7 h-7 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
+                                  title="Punch Out Photo"
+                                />
+                              )}
+                              {isAbs && (
+                                <button
+                                  type="button"
+                                  onClick={() => setTab('leaves')}
+                                  className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-0.5 font-medium"
+                                  title="Apply for leave on this date"
+                                >
+                                  <FiCalendar size={11} /> Apply Leave
+                                </button>
+                              )}
+                              {!r.punch_in_photo && !r.punch_out_photo && !isAbs && (
+                                <span className="text-gray-300 text-xs">—</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!myHistLoading && displayedHistory.length === 0 && (
+                      <tr><td colSpan="7" className="text-center py-6 text-gray-400 text-sm">No records match the selected filter</td></tr>
+                    )}
+                  </tbody>
+                </NumberedTable>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {tab === 'byuser' && seeAll && (
         <div className="space-y-4">
@@ -1482,7 +1763,7 @@ export default function Attendance() {
               </div>
 
               {/* Complete Executive KPI Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2">
                 <div className="card p-2.5 border-l-4 border-gray-400">
                   <div className="text-[10px] text-gray-500 uppercase font-semibold">Total Days</div>
                   <div className="text-xl font-bold text-gray-800">{userMuster.summary.total_days}</div>
@@ -1518,6 +1799,11 @@ export default function Attendance() {
                   <div className="text-xl font-bold text-blue-600">{userMuster.summary.week_offs}</div>
                   <div className="text-[10px] text-gray-400">Sundays / Offs</div>
                 </div>
+                <div className="card p-2.5 border-l-4 border-cyan-500">
+                  <div className="text-[10px] text-cyan-600 uppercase font-semibold">Holidays</div>
+                  <div className="text-xl font-bold text-cyan-600">{userMuster.summary.holidays || 0}</div>
+                  <div className="text-[10px] text-gray-400">Declared Off</div>
+                </div>
                 <div className="card p-2.5 border-l-4 border-teal-500">
                   <div className="text-[10px] text-teal-600 uppercase font-semibold">Total Hours</div>
                   <div className="text-xl font-bold text-teal-700">{userMuster.summary.total_hours}h</div>
@@ -1549,6 +1835,7 @@ export default function Attendance() {
                       { id: 'absent', label: `Absent (${userMuster.summary.absent})`, alert: userMuster.summary.absent > 0 },
                       { id: 'leave', label: `Leave (${userMuster.summary.on_leave})` },
                       { id: 'weekend', label: `Week-Off (${userMuster.summary.week_offs})` },
+                      { id: 'holiday', label: `Holiday (${userMuster.summary.holidays || 0})` },
                     ].map(f => (
                       <button
                         key={f.id}
@@ -1568,6 +1855,7 @@ export default function Attendance() {
                       if (musterFilter === 'absent') return d.status === 'absent';
                       if (musterFilter === 'leave') return d.status === 'on_leave';
                       if (musterFilter === 'weekend') return d.status === 'weekend';
+                      if (musterFilter === 'holiday') return d.status === 'holiday';
                       return true;
                     }).length} of {userMuster.days.length} days
                   </span>
@@ -1596,6 +1884,7 @@ export default function Attendance() {
                           if (musterFilter === 'absent') return d.status === 'absent';
                           if (musterFilter === 'leave') return d.status === 'on_leave';
                           if (musterFilter === 'weekend') return d.status === 'weekend';
+                          if (musterFilter === 'holiday') return d.status === 'holiday';
                           return true;
                         })
                         .map(d => {
@@ -1607,7 +1896,7 @@ export default function Attendance() {
                               <td className="px-2.5 py-2 font-medium">
                                 <div className="flex items-center gap-1.5">
                                   <span>{d.date}</span>
-                                  <span className={`text-[10px] font-semibold px-1 rounded ${isSun ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
+                                  <span className={`text-[10px] font-semibold px-1 rounded ${isSun ? 'bg-red-100 text-red-700' : d.is_holiday ? 'bg-cyan-100 text-cyan-700' : 'bg-gray-100 text-gray-600'}`}>
                                     {d.day_name}
                                   </span>
                                   {d.admin_marked && (
@@ -1643,7 +1932,7 @@ export default function Attendance() {
                                 {d.total_hours != null ? `${d.total_hours}h` : '—'}
                               </td>
                               <td className="px-2 py-2 text-xs text-gray-700">
-                                {d.site_name || (d.leave ? `Leave: ${d.leave.leave_type}` : isSun ? 'Weekly Off' : '—')}
+                                {d.site_name || (d.leave ? `Leave: ${d.leave.leave_type}` : d.holiday_name ? `Holiday: ${d.holiday_name}` : isSun ? 'Weekly Off' : '—')}
                               </td>
                               <td className="px-2 py-2 text-center">
                                 {d.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
@@ -1651,6 +1940,7 @@ export default function Attendance() {
                                 {d.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
                                 {d.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({d.leave?.leave_type || 'Approved'})</span>}
                                 {d.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
+                                {d.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={d.holiday_name}>Holiday ({d.holiday_name || 'Declared'})</span>}
                                 {d.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
                                 {d.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
                                 {d.regularized_at && (

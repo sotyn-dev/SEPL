@@ -78,6 +78,18 @@ function getChatDb() {
       UNIQUE(user_id, target_type, target_id)
     );
     CREATE INDEX IF NOT EXISTS idx_cfs_user ON chat_forward_stats(user_id, forward_count DESC);
+    CREATE TABLE IF NOT EXISTS chat_message_reactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      user_name TEXT,
+      emoji TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cmr_msg ON chat_message_reactions(message_id);
+    CREATE INDEX IF NOT EXISTS idx_cmr_group ON chat_message_reactions(group_id);
   `);
   // is_dm marks a 1-on-1 direct message (mam 2026-06-19) — same tables as a
   // group, but exactly 2 members and shown as the other person's name.

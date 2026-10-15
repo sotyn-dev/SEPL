@@ -514,6 +514,22 @@ router.get('/:groupId', (req, res) => {
   const strip = (m) => m.deleted_at ? { ...m, body: null, attachment_url: null, attachment_name: null } : m;
   messages = messages.map(strip);
   quotedParents = quotedParents.map(strip);
+
+  // Attach emoji reactions to messages
+  const msgIds = messages.map(m => m.id);
+  const reactionsByMsg = {};
+  if (msgIds.length) {
+    try {
+      const ph = msgIds.map(() => '?').join(',');
+      const rRows = db.prepare(`SELECT message_id, user_id, user_name, emoji FROM chat_message_reactions WHERE message_id IN (${ph}) ORDER BY id ASC`).all(...msgIds);
+      for (const r of rRows) {
+        if (!reactionsByMsg[r.message_id]) reactionsByMsg[r.message_id] = [];
+        reactionsByMsg[r.message_id].push(r);
+      }
+    } catch (_) {}
+  }
+  messages = messages.map(m => ({ ...m, reactions: reactionsByMsg[m.id] || [] }));
+
   // NOTE: deliberately do NOT emitChat('changed') here. Loading a thread used
   // to broadcast 'changed' to the room, but the client reloads the thread on
   // 'changed' → which re-GETs → which re-emits: an infinite self-reinforcing
@@ -711,8 +727,39 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   chatAudit(req, 'delete-message', g, `msg#${msg.id} by ${msg.sender_name || '?'}`);
   db.prepare('UPDATE chat_messages SET deleted_at=CURRENT_TIMESTAMP, deleted_by=?, deleted_by_name=? WHERE id=?')
     .run(req.user.id, req.user.name || '', msg.id);
+  try { db.prepare('DELETE FROM chat_message_reactions WHERE message_id=?').run(msg.id); } catch (_) {}
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
+});
+
+// Toggle emoji reaction on a message (WhatsApp-style: 1 reaction per user per message; click same emoji to remove, click new to change)
+router.post('/:groupId/messages/:msgId/reactions', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId; const msgId = +req.params.msgId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
+  const msg = db.prepare('SELECT id, deleted_at, is_system FROM chat_messages WHERE id=? AND group_id=?').get(msgId, g);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+  if (msg.deleted_at || msg.is_system) return res.status(400).json({ error: 'Cannot react to this message' });
+
+  const emoji = String(req.body?.emoji || '').trim();
+  if (!emoji) return res.status(400).json({ error: 'Emoji required' });
+
+  const existing = db.prepare('SELECT id, emoji FROM chat_message_reactions WHERE message_id=? AND user_id=?').get(msgId, req.user.id);
+  if (existing && existing.emoji === emoji) {
+    // Toggle off (remove reaction)
+    db.prepare('DELETE FROM chat_message_reactions WHERE id=?').run(existing.id);
+  } else if (existing) {
+    // Change reaction
+    db.prepare('UPDATE chat_message_reactions SET emoji=?, created_at=CURRENT_TIMESTAMP WHERE id=?').run(emoji, existing.id);
+  } else {
+    // Add reaction
+    db.prepare('INSERT INTO chat_message_reactions (message_id, group_id, user_id, user_name, emoji) VALUES (?,?,?,?,?)')
+      .run(msgId, g, req.user.id, req.user.name || '', emoji);
+  }
+
+  const allReactions = db.prepare('SELECT message_id, user_id, user_name, emoji FROM chat_message_reactions WHERE message_id=? ORDER BY id ASC').all(msgId);
+  emitChat(g, 'reaction', { message_id: msgId, group_id: g, reactions: allReactions });
+  emitChat(g, 'changed', { groupId: g });
+  res.json({ ok: true, reactions: allReactions });
 });
 
 module.exports = router;
