@@ -118,7 +118,7 @@ function invalidateReview(db, row, actorId) {
 }
 
 function isApprovedByRaiserOrAdmin(db, indent) {
-  if (!indent || indent.status !== 'approved' || indent.l2_status !== 'approved') return false;
+  if (!indent || !['approved', 'po_sent', 'dispatched', 'received'].includes(indent.status) || indent.l2_status !== 'approved') return false;
   // 1. Approved by original raiser
   if (indent.approved_by === indent.created_by || indent.l2_by === indent.created_by) return true;
   // 2. Approved with admin override flag
