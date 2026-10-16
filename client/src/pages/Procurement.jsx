@@ -2000,6 +2000,7 @@ export default function Procurement() {
           <>
             <button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
             <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button>
+            <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
           </>
         );
       }
@@ -8077,7 +8078,7 @@ export default function Procurement() {
           return (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-xs bg-emerald-50 border border-emerald-200 rounded p-3">
-                {!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending' && <p className="col-span-full rounded bg-blue-50 p-3 text-blue-800">{approveTarget.review_action ? 'Check every item. Use Review / Edit and save corrections before marking correct. The original raiser will then approve.' : 'Approve the reviewed items below. If a correction is needed, edit the indent first; it will require review again.'}</p>}
+                {!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending' && <p className="col-span-full rounded bg-blue-50 p-3 text-blue-800">{approveTarget.review_action ? 'Check every item. You can adjust quantities and units directly below before marking correct. The original raiser will then approve.' : 'Approve the reviewed items below. If a correction is needed, edit the indent first; it will require review again.'}</p>}
                 <div><span className="text-gray-500">Site:</span> <span className="font-medium">{approveTarget.site_name || '—'}</span></div>
                 <div><span className="text-gray-500">Raised by:</span> <span className="font-medium">{approveTarget.raised_by_name || approveTarget.created_by_name}</span></div>
                 <div><span className="text-gray-500">Items:</span> <span className="font-medium">{items.length}</span></div>
@@ -8160,7 +8161,7 @@ export default function Procurement() {
                           <td className="px-2 py-1">
                             <input
                               list="approve-uom-list"
-                              disabled={!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
+                              disabled={!approveTarget.review_action && !!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
                               value={approveUnitOverrides[it.id] ?? it.unit ?? ''}
                               onChange={(e) => setApproveUnitOverrides(prev => ({ ...prev, [it.id]: e.target.value }))}
                               placeholder="unit"
@@ -8209,7 +8210,7 @@ export default function Procurement() {
                             {/* NumInput keeps backspace/select-all-delete from
                                 snapping the field to 0 (mam 2026-05-25). */}
                             <NumInput step="any" min="0" emitZeroOnEmpty
-                              disabled={!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
+                              disabled={!approveTarget.review_action && !!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
                               value={approveQtyOverrides[it.id] ?? it.quantity}
                               onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />

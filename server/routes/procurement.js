@@ -847,11 +847,47 @@ function canSeeAllIndents(db, req) {
   return canSeeAll;
 }
 
+// Resolve distinct site names assigned to a user (as site engineer, supervisor,
+// or assigned via linked Purchase Orders). Used to give site engineers read-only
+// visibility of all indents for their assigned sites (preventing duplicate indents
+// when head-office staff like Nancy or Naveen raise indents on their behalf).
+function getUserAssignedSiteNames(db, userId, userName) {
+  if (!userId) return [];
+  const csv = `%,${userId},%`;
+  const name = (userName || '').trim();
+  try {
+    const rows = db.prepare(`
+      SELECT DISTINCT TRIM(s.name) AS name
+      FROM sites s
+      WHERE (
+        s.site_engineer_id = ?
+        OR s.supervisor_id = ?
+        OR (? <> '' AND LOWER(TRIM(COALESCE(s.supervisor, ''))) = LOWER(TRIM(?)))
+        OR EXISTS (
+          SELECT 1 FROM purchase_orders po
+          WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
+            AND (
+              po.site_engineer_id = ?
+              OR (',' || REPLACE(COALESCE(po.site_engineer_ids, ''), ' ', '') || ',') LIKE ?
+              OR (',' || REPLACE(COALESCE(po.jr_site_engineer_ids, ''), ' ', '') || ',') LIKE ?
+              OR (',' || REPLACE(COALESCE(po.supervisor_ids, ''), ' ', '') || ',') LIKE ?
+            )
+        )
+      )
+      AND s.name IS NOT NULL AND TRIM(s.name) <> ''
+    `).all(userId, userId, name, name, userId, csv, csv, csv);
+    return rows.map(r => r.name.toLowerCase().trim()).filter(Boolean);
+  } catch (err) {
+    console.error('[getUserAssignedSiteNames] error:', err.message);
+    return [];
+  }
+}
+
 router.get('/indents', (req, res) => {
   const db = getDb();
   // Scope filter: anyone with 'approve' permission on procurement (or admin)
   // sees ALL indents. Plain users (site engineers with only view + create)
-  // see only the ones they raised. Mam toggles this by checking / unchecking
+  // see only the ones they raised OR the ones for their assigned sites. Mam toggles this by checking / unchecking
   // 'approve' on the role's procurement permissions.
   const canSeeAll = canSeeAllIndents(db, req);
   // Mam (2026-06-02): "gurcharan fill indent when i open his id he
@@ -877,12 +913,24 @@ router.get('/indents', (req, res) => {
 
   const searchTerm = (search || q || '').trim();
 
-  // Base permission where conditions
+  // Base permission where conditions:
+  // If canSeeAll is false, show indents raised by the user OR indents belonging to any of their assigned sites.
   const baseConds = [];
   const baseParams = [];
   if (!canSeeAll) {
-    baseConds.push(`(i.created_by = ? OR (i.raised_by_name IS NOT NULL AND LENGTH(TRIM(i.raised_by_name)) > 0 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?))))`);
-    baseParams.push(req.user.id, req.user.name || '');
+    const assignedSites = getUserAssignedSiteNames(db, req.user.id, req.user.name || '');
+    if (assignedSites.length > 0) {
+      const placeholders = assignedSites.map(() => '?').join(',');
+      baseConds.push(`(
+        i.created_by = ? 
+        OR (i.raised_by_name IS NOT NULL AND LENGTH(TRIM(i.raised_by_name)) > 0 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?)))
+        OR LOWER(TRIM(i.site_name)) IN (${placeholders})
+      )`);
+      baseParams.push(req.user.id, req.user.name || '', ...assignedSites);
+    } else {
+      baseConds.push(`(i.created_by = ? OR (i.raised_by_name IS NOT NULL AND LENGTH(TRIM(i.raised_by_name)) > 0 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?))))`);
+      baseParams.push(req.user.id, req.user.name || '');
+    }
   }
 
   // Date and search filters (apply to both kpiScope and the list)
@@ -1856,7 +1904,7 @@ router.put('/indents/:id', (req, res) => {
       l1ReviewerIds, req.body, isAdminActor);
     if (denied) return res.status(denied.code).json({ error: denied.error });
     if (status === 'reviewed') {
-      raiserApproval.markCorrect(db, workflowRow, req.user.id, l1ReviewerIds);
+      raiserApproval.markCorrect(db, workflowRow, req.user.id, l1ReviewerIds, req.body);
       return res.json({ message: 'Marked correct — awaiting approval by the original raiser', stage: 'review_done' });
     }
     if (status === 'rejected') {
@@ -1866,30 +1914,51 @@ router.put('/indents/:id', (req, res) => {
       let originalApproverName = null;
       if (isReviewStage) {
         originalApproverName = l1ReviewerList.map(u => u.name).join(', ') || 'Assigned Reviewer';
+        const isReviewer = l1ReviewerIds.includes(req.user.id);
+        const isOverride = isAdminActor && !isReviewer;
         db.prepare(`UPDATE indents SET
           status = 'rejected',
           l1_status = 'rejected',
           l1_by = ?,
           l1_at = CURRENT_TIMESTAMP,
-          l1_admin_override = 1,
+          l1_admin_override = ?,
           l1_assigned_approver = ?,
           approved_by = NULL,
           approved_at = NULL,
           rejected_by = ?,
           rejected_at = CURRENT_TIMESTAMP,
           rejection_reason = ?,
-          rejected_admin_override = 1,
+          rejected_admin_override = ?,
           rejected_assigned_approver = ?
           WHERE id = ?`
-        ).run(req.user.id, originalApproverName, req.user.id, r, originalApproverName, id);
-        raiserApproval.audit(db, workflowRow, req.user.id, 'admin_override_rejected', {
+        ).run(req.user.id, isOverride ? 1 : 0, originalApproverName, req.user.id, r, isOverride ? 1 : 0, originalApproverName, id);
+        raiserApproval.audit(db, workflowRow, req.user.id, isOverride ? 'admin_override_rejected' : 'l1_rejected', {
           stage: 'l1_review',
           stage_label: 'Checked correct',
           action: 'rejected',
           reason: r,
-          admin_override: true,
+          admin_override: isOverride,
           original_assigned_approver: originalApproverName,
         });
+
+        // Notify the raiser of the rejection with reasons
+        if (workflowRow.created_by) {
+          try {
+            const reviewerName = req.user.name || 'L1 Reviewer';
+            db.prepare(`
+              INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+              VALUES (?, 'indent_rejected', ?, ?, ?, 'in_app', ?)
+            `).run(
+              workflowRow.created_by,
+              `Indent ${workflowRow.indent_number || id} Rejected`,
+              `Your indent for "${workflowRow.site_name || 'site'}" was rejected by ${reviewerName}. Reason: "${r}"`,
+              `/procurement?search=${encodeURIComponent(workflowRow.indent_number || id)}`,
+              `indent-rejected:${id}:${Date.now()}`
+            );
+          } catch (notifErr) {
+            console.error('[notification] error notifying raiser of reject:', notifErr.message);
+          }
+        }
       } else if (isRaiserStage) {
         const raiserUser = db.prepare('SELECT name FROM users WHERE id=?').get(workflowRow.created_by);
         originalApproverName = raiserUser?.name || workflowRow.raised_by_name || 'Original Raiser';
@@ -3395,7 +3464,9 @@ router.get('/indents/:id/delivery-bill', (req, res) => {
     const raisedBy = String((indent && indent.raised_by_name) || '').trim().toLowerCase();
     const own = !!indent && (indent.created_by === req.user.id
       || (raisedBy !== '' && raisedBy === String(req.user.name || '').trim().toLowerCase()));
-    if (!indent || !(own || canSeeAllIndents(db, req))) return res.status(404).json({ error: 'Indent not found' });
+    const assignedSites = getUserAssignedSiteNames(db, req.user.id, req.user.name || '');
+    const siteMatch = !!indent?.site_name && assignedSites.includes(indent.site_name.toLowerCase().trim());
+    if (!indent || !(own || siteMatch || canSeeAllIndents(db, req))) return res.status(404).json({ error: 'Indent not found' });
 
     const items = db.prepare(`
       SELECT ii.id, ii.description, ii.quantity, ii.item_type, ii.po_item_id,

@@ -38,7 +38,8 @@ function validateAction(row, actorId, reviewerIds, body, isAdmin = false) {
   const fail = (error, code = 403) => ({ error, code });
   if (!usesRaiserApproval(row)) return null;
   if (body.status === 'rejected') {
-    if (!isAdmin) return fail('This workflow has no reject action. Save corrections and have the indent reviewed again.');
+    const isReviewer = reviewerIds.includes(actorId);
+    if (!isAdmin && !isReviewer) return fail('Only the assigned indent reviewer or admin can reject this indent.');
     const canReject = ['submitted', 'crm_approved', 'l1_approved'].includes(row.status);
     if (!canReject) return fail(`Cannot reject an indent with status '${row.status}'.`, 400);
     const reasonStr = String(body.reason || '').trim();
@@ -64,20 +65,51 @@ function validateAction(row, actorId, reviewerIds, body, isAdmin = false) {
       if (row.l1_by === actorId) return fail('Reviewer and final approver must be different users.');
     }
   }
-  // Changes must be saved and reviewed first, never slipped into final approval.
-  const forbidden = body.status === 'reviewed' ? ['quantity_overrides', 'unit_overrides', 'store_qty_per_item'] : ['quantity_overrides', 'unit_overrides'];
-  if (forbidden.some(k => body[k] && Object.keys(body[k]).length)) return fail('Save corrections using Edit, then have them reviewed before approval.', 400);
+  // Reviewer can adjust quantities and units during review (Mark Correct), but not store issue.
+  // Final raiser approval cannot slip in un-reviewed overrides.
+  const forbidden = body.status === 'reviewed' ? ['store_qty_per_item'] : ['quantity_overrides', 'unit_overrides'];
+  if (forbidden.some(k => body[k] && Object.keys(body[k]).length)) return fail(body.status === 'reviewed' ? 'Store issuance is handled at final approval.' : 'Save corrections using Edit, then have them reviewed before approval.', 400);
   return null;
 }
 
-function markCorrect(db, row, actorId, reviewerIds = []) {
+function markCorrect(db, row, actorId, reviewerIds = [], overrides = {}) {
   const isOverride = !reviewerIds.includes(actorId) || actorId === row.created_by;
   let originalApproverName = null;
   if (reviewerIds.length) {
     const names = db.prepare(`SELECT name FROM users WHERE id IN (${reviewerIds.map(() => '?').join(',')})`).all(...reviewerIds);
     originalApproverName = names.map(u => u.name).join(', ');
   }
+  const qtyOverrides = overrides.quantity_overrides || {};
+  const unitOverrides = overrides.unit_overrides || {};
+  const hasChanges = Object.keys(qtyOverrides).length > 0 || Object.keys(unitOverrides).length > 0;
+
   db.transaction(() => {
+    // Apply quantity overrides if reviewer adjusted quantities
+    for (const [itemIdStr, rawQty] of Object.entries(qtyOverrides)) {
+      const itemId = Number(itemIdStr);
+      const newQty = Number(rawQty);
+      if (itemId && Number.isFinite(newQty) && newQty >= 0) {
+        db.prepare(`
+          UPDATE indent_items 
+          SET quantity = ?, amount = ? * COALESCE(rate, 0)
+          WHERE id = ? AND indent_id = ?
+        `).run(newQty, newQty, itemId, row.id);
+      }
+    }
+
+    // Apply unit overrides if reviewer adjusted units
+    for (const [itemIdStr, rawUnit] of Object.entries(unitOverrides)) {
+      const itemId = Number(itemIdStr);
+      const newUnit = String(rawUnit || '').trim();
+      if (itemId && newUnit) {
+        db.prepare(`
+          UPDATE indent_items 
+          SET unit = ?, unit_overridden = 1
+          WHERE id = ? AND indent_id = ?
+        `).run(newUnit, itemId, row.id);
+      }
+    }
+
     db.prepare(`UPDATE indents SET
       status='l1_approved', l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='pending',
       l1_admin_override=?, l1_assigned_approver=?
@@ -92,6 +124,9 @@ function markCorrect(db, row, actorId, reviewerIds = []) {
       stage_label: 'Checked correct',
       action: 'marked_correct',
       items: db.prepare('SELECT * FROM indent_items WHERE indent_id=?').all(row.id),
+      modified: hasChanges,
+      quantity_overrides: qtyOverrides,
+      unit_overrides: unitOverrides,
     };
     if (isOverride) {
       auditDetails.admin_override = true;
@@ -99,9 +134,14 @@ function markCorrect(db, row, actorId, reviewerIds = []) {
       auditDetails.original_approver_ids = reviewerIds;
     }
     audit(db, row, actorId, isOverride ? 'admin_override_marked_correct' : 'marked_correct', auditDetails);
+
+    const notifBody = hasChanges
+      ? 'Your indent has been checked and items/quantities adjusted by the reviewer. Review the items and give final approval.'
+      : 'Your indent has been checked and marked correct. Review the items and give final approval.';
+
     db.prepare(`INSERT INTO notifications (user_id,type,title,body,link_url,channel_sent,dedupe_key)
       VALUES (?,'approval_pending',?,?,?,?,?)`).run(row.created_by, `Approve indent ${row.indent_number}`,
-      'Your indent has been checked and marked correct. Review the items and give final approval.',
+      notifBody,
       `/procurement?approve=${row.id}`, 'in_app', `indent-raiser:${row.id}:${row.review_revision}`);
   })();
 }

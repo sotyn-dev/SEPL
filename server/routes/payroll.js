@@ -105,7 +105,7 @@ const COMPANY_INFO = {
   website: 'www.securedengineers.com',
 };
 
-const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function fmt(n) {
   return Math.round(n || 0).toLocaleString('en-IN');
@@ -505,12 +505,12 @@ router.put('/settings', adminOnly, (req, res) => {
   const db = getDb();
   ensureSettingsRow(db);
   const fields = [
-    'late_after_time','half_day_after_time','min_hours_full_day','min_hours_half_day',
-    'skip_half_day_if_short_leave','lates_to_absent','late_grace_count','late_per_minute_rate',
-    'working_days_per_month','sundays_paid',
-    'cl_per_month','sl_per_month','pl_per_month','short_leave_per_month',
-    'ot_threshold_hours','ot_rate_multiplier','pay_cycle_start_day',
-    'basic_pct','conveyance_pct','hra_pct','adhoc_pct','misc_pct'
+    'late_after_time', 'half_day_after_time', 'min_hours_full_day', 'min_hours_half_day',
+    'skip_half_day_if_short_leave', 'lates_to_absent', 'late_grace_count', 'late_per_minute_rate',
+    'working_days_per_month', 'sundays_paid',
+    'cl_per_month', 'sl_per_month', 'pl_per_month', 'short_leave_per_month',
+    'ot_threshold_hours', 'ot_rate_multiplier', 'pay_cycle_start_day',
+    'basic_pct', 'conveyance_pct', 'hra_pct', 'adhoc_pct', 'misc_pct'
   ];
   const sets = [];
   const vals = [];
@@ -573,11 +573,11 @@ function calculateForEmployee(db, settings, employee, month) {
     const grossEarned = isFuture ? 0 : baseSalary;
     const totalPct = (settings.basic_pct || 0) + (settings.conveyance_pct || 0) + (settings.hra_pct || 0) + (settings.adhoc_pct || 0) + (settings.misc_pct || 0);
     const normFactor = (totalPct > 0 && Math.abs(totalPct - 100) > 0.01) ? (100 / totalPct) : 1;
-    const basicPay  = round2(grossEarned * ((settings.basic_pct       || 0) * normFactor) / 100);
+    const basicPay = round2(grossEarned * ((settings.basic_pct || 0) * normFactor) / 100);
     const conveyance = round2(grossEarned * ((settings.conveyance_pct || 0) * normFactor) / 100);
-    const hra       = round2(grossEarned * ((settings.hra_pct         || 0) * normFactor) / 100);
-    const adhoc     = round2(grossEarned * ((settings.adhoc_pct       || 0) * normFactor) / 100);
-    const misc      = round2(grossEarned * ((settings.misc_pct        || 0) * normFactor) / 100);
+    const hra = round2(grossEarned * ((settings.hra_pct || 0) * normFactor) / 100);
+    const adhoc = round2(grossEarned * ((settings.adhoc_pct || 0) * normFactor) / 100);
+    const misc = round2(grossEarned * ((settings.misc_pct || 0) * normFactor) / 100);
     const sumEarnings = round2(basicPay + conveyance + hra + adhoc + misc);
     const diffEarnings = round2(grossEarned - sumEarnings);
     const finalBasicPay = round2(basicPay + diffEarnings);
@@ -1174,7 +1174,7 @@ function calculateForEmployee(db, settings, employee, month) {
 function round2(n) { return Math.round((n || 0) * 100) / 100; }
 
 function dayName(y, m, d) {
-  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(y, m - 1, d).getDay()];
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(y, m - 1, d).getDay()];
 }
 
 // GET monthly payroll for ALL employees
@@ -1263,7 +1263,7 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
       if (snap) {
         let snapBreakdown = null;
         if (snap.breakdown_json) {
-          try { snapBreakdown = JSON.parse(snap.breakdown_json); } catch (_) {}
+          try { snapBreakdown = JSON.parse(snap.breakdown_json); } catch (_) { }
         }
         return res.json({
           month,
