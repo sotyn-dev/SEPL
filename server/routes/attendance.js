@@ -352,6 +352,8 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     missed_punch_out: 0,
     auto_punched_in: 0,
     auto_punched_out: 0,
+    short_leave: 0,
+    short_leave_hours: 0,
   };
 
   const curDate = new Date(startDate);
@@ -366,7 +368,12 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     const isHoliday = holByDate.has(dStr);
     const holidayName = holByDate.get(dStr);
     const att = attByDate.get(dStr);
-    const dayLeave = leaves.find(l => dStr >= l.from_date && dStr <= l.to_date);
+    const shortLeave = leaves.find(l => l.leave_type === 'short_leave' && dStr >= l.from_date && dStr <= l.to_date);
+    const dayLeave = leaves.find(l => l.leave_type !== 'short_leave' && dStr >= l.from_date && dStr <= l.to_date) || shortLeave;
+    if (shortLeave) {
+      summary.short_leave = (summary.short_leave || 0) + 1;
+      summary.short_leave_hours = Math.round(((summary.short_leave_hours || 0) + (Number(shortLeave.hours) || 0)) * 100) / 100;
+    }
 
     let status = '';
     let isLate = false;
@@ -467,7 +474,14 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       remarks: att?.remarks || null,
       attendance_id: att?.id || null,
       is_holiday: isHoliday,
-      holiday_name: holidayName || null,
+      short_leave: shortLeave ? {
+        id: shortLeave.id,
+        leave_type: 'short_leave',
+        hours: shortLeave.hours || null,
+        reason: shortLeave.reason || null,
+        from_time: shortLeave.from_time || null,
+        to_time: shortLeave.to_time || null
+      } : null,
       leave: dayLeave ? {
         id: dayLeave.id,
         leave_type: dayLeave.leave_type,

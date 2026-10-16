@@ -129,6 +129,12 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
   const department = data.department || emp?.department || '-';
   const joinDate = formatDate(data.join_date || emp?.join_date);
 
+  const baseSalary = Number(data.base_salary || emp?.salary || 0);
+  const totalDays = Number(data.total_days_in_month || 30);
+  const perDayRate = Number(data.per_day_rate || (totalDays > 0 ? baseSalary / totalDays : 0));
+  const paidDays = Number(data.paid_days || 0);
+  const grossEarned = Number(data.gross_earned || (perDayRate * paidDays));
+
   const basicPay = Number(data.basic_pay || 0);
   const conveyance = Number(data.conveyance || 0);
   const hra = Number(data.hra || 0);
@@ -139,7 +145,18 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
   const food = Number(data.food || 0);
 
   const latePenalty = Number(data.late_penalty || 0);
+  const lateMarks = Number(data.late_marks || 0);
   const advance = Number(data.advance || 0);
+
+  const sundayCount = Number(data.sunday_count || 0);
+  const paidLeaves = Number(data.paid_leaves || 0);
+  const holidayDays = Number(data.holiday_days || 0);
+  const halfDays = Number(data.half_days || 0);
+  const absentDays = Number(data.absent_days || 0);
+  const sundayWorked = Number(data.sunday_worked || 0);
+  const presentDays = data.breakdown
+    ? data.breakdown.filter(b => ['present', 'late', 'admin_present', 'admin_late'].includes(b.label)).length
+    : Math.max(0, paidDays - sundayCount - paidLeaves - holidayDays);
 
   const totalEarnings = Number(data.total_earnings != null ? (data.total_earnings + otPay + food) : (basicPay + conveyance + hra + adhoc + misc + otPay + food));
   const totalDeductions = Number(data.total_deductions != null ? data.total_deductions : (latePenalty + advance));
@@ -147,13 +164,16 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
   const words = rupeesInWords(netPay);
 
   const attParts = [
-    `Worked ${data.paid_days || 0} of ${data.working_days || 0} days`
+    `Paid Days: ${paidDays} of ${totalDays} calendar days`
   ];
-  if (data.half_days) attParts.push(`${data.half_days} half day(s)`);
-  if (data.absent_days) attParts.push(`${data.absent_days} absent day(s)`);
-  if (data.late_marks) attParts.push(`${data.late_marks} late mark(s)`);
-  if (data.paid_leaves) attParts.push(`${data.paid_leaves} paid leave(s)`);
-  if (data.sunday_worked) attParts.push(`${data.sunday_worked} Sunday(s) worked (+${data.sunday_worked_pay || 0} day pay)`);
+  if (presentDays) attParts.push(`${presentDays} present`);
+  if (sundayCount) attParts.push(`${sundayCount} Sunday(s)/week-off`);
+  if (paidLeaves) attParts.push(`${paidLeaves} paid leave(s)`);
+  if (holidayDays) attParts.push(`${holidayDays} declared holiday(s)`);
+  if (halfDays) attParts.push(`${halfDays} half day(s) [-${halfDays * 0.5}d]`);
+  if (absentDays) attParts.push(`${absentDays} absent day(s)`);
+  if (lateMarks) attParts.push(`${lateMarks} late arrival(s)`);
+  if (sundayWorked) attParts.push(`${sundayWorked} Sunday(s) worked (+${data.sunday_worked_pay || 0}d bonus)`);
   const attSummary = attParts.join(' • ');
 
   const html = `<!DOCTYPE html>
@@ -212,40 +232,56 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
             </td>
           </tr>
 
-          <!-- Employee Details -->
+          <!-- Employee Details & Salary Structure -->
           <tr>
-            <td style="padding:18px 28px 12px;">
+            <td style="padding:18px 28px 14px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12.5px;">
                 <tr>
-                  <td width="50%" valign="top" style="padding-right:12px;">
+                  <td width="50%" valign="top" style="padding-right:14px;">
                     <table width="100%" cellpadding="3" cellspacing="0" style="border-collapse:collapse;">
                       <tr>
-                        <td width="120" style="color:#64748b;font-weight:600;">Employee Name:</td>
+                        <td width="125" style="color:#64748b;font-weight:600;">Employee Name:</td>
                         <td style="color:#0f172a;font-weight:700;">${empName}</td>
                       </tr>
                       <tr>
-                        <td width="120" style="color:#64748b;font-weight:600;">Employee ID:</td>
+                        <td width="125" style="color:#64748b;font-weight:600;">Employee ID:</td>
                         <td style="color:#0f172a;">${empId}</td>
                       </tr>
                       <tr>
-                        <td width="120" style="color:#64748b;font-weight:600;">Date of Joining:</td>
+                        <td width="125" style="color:#64748b;font-weight:600;">Department:</td>
+                        <td style="color:#0f172a;">${department}</td>
+                      </tr>
+                      <tr>
+                        <td width="125" style="color:#64748b;font-weight:600;">Designation:</td>
+                        <td style="color:#0f172a;">${designation}</td>
+                      </tr>
+                      <tr>
+                        <td width="125" style="color:#64748b;font-weight:600;">Date of Joining:</td>
                         <td style="color:#0f172a;">${joinDate}</td>
                       </tr>
                     </table>
                   </td>
-                  <td width="50%" valign="top" style="padding-left:12px;">
+                  <td width="50%" valign="top" style="padding-left:14px;border-left:1px dashed #cbd5e1;">
                     <table width="100%" cellpadding="3" cellspacing="0" style="border-collapse:collapse;">
                       <tr>
-                        <td width="110" style="color:#64748b;font-weight:600;">Department:</td>
-                        <td style="color:#0f172a;">${department}</td>
+                        <td width="135" style="color:#64748b;font-weight:600;">Monthly Base Salary:</td>
+                        <td style="color:#0f172a;font-weight:700;">₹${fmt(baseSalary)}</td>
                       </tr>
                       <tr>
-                        <td width="110" style="color:#64748b;font-weight:600;">Designation:</td>
-                        <td style="color:#0f172a;">${designation}</td>
+                        <td width="135" style="color:#64748b;font-weight:600;">Calendar Days:</td>
+                        <td style="color:#0f172a;">${totalDays} Days</td>
                       </tr>
                       <tr>
-                        <td width="110" style="color:#64748b;font-weight:600;">Worked Days:</td>
-                        <td style="color:#0f172a;font-weight:700;">${data.paid_days || 0} <span style="color:#64748b;font-weight:normal;">(out of ${data.working_days || 0})</span></td>
+                        <td width="135" style="color:#64748b;font-weight:600;">Per-Day Rate:</td>
+                        <td style="color:#0f172a;" title="Monthly Base / Total Days">₹${fmt(perDayRate)} / day</td>
+                      </tr>
+                      <tr>
+                        <td width="135" style="color:#64748b;font-weight:600;">Payable Paid Days:</td>
+                        <td style="color:#0f172a;font-weight:700;">
+                          <span style="color:#15803d;background:#dcfce7;padding:2px 8px;border-radius:4px;font-size:12px;">
+                            ${paidDays} of ${totalDays} days
+                          </span>
+                        </td>
                       </tr>
                     </table>
                   </td>
@@ -254,9 +290,47 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
             </td>
           </tr>
 
+          <!-- Attendance & Paid Days Reconciliation -->
+          <tr>
+            <td style="padding:0 28px 16px;">
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px 14px;">
+                <div style="font-size:11.5px;font-weight:700;color:#0f172a;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">
+                  Attendance & Paid Days Reconciliation
+                </div>
+                <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;text-align:center;font-size:11.5px;">
+                  <thead>
+                    <tr style="background:#f1f5f9;color:#475569;font-weight:700;">
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Present</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Sunday / Off</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Paid Leaves</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Holidays</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Half Days</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;">Absent (LOP)</th>
+                      <th style="border:1px solid #cbd5e1;padding:6px;background:#e0f2fe;color:#0369a1;">Paid Days</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="font-weight:700;color:#0f172a;background:#ffffff;">
+                      <td style="border:1px solid #cbd5e1;padding:6px;">${presentDays}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;color:#1d4ed8;">${sundayCount}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;color:#7e22ce;">${paidLeaves}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;color:#0e7490;">${holidayDays}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;color:${halfDays > 0 ? '#ea580c' : '#64748b'};">${halfDays > 0 ? `${halfDays} (-${halfDays * 0.5}d)` : '0'}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;color:${absentDays > 0 ? '#dc2626' : '#64748b'};">${absentDays}</td>
+                      <td style="border:1px solid #cbd5e1;padding:6px;background:#f0f9ff;color:#0284c7;font-size:13px;">${paidDays}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style="margin-top:6px;font-size:11px;color:#64748b;line-height:1.4;">
+                  <strong>Summary:</strong> ${attSummary}
+                </div>
+              </div>
+            </td>
+          </tr>
+
           <!-- Earnings & Deductions Table -->
           <tr>
-            <td style="padding:10px 28px 20px;">
+            <td style="padding:0 28px 18px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #cbd5e1;font-size:12.5px;">
                 <thead>
                   <tr style="background:#f1f5f9;color:#334155;border-bottom:2px solid #cbd5e1;">
@@ -270,14 +344,16 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
                   <tr>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Basic Pay</td>
                     <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(basicPay)}</td>
-                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">Late Penalty</td>
-                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:#dc2626;">${latePenalty > 0 ? fmt(latePenalty) : '0'}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">
+                      Late Penalty ${lateMarks > 0 ? `<span style="font-size:11px;color:#94a3b8;">(${lateMarks} late)</span>` : ''}
+                    </td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:${latePenalty > 0 ? '#dc2626' : '#64748b'};">${latePenalty > 0 ? fmt(latePenalty) : '0'}</td>
                   </tr>
                   <tr>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Conveyance Allowance</td>
                     <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(conveyance)}</td>
-                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">Advance Salary</td>
-                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:#dc2626;">${advance > 0 ? fmt(advance) : '0'}</td>
+                    <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;color:#64748b;">Advance Salary Repaid</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums;color:${advance > 0 ? '#dc2626' : '#64748b'};">${advance > 0 ? fmt(advance) : '0'}</td>
                   </tr>
                   <tr>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">House Rent Allowance (HRA)</td>
@@ -301,14 +377,14 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
                   ${otPay > 0 ? `
                   <tr>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Overtime Pay (${otHours}h)</td>
-                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(otPay)}</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;color:#15803d;font-weight:600;">${fmt(otPay)}</td>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
                     <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
                   </tr>` : ''}
                   ${food > 0 ? `
                   <tr>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;">Food Allowance</td>
-                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;">${fmt(food)}</td>
+                    <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;font-variant-numeric:tabular-nums;color:#15803d;font-weight:600;">${fmt(food)}</td>
                     <td style="padding:7px 12px;border:1px solid #e2e8f0;border-right:1px solid #cbd5e1;"></td>
                     <td align="right" style="padding:7px 12px;border:1px solid #e2e8f0;"></td>
                   </tr>` : ''}
@@ -326,34 +402,34 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
 
           <!-- Net Pay Box -->
           <tr>
-            <td style="padding:0 28px 16px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4;border:1px solid #86efac;border-radius:6px;border-collapse:collapse;">
+            <td style="padding:0 28px 14px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4;border:2px solid #86efac;border-radius:6px;border-collapse:collapse;">
                 <tr>
                   <td valign="middle" style="padding:12px 18px;">
                     <span style="font-size:14px;color:#166534;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Net Payable Amount:</span>
                   </td>
                   <td align="right" valign="middle" style="padding:12px 18px;">
-                    <span style="font-size:22px;color:#15803d;font-weight:800;letter-spacing:0.5px;">₹${fmt(netPay)}</span>
+                    <span style="font-size:24px;color:#15803d;font-weight:800;letter-spacing:0.5px;">₹${fmt(netPay)}</span>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- Amount In Words -->
+          <!-- Calculation Formula Summary -->
           <tr>
             <td style="padding:0 28px 14px;">
-              <div style="background:#f8fafc;border-left:3px solid #c00000;padding:10px 14px;font-size:12.5px;color:#334155;">
-                <strong style="color:#0f172a;">Amount in Words:</strong> ${words}
+              <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:11.5px;color:#166534;line-height:1.5;">
+                <strong>Payout Formula:</strong> Earned Base (₹${fmt(grossEarned)}) ${otPay > 0 ? `+ Overtime (₹${fmt(otPay)})` : ''} ${food > 0 ? `+ Food Allowance (₹${fmt(food)})` : ''} ${totalDeductions > 0 ? `- Deductions (₹${fmt(totalDeductions)})` : ''} = <strong>Net Payable: ₹${fmt(netPay)}</strong>
               </div>
             </td>
           </tr>
 
-          <!-- Attendance Breakdown -->
+          <!-- Amount In Words -->
           <tr>
-            <td style="padding:0 28px 20px;">
-              <div style="font-size:11.5px;color:#64748b;background:#fafafa;border:1px dashed #cbd5e1;border-radius:4px;padding:8px 12px;line-height:1.5;">
-                <strong style="color:#334155;">Attendance Summary:</strong> ${attSummary}
+            <td style="padding:0 28px 18px;">
+              <div style="background:#f8fafc;border-left:3px solid #c00000;padding:10px 14px;font-size:12.5px;color:#334155;">
+                <strong style="color:#0f172a;">Amount in Words:</strong> ${words}
               </div>
             </td>
           </tr>
@@ -377,8 +453,16 @@ PAYSLIP FOR ${payPeriod}
 --------------------------------------------------
 Employee: ${empName} (ID: ${empId})
 Department: ${department} | Designation: ${designation}
-Worked Days: ${data.paid_days || 0} / ${data.working_days || 0} days
+Monthly Base Salary: ₹${fmt(baseSalary)} | Total Calendar Days: ${totalDays}
+Per-Day Calculation Rate: ₹${fmt(perDayRate)}/day
+Paid Days: ${paidDays} / ${totalDays} days
 
+ATTENDANCE RECONCILIATION:
+- Present Days: ${presentDays}
+- Sundays / Week-Offs: ${sundayCount}
+- Paid Leaves: ${paidLeaves}
+- Holidays: ${holidayDays}
+${halfDays > 0 ? `- Half Days: ${halfDays} (-${halfDays * 0.5}d)\n` : ''}${absentDays > 0 ? `- Absent (Loss of Pay): ${absentDays} days\n` : ''}${lateMarks > 0 ? `- Late Arrivals: ${lateMarks} marks\n` : ''}
 EARNINGS:
 - Basic Pay: ₹${fmt(basicPay)}
 - Conveyance Allowance: ₹${fmt(conveyance)}
@@ -387,7 +471,10 @@ EARNINGS:
 ${misc > 0 ? `- Miscellaneous Allowance: ₹${fmt(misc)}\n` : ''}${otPay > 0 ? `- Overtime Pay (${otHours}h): ₹${fmt(otPay)}\n` : ''}${food > 0 ? `- Food Allowance: ₹${fmt(food)}\n` : ''}Total Earnings: ₹${fmt(totalEarnings)}
 
 DEDUCTIONS:
-${latePenalty > 0 ? `- Late Penalty: ₹${fmt(latePenalty)}\n` : ''}${advance > 0 ? `- Advance Salary: ₹${fmt(advance)}\n` : ''}Total Deductions: ₹${fmt(totalDeductions)}
+${latePenalty > 0 ? `- Late Penalty: ₹${fmt(latePenalty)} (${lateMarks} late arrivals)\n` : ''}${advance > 0 ? `- Advance Salary Repaid: ₹${fmt(advance)}\n` : ''}Total Deductions: ₹${fmt(totalDeductions)}
+
+PAYOUT FORMULA:
+Earned Base (₹${fmt(grossEarned)}) ${otPay > 0 ? `+ Overtime (₹${fmt(otPay)})` : ''} ${food > 0 ? `+ Food (₹${fmt(food)})` : ''} ${totalDeductions > 0 ? `- Deductions (₹${fmt(totalDeductions)})` : ''} = Net Payable: ₹${fmt(netPay)}
 
 NET PAYABLE: ₹${fmt(netPay)}
 IN WORDS: ${words}
@@ -1127,7 +1214,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
           designation: emp.designation,
           sunday_count: snap.sundays,
           locked: true,
-          email: emp.personal_email || emp.email || '',
+          email: emp.personal_email || '',
           personal_email: emp.personal_email || '',
           work_email: emp.email || '',
           email_sent_at: snap.email_sent_at,
@@ -1139,7 +1226,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
         staff_type: emp.staff_type,
         department: emp.department,
         designation: emp.designation,
-        email: emp.personal_email || emp.email || '',
+        email: emp.personal_email || '',
         personal_email: emp.personal_email || '',
         work_email: emp.email || '',
         email_sent_at: null,
@@ -1185,7 +1272,7 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
           ...snap,
           sunday_count: snap.sundays,
           locked: true,
-          email: emp.personal_email || emp.email || '',
+          email: emp.personal_email || '',
           personal_email: emp.personal_email || '',
           work_email: emp.email || '',
           email_sent_at: snap.email_sent_at,
@@ -1199,7 +1286,7 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
       month,
       settings,
       ...live,
-      email: emp.personal_email || emp.email || '',
+      email: emp.personal_email || '',
       personal_email: emp.personal_email || '',
       work_email: emp.email || '',
       email_sent_at: null,
@@ -1650,6 +1737,39 @@ router.get('/email-status', requirePermission('payroll', 'view'), (req, res) => 
   }
 });
 
+// GET preview single salary slip HTML & structured data
+router.get('/preview-slip/:employee_id', requirePermission('payroll', 'view'), async (req, res) => {
+  try {
+    const { month } = req.query;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const db = getDb();
+    ensureHolidaysTable(db);
+    const settings = getSettings(db);
+    const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    let slipData;
+    if (finalised) {
+      const snap = db.prepare('SELECT * FROM payroll_runs WHERE month=? AND employee_id=?').get(month, emp.id);
+      if (snap) {
+        const live = calculateForEmployee(db, settings, emp, month);
+        slipData = { ...live, ...snap, settings };
+      } else {
+        slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+      }
+    } else {
+      slipData = { ...calculateForEmployee(db, settings, emp, month), settings };
+    }
+
+    const { html, text, payPeriod } = generateSalarySlipEmailContent(slipData, month, emp);
+    return res.json({ success: true, html, text, payPeriod, slipData });
+  } catch (err) {
+    console.error('Error previewing salary slip:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST send single salary slip via email
 router.post('/send-slip/:employee_id', requirePermission('payroll', 'edit'), async (req, res) => {
   try {
@@ -1661,9 +1781,9 @@ router.post('/send-slip/:employee_id', requirePermission('payroll', 'edit'), asy
     const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
 
-    const targetEmail = (email_override || emp.personal_email || emp.email || '').trim();
+    const targetEmail = (email_override || emp.personal_email || '').trim();
     if (!targetEmail || !targetEmail.includes('@')) {
-      return res.status(400).json({ error: `No valid email address found for ${emp.name}. Please enter an email address.` });
+      return res.status(400).json({ error: `No personal email address found for ${emp.name}. Salary slips are sent exclusively to personal email. Please update personal email in Employee Master or enter one.` });
     }
 
     // Prefer frozen finalised snapshot if finalised; else live calculation
@@ -1754,9 +1874,9 @@ router.post('/send-bulk-slips', requirePermission('payroll', 'edit'), async (req
         continue;
       }
 
-      const targetEmail = (item.email || emp.personal_email || emp.email || '').trim();
+      const targetEmail = (item.email || emp.personal_email || '').trim();
       if (!targetEmail || !targetEmail.includes('@')) {
-        results.push({ employee_id: emp.id, name: emp.name, status: 'failed', error: 'No valid email' });
+        results.push({ employee_id: emp.id, name: emp.name, status: 'failed', error: 'No personal email configured' });
         failedCount++;
         continue;
       }

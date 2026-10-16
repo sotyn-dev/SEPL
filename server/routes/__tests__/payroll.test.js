@@ -5,9 +5,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 // Run the real calculator with isolated data; never initialize the live database.
+let sentEmails = [];
 const routes = {};
 const router = { use() {}, get(p, ...h) { routes['GET ' + p] = h.at(-1); },
-  put(p, ...h) { routes['PUT ' + p] = h.at(-1); }, post() {}, delete() {} };
+  put(p, ...h) { routes['PUT ' + p] = h.at(-1); },
+  post(p, ...h) { routes['POST ' + p] = h.at(-1); }, delete() {} };
 const source = fs.readFileSync(path.join(__dirname, '../payroll.js'), 'utf8');
 const context = { module: { exports: {} }, console, require(name) {
   if (name === 'express') return { Router: () => router };
@@ -15,10 +17,13 @@ const context = { module: { exports: {} }, console, require(name) {
   if (name === '../middleware/auth') return { requirePermission: () => () => {}, adminOnly() {}, authMiddleware() {} };
   if (name === '../middleware/audit') return { logAuditEvent() {} };
   if (name === '../lib/roster') return require('../../lib/roster');
+  if (name === '../lib/email') return { sendEmail: async (opts) => { sentEmails.push(opts); return { success: true }; }, isConfigured: () => true };
+  if (name === '../lib/numberToWords') return { rupeesInWords: () => 'Zero Rupees' };
   throw new Error(name);
 } };
-vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee };', context);
+vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee, generateSalarySlipEmailContent };', context);
 const calculate = context.module.exports.calculateForEmployee;
+const generateSalarySlip = context.module.exports.generateSalarySlipEmailContent;
 let activeDb;
 const settings = { late_after_time: '09:46', half_day_after_time: '10:00', min_hours_half_day: 4,
   sundays_paid: 1, late_grace_count: 3, late_per_minute_rate: 20, lates_to_absent: 0,
@@ -190,3 +195,106 @@ test('calendar Sundays remain integer count (4 or 5) and never fractional when S
   assert.equal(resHalf.present_days, 26.5); // 26 weekdays + 0.5 Sunday
   assert.equal(resHalf.paid_days, 31.5); // 26.5 + 5 = 31.5
 });
+
+test('salary slip email content contains clear salary structure, attendance reconciliation, and formula', () => {
+  const mockData = {
+    employee_name: 'Vishesh Kumar',
+    employee_id: 101,
+    department: 'Operation',
+    designation: 'Operations Executive',
+    base_salary: 31000,
+    total_days_in_month: 31,
+    per_day_rate: 1000,
+    paid_days: 28,
+    gross_earned: 28000,
+    basic_pay: 14000,
+    conveyance: 4000,
+    hra: 7000,
+    adhoc: 3000,
+    ot_hours: 10,
+    ot_pay: 1200,
+    food: 500,
+    late_marks: 4,
+    late_penalty: 300,
+    advance: 1000,
+    sunday_count: 4,
+    paid_leaves: 1,
+    holiday_days: 1,
+    half_days: 2,
+    absent_days: 1,
+  };
+
+  const { html, text, payPeriod } = generateSalarySlip(mockData, '2026-09', { id: 101, name: 'Vishesh Kumar' });
+
+  assert.equal(payPeriod, 'September 2026');
+
+  // Must contain monthly base and calendar days
+  assert.ok(html.includes('Monthly Base Salary:'), 'HTML must include Monthly Base Salary');
+  assert.ok(html.includes('31 Days'), 'HTML must include calendar days');
+  assert.ok(html.includes('Per-Day Rate:'), 'HTML must include Per-Day Rate');
+  assert.ok(html.includes('28 of 31 days'), 'HTML must include paid days ratio');
+
+  // Must contain attendance reconciliation block
+  assert.ok(html.includes('Attendance & Paid Days Reconciliation'), 'HTML must include Attendance Reconciliation block');
+  assert.ok(html.includes('Present</th>'), 'HTML must have Present header');
+  assert.ok(html.includes('Sunday / Off</th>'), 'HTML must have Sunday header');
+  assert.ok(html.includes('Paid Leaves</th>'), 'HTML must have Paid Leaves header');
+  assert.ok(html.includes('Absent (LOP)</th>'), 'HTML must have Absent header');
+
+  // Must contain calculation formula
+  assert.ok(html.includes('Payout Formula:'), 'HTML must include Payout Formula');
+  assert.ok(html.includes('Net Payable:'), 'HTML must include Net Payable');
+
+  // Plain text version checks
+  assert.ok(text.includes('Monthly Base Salary: ₹31,000'), 'Text must include base salary');
+  assert.ok(text.includes('Per-Day Calculation Rate: ₹1,000/day'), 'Text must include per day rate');
+  assert.ok(text.includes('ATTENDANCE RECONCILIATION:'), 'Text must include attendance reconciliation section');
+  assert.ok(text.includes('PAYOUT FORMULA:'), 'Text must include payout formula');
+});
+
+test('late shift (10:30 AM to 7:00 PM) treats 10:01 AM punch as full on-time day instead of half-day', () => {
+  const attendance = [{ date: '2025-08-04', punch_in_time: '10:01', total_hours: 9 }];
+  const generalEmp = run({ attendance }, { ...employee, roster: 'general' });
+  assert.equal(generalEmp.half_days, 1, 'General shift punch at 10:01 AM must trigger half day');
+  assert.equal(generalEmp.present_days, 0.5);
+
+  const lateEmp = run({ attendance }, { ...employee, roster: 'late' });
+  assert.equal(lateEmp.half_days, 0, 'Late shift punch at 10:01 AM must NOT trigger half day');
+  assert.equal(lateEmp.present_days, 1);
+});
+
+test('salary slip email delivery targets strictly personal_email and never falls back to work email', async () => {
+  sentEmails = [];
+  let currentEmp = { id: 10, name: 'Ravi', email: 'ravi@company.com', personal_email: 'ravi@gmail.com', salary: 25000 };
+  activeDb = {
+    exec() {},
+    prepare(sql) {
+      return {
+        all() { return []; },
+        get() {
+          if (sql.includes('FROM payroll_settings')) return settings;
+          if (sql.includes('FROM employees')) return currentEmp;
+          if (sql.includes('FROM payroll_runs')) return { c: 0 };
+          return {};
+        },
+        run() {}
+      };
+    }
+  };
+
+  const res1 = { code: 200, status(n) { this.code = n; return this; }, json(v) { this.body = v; } };
+  await routes['POST /send-slip/:employee_id']({ body: { month: '2025-08' }, params: { employee_id: '10' }, user: { id: 1 } }, res1);
+  assert.equal(res1.code, 200);
+  assert.equal(sentEmails.length, 1);
+  assert.equal(sentEmails[0].to, 'ravi@gmail.com', 'Must deliver to personal email');
+
+  // When personal_email is missing, it must refuse rather than sending to work email
+  sentEmails = [];
+  currentEmp = { id: 10, name: 'Ravi', email: 'ravi@company.com', personal_email: null, salary: 25000 };
+  const res2 = { code: 200, status(n) { this.code = n; return this; }, json(v) { this.body = v; } };
+  await routes['POST /send-slip/:employee_id']({ body: { month: '2025-08' }, params: { employee_id: '10' }, user: { id: 1 } }, res2);
+  assert.equal(res2.code, 400);
+  assert.match(res2.body.error, /personal email/i);
+  assert.equal(sentEmails.length, 0, 'Must NOT deliver to work email');
+});
+

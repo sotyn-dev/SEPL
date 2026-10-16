@@ -647,7 +647,7 @@ export default function Payroll() {
             </div>
           </div>
 
-          <div className="card p-0 hidden md:block overflow-x-auto">
+          <div className="card p-0 hidden md:block overflow-auto max-h-[calc(100vh-210px)] min-h-[420px]">
             {/* dense-cols (mam 2026-08-19 "payroll column widths are wide") —
                 the Present/Sunday/CL/Holiday split added four columns, so the
                 row now needs the tight px-2 padding to fit without scrolling. */}
