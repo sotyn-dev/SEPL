@@ -9,6 +9,7 @@ const {
   isAllowedWebsiteOrigin, websiteRefOf, parseEstimatedValue,
   isEnergyDeskReport, energyDeskRemarks, energyDeskEstimatedValue,
 } = require('../lib/websiteLead');
+const { websiteCategory, explicitLocation } = require('../lib/websiteLeadFields');
 const { recordWebsiteLeadMeta } = require('../lib/websiteLeadMeta');
 
 const router = express.Router();
@@ -190,6 +191,8 @@ function recordWebsiteLead(b) {
   const companyName = getField(b, 'company', 'company_name', 'organization', 'firm');
   const city = getField(b, 'project_city', 'city', 'location', 'project_location');
   const projectLocation = getField(b, 'project_location', 'location', 'city', 'project_city');
+  const state = explicitLocation(b, 'project_state', 'state');
+  const district = explicitLocation(b, 'project_district', 'district');
   const serviceNeeded = getField(b, 'service', 'service_needed', 'category', 'service_requested');
   const role = getField(b, 'role', 'your_role', 'lead_type', 'designation');
   const industry = getField(b, 'industry', 'building_category', 'industry_type', 'sector');
@@ -231,6 +234,8 @@ function recordWebsiteLead(b) {
     companyName ? `• Company: ${companyName}` : null,
     role ? `• Submitter Role: ${role}` : null,
     serviceNeeded ? `• Service Needed: ${serviceNeeded}` : null,
+    state ? `• Project State: ${state}` : null,
+    district ? `• Project District: ${district}` : null,
     industry ? `• Industry / Building Category: ${industry}` : null,
     plotArea ? `• Built-Up / Plot Area: ${plotArea}` : null,
     powerLoad ? `• Estimated Power Load: ${powerLoad}` : null,
@@ -285,24 +290,26 @@ function recordWebsiteLead(b) {
       INSERT INTO sales_funnel (
         lead_no, client_name, company_name, phone, email,
         category, lead_type, lead_kind,
-        project_name, project_location, city,
+        project_name, project_location, city, state, district,
         estimated_value, tentative_timeline, sub_trades_scope, building_category,
         remarks, source, assigned_sc,
         current_stage, stage_entered_at,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, 'Website', 'Nancy', 'lead_capture', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Website', 'Nancy', 'lead_capture', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `).run(
       leadNo,
       clientName,
       companyName || null,
       phone || null,
       email || null,
-      serviceNeeded || (isRfq ? 'MEPF Project' : null),
+      websiteCategory(serviceNeeded) || (isRfq ? 'MEPF Project' : null),
       role || 'Customer',
       projectName,
       projectLocation || city || null,
       city || null,
+      state,
+      district,
       estimatedValue,
       awardDate || null,
       scopes || serviceNeeded || null,

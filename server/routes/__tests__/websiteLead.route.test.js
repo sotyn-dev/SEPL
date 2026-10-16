@@ -93,6 +93,41 @@ const ref = (n) => `SEPL-20260923-TEST${String(n).padStart(4, '0')}`;
 // spends belongs to everyone behind that NAT — see the matrix doc, finding A.
 const BURST = 20;
 
+test('consultancy retains location, readable scope and original payload across a retry', () =>
+  withServer(async ({ post }) => {
+    const payload = { name: 'Consultancy fixture', lead_id: ref(9001),
+      city: 'Ludhiana', state: 'Punjab', district: 'Ludhiana',
+      service: 'MEP design / BOQ / tender support', intent: 'architect_coordination',
+      message: 'Enquiry intent: Architect coordination' };
+    const first = await post(payload, { origin: ALLOWED });
+    assert.equal(first.status, 201);
+    const accepted = await first.json();
+    const row = getDb().prepare('SELECT * FROM sales_funnel WHERE lead_no=?').get(accepted.lead_no);
+    assert.equal(row.state, 'Punjab');
+    assert.equal(row.district, 'Ludhiana');
+    assert.equal(row.city, 'Ludhiana');
+    assert.equal(row.category, 'MEP');
+    assert.equal(row.assigned_sc, 'Nancy');
+    assert.equal(row.current_stage, 'lead_capture');
+    assert.match(row.remarks, /MEP design \/ BOQ \/ tender support/);
+    const meta = getDb().prepare('SELECT payload_json FROM website_lead_meta WHERE funnel_id=?').get(row.id);
+    assert.deepEqual(JSON.parse(meta.payload_json), payload);
+    const retry = await post(payload, { origin: ALLOWED });
+    assert.equal(retry.status, 200);
+    assert.equal((await retry.json()).lead_no, accepted.lead_no);
+    assert.equal(leadRows(ref(9001)).length, 1);
+  }));
+
+test('an omitted state is not inferred from Noida and another service is preserved', () =>
+  withServer(async ({ post }) => {
+    const response = await post({ name: 'Other scope fixture', city: 'Noida', service: 'Solar EPC', lead_id: ref(9002) }, { origin: ALLOWED });
+    assert.equal(response.status, 201);
+    const { lead_no } = await response.json();
+    const row = getDb().prepare('SELECT state, category FROM sales_funnel WHERE lead_no=?').get(lead_no);
+    assert.equal(row.state, null);
+    assert.equal(row.category, 'Solar EPC');
+  }));
+
 // Failure messages that name the status AND the body, so a 500 is diagnosable
 // from the test output instead of needing a re-run with logging.
 const expectStatus = async (res, want, what) => {

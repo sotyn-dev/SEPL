@@ -2,6 +2,7 @@ const express = require('express');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { reportLeadScope } = require('../lib/websiteLeadReporting');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -93,24 +94,30 @@ router.get('/meta', (req, res) => res.json({
 // GET pipeline dashboard
 router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM sales_funnel').get();
-  const bystage = db.prepare('SELECT current_stage, COUNT(*) as count FROM sales_funnel GROUP BY current_stage').all();
+  const scope = reportLeadScope();
+  const report = (sql) => {
+    const stmt = db.prepare(`${scope.cte} ${sql}`);
+    return { get: (...args) => stmt.get(...scope.params, ...args), all: (...args) => stmt.all(...scope.params, ...args) };
+  };
+  const excludedTestCount = db.prepare(scope.excludedSql).get(...scope.params).count;
+  const total = report('SELECT COUNT(*) as c FROM report_leads').get();
+  const bystage = report('SELECT current_stage, COUNT(*) as count FROM report_leads GROUP BY current_stage').all();
   // Mam (2026-05-22 audit fix): stage was renamed 'won' → 'contract_signed'
   // in the 11-stage spec (commit sf_stages_v2), but this dashboard
   // still queried the old key — Won Deals tile showed 0.  Match both
   // for backwards compatibility with any rows that escaped the
   // migration.
-  const won = db.prepare("SELECT COUNT(*) as c, COALESCE(SUM(won_amount),0) as amount FROM sales_funnel WHERE current_stage IN ('contract_signed','won')").get();
-  const lost = db.prepare("SELECT COUNT(*) as c FROM sales_funnel WHERE current_stage='lost'").get();
-  const thisMonth = db.prepare("SELECT COUNT(*) as c FROM sales_funnel WHERE created_at >= date('now','start of month')").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM sales_funnel WHERE category IS NOT NULL AND category != '' GROUP BY category").all();
-  const bySC = db.prepare("SELECT assigned_sc, COUNT(*) as count FROM sales_funnel WHERE assigned_sc IS NOT NULL AND assigned_sc != '' GROUP BY assigned_sc").all();
-  const recent = db.prepare('SELECT * FROM sales_funnel ORDER BY updated_at DESC LIMIT 10').all();
+  const won = report("SELECT COUNT(*) as c, COALESCE(SUM(won_amount),0) as amount FROM report_leads WHERE current_stage IN ('contract_signed','won')").get();
+  const lost = report("SELECT COUNT(*) as c FROM report_leads WHERE current_stage='lost'").get();
+  const thisMonth = report("SELECT COUNT(*) as c FROM report_leads WHERE created_at >= date('now','start of month')").get();
+  const byCategory = report("SELECT category, COUNT(*) as count FROM report_leads WHERE category IS NOT NULL AND category != '' GROUP BY category").all();
+  const bySC = report("SELECT assigned_sc, COUNT(*) as count FROM report_leads WHERE assigned_sc IS NOT NULL AND assigned_sc != '' GROUP BY assigned_sc").all();
+  const recent = report('SELECT * FROM report_leads ORDER BY updated_at DESC LIMIT 10').all();
   const today = istToday();
   let todayFollowups = 0, overdueFollowups = 0;
   try {
-    todayFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date=?").get(today)?.c || 0;
-    overdueFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date<?").get(today)?.c || 0;
+    todayFollowups = report("SELECT COUNT(*) as c FROM lead_followups WHERE lead_id IN (SELECT id FROM report_leads) AND done=0 AND followup_date=?").get(today)?.c || 0;
+    overdueFollowups = report("SELECT COUNT(*) as c FROM lead_followups WHERE lead_id IN (SELECT id FROM report_leads) AND done=0 AND followup_date<?").get(today)?.c || 0;
   } catch (e) { }
 
   // Fortnightly expected-closing forecast (mam 2026-06-25): qualified leads
@@ -119,8 +126,8 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   // are excluded. Bucketing uses date PARTS (TZ-agnostic for DATE columns).
   let closingByFortnight = [];
   try {
-    const rows = db.prepare(
-      "SELECT closing_date, COALESCE(tentative_amount,0) AS amt FROM sales_funnel WHERE closing_date IS NOT NULL AND closing_date != '' AND current_stage != 'lost'"
+    const rows = report(
+      "SELECT closing_date, COALESCE(tentative_amount,0) AS amt FROM report_leads WHERE closing_date IS NOT NULL AND closing_date != '' AND current_stage != 'lost'"
     ).all();
     const DAY = 86400000, FN = 14 * DAY, N = 6;
     const now = new Date();
@@ -145,7 +152,7 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
     closingByFortnight = buckets;
   } catch (e) { }
 
-  res.json({ total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups, closingByFortnight });
+  res.json({ excludedTestCount, total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups, closingByFortnight });
 });
 
 // GET single (with SLA info)
