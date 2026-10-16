@@ -572,6 +572,10 @@
         [
           "early",
           "Early — 9:00 AM to 6:00 PM"
+        ],
+        [
+          "late",
+          "Late — 10:30 AM to 7:00 PM"
         ]
       ]
     },
