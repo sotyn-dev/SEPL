@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import Modal from './Modal';
 import api from '../api';
 import toast from 'react-hot-toast';
-import { FiMail, FiSend, FiCheckCircle, FiAlertCircle, FiInfo, FiSearch, FiRefreshCw } from 'react-icons/fi';
+import { FiMail, FiSend, FiCheckCircle, FiAlertCircle, FiInfo, FiSearch, FiRefreshCw, FiEye } from 'react-icons/fi';
 import { fmtDateTime } from '../utils/datetime';
 
 const fmtINR = (n) => Math.round(n || 0).toLocaleString('en-IN');
@@ -40,11 +40,18 @@ export default function SendSalaryEmailModal({
   const [singleEmail, setSingleEmail] = useState('');
   const [singleSending, setSingleSending] = useState(false);
 
+  // Payslip preview state
+  const [previewTarget, setPreviewTarget] = useState(null);
+  const [previewHtml, setPreviewHtml] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
   // Check SMTP status and initialize recipient list whenever modal opens
   useEffect(() => {
     if (!isOpen) {
       setSendResult(null);
       setIsSending(false);
+      setPreviewTarget(null);
+      setPreviewHtml(null);
       return;
     }
 
@@ -64,15 +71,15 @@ export default function SendSalaryEmailModal({
     }
 
     if (singleTarget) {
-      setSingleEmail(singleTarget.email || '');
+      setSingleEmail(singleTarget.personal_email || '');
     } else {
-      // Initialize bulk list
+      // Initialize bulk list with personal emails exclusively
       const initialEmails = {};
       const initialSelected = new Set();
       employees.forEach(emp => {
-        const mail = (emp.email || '').trim();
+        const mail = (emp.personal_email || '').trim();
         initialEmails[emp.employee_id] = mail;
-        // Preselect employees who have a non-empty email
+        // Preselect employees who have a non-empty personal email
         if (mail.includes('@')) {
           initialSelected.add(emp.employee_id);
         }
@@ -115,6 +122,28 @@ export default function SendSalaryEmailModal({
 
   const handleEmailChange = (empId, val) => {
     setEmailMap(prev => ({ ...prev, [empId]: val }));
+  };
+
+  // Preview payslip HTML directly in modal
+  const handleTogglePreview = async (emp) => {
+    if (!emp) return;
+    if (previewTarget && previewTarget.employee_id === emp.employee_id) {
+      setPreviewTarget(null);
+      setPreviewHtml(null);
+      return;
+    }
+    setPreviewTarget(emp);
+    setLoadingPreview(true);
+    try {
+      const res = await api.get(`/payroll/preview-slip/${emp.employee_id}?month=${month}`);
+      setPreviewHtml(res.data?.html || '<p style="padding:20px;text-align:center;color:#64748b;">No preview available.</p>');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load salary slip preview');
+      setPreviewTarget(null);
+      setPreviewHtml(null);
+    } finally {
+      setLoadingPreview(false);
+    }
   };
 
   // Send single slip (for singleTarget mode)
@@ -273,24 +302,117 @@ export default function SendSalaryEmailModal({
         {/* ================= SINGLE EMPLOYEE MODE ================= */}
         {singleTarget ? (
           <div className="space-y-4 py-1">
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm grid grid-cols-2 gap-2">
-              <div>
-                <span className="text-gray-500 text-xs">Employee:</span>
-                <p className="font-semibold text-gray-900">{singleTarget.employee_name}</p>
+            {/* Structured Payslip Summary Card */}
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-2">
+                <div>
+                  <span className="font-bold text-gray-900 text-sm">{singleTarget.employee_name}</span>
+                  <span className="ml-2 text-gray-500">
+                    ({singleTarget.department || 'General'}{singleTarget.designation ? ` • ${singleTarget.designation}` : ''})
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-gray-500 text-[10px] uppercase block font-semibold">Agreed Base Salary</span>
+                  <span className="font-bold text-gray-800 text-sm">₹{fmtINR(singleTarget.base_salary)}</span>
+                </div>
               </div>
-              <div>
-                <span className="text-gray-500 text-xs">Department:</span>
-                <p className="font-medium text-gray-800">{singleTarget.department || '-'}</p>
+
+              {/* Attendance & Days Accounting Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white p-2.5 rounded border border-gray-200/80">
+                <div>
+                  <span className="text-[10px] text-gray-500 uppercase block font-semibold">Calendar Days</span>
+                  <span className="font-semibold text-gray-800">{singleTarget.total_days_in_month || 30} days</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-500 uppercase block font-semibold">Per-Day Rate</span>
+                  <span className="font-semibold text-gray-800">₹{fmtINR(singleTarget.per_day_rate)} / day</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-500 uppercase block font-semibold">Payable Days</span>
+                  <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded inline-block">
+                    {singleTarget.paid_days} of {singleTarget.total_days_in_month || 30} days
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-500 uppercase block font-semibold">Base Earned</span>
+                  <span className="font-bold text-gray-900">
+                    ₹{fmtINR(singleTarget.gross_earned || (singleTarget.per_day_rate * singleTarget.paid_days))}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-gray-500 text-xs">Worked Days:</span>
-                <p className="font-medium text-gray-800">{singleTarget.paid_days} of {singleTarget.working_days}</p>
+
+              {/* Attendance breakdown pills */}
+              <div className="text-[11px] text-gray-600 bg-blue-50/60 border border-blue-100 rounded px-2.5 py-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                <span><strong>Present:</strong> {singleTarget.present ?? Math.max(0, singleTarget.paid_days - (singleTarget.sunday_count || 0) - (singleTarget.paid_leaves || 0) - (singleTarget.holiday_days || 0))}</span>
+                <span><strong>Sundays:</strong> {singleTarget.sunday_count || 0}</span>
+                <span><strong>CL / Leaves:</strong> {singleTarget.paid_leaves || 0}</span>
+                <span><strong>Holidays:</strong> {singleTarget.holiday_days || 0}</span>
+                {singleTarget.half_days > 0 && <span className="text-orange-700"><strong>Half Days:</strong> {singleTarget.half_days} (-{singleTarget.half_days * 0.5}d)</span>}
+                {singleTarget.absent_days > 0 && <span className="text-red-700"><strong>Absent (LOP):</strong> {singleTarget.absent_days}</span>}
+                {singleTarget.sunday_worked > 0 && <span className="text-emerald-700"><strong>Sunday Worked:</strong> +{singleTarget.sunday_worked_pay}d bonus</span>}
               </div>
-              <div>
-                <span className="text-gray-500 text-xs">Net Pay:</span>
-                <p className="font-bold text-emerald-600 text-base">₹{fmtINR(singleTarget.net_pay)}</p>
+
+              {/* Adjustments: OT, Food, Deductions, Net Pay */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1 items-center">
+                <div>
+                  <span className="text-gray-500 block">Overtime Pay:</span>
+                  <span className={singleTarget.ot_pay > 0 ? "font-semibold text-emerald-700" : "text-gray-500"}>
+                    {singleTarget.ot_pay > 0 ? `+₹${fmtINR(singleTarget.ot_pay)} (${singleTarget.ot_hours}h)` : '₹0'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block">Food Allowance:</span>
+                  <span className={singleTarget.food > 0 ? "font-semibold text-emerald-700" : "text-gray-500"}>
+                    {singleTarget.food > 0 ? `+₹${fmtINR(singleTarget.food)}` : '₹0'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block">Deductions:</span>
+                  <span className={(singleTarget.late_penalty > 0 || singleTarget.advance > 0) ? "font-semibold text-red-600" : "text-gray-500"}>
+                    {(singleTarget.late_penalty > 0 || singleTarget.advance > 0)
+                      ? `-₹${fmtINR((singleTarget.late_penalty || 0) + (singleTarget.advance || 0))}`
+                      : '₹0'}
+                    {singleTarget.late_penalty > 0 && <span className="text-[10px] text-gray-500 font-normal"> (Late: ₹{fmtINR(singleTarget.late_penalty)})</span>}
+                    {singleTarget.advance > 0 && <span className="text-[10px] text-gray-500 font-normal"> (Adv: ₹{fmtINR(singleTarget.advance)})</span>}
+                  </span>
+                </div>
+                <div className="sm:text-right">
+                  <span className="text-gray-500 block text-[10px] uppercase font-semibold">Net Payable</span>
+                  <span className="font-extrabold text-emerald-600 text-base">₹{fmtINR(singleTarget.net_pay)}</span>
+                </div>
               </div>
             </div>
+
+            {/* Toggle Preview Button */}
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => handleTogglePreview(singleTarget)}
+                className="btn btn-secondary text-xs py-1.5 flex items-center gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+              >
+                <FiEye size={13} />
+                <span>{previewTarget?.employee_id === singleTarget.employee_id ? 'Hide Payslip Preview' : 'Preview Exact Email Slip'}</span>
+              </button>
+            </div>
+
+            {/* Preview Frame */}
+            {previewTarget?.employee_id === singleTarget.employee_id && (
+              <div className="border border-blue-200 rounded-lg overflow-hidden bg-white shadow-xs">
+                <div className="bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-900 border-b border-blue-200 flex justify-between items-center">
+                  <span>Exact Email Payslip Preview — {singleTarget.employee_name} ({month})</span>
+                  <button type="button" onClick={() => setPreviewTarget(null)} className="text-gray-500 hover:text-gray-800 text-xs">✕ Close</button>
+                </div>
+                {loadingPreview ? (
+                  <div className="p-8 text-center text-gray-400 text-xs">Loading email preview…</div>
+                ) : (
+                  <iframe
+                    title="Payslip Preview"
+                    srcDoc={previewHtml}
+                    className="w-full h-[460px] border-0"
+                  />
+                )}
+              </div>
+            )}
 
             {singleTarget.email_sent_at && (
               <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-800 flex items-center gap-2">
@@ -303,16 +425,16 @@ export default function SendSalaryEmailModal({
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="label text-xs font-semibold mb-0">Recipient Email Address *</label>
+                <label className="label text-xs font-semibold mb-0">Recipient Personal Email *</label>
                 {singleTarget.personal_email ? (
                   <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded font-medium">
                     Personal Email
                   </span>
-                ) : singleTarget.work_email ? (
-                  <span className="text-[11px] text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded font-medium">
-                    Work Email
+                ) : (
+                  <span className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded font-medium">
+                    No Personal Email Configured
                   </span>
-                ) : null}
+                )}
               </div>
               <input
                 type="email"
@@ -324,8 +446,8 @@ export default function SendSalaryEmailModal({
               />
               <p className="text-[11px] text-gray-500 mt-1">
                 {singleTarget.personal_email
-                  ? 'Prefilled with the employee’s Personal Email from their profile. You can also edit it here before sending.'
-                  : 'Prefilled with the employee’s Email from their profile. You can also edit it here before sending.'}
+                  ? 'Prefilled with the employee’s Personal Email from their profile. Slips are sent only to personal emails.'
+                  : 'No personal email configured in employee profile. Enter their personal email here or update in Employee Master.'}
               </p>
             </div>
 
@@ -405,6 +527,31 @@ export default function SendSalaryEmailModal({
                   <strong>{sendResult.skippedCount || 0}</strong> skipped,{' '}
                   <strong>{sendResult.failedCount || 0}</strong> failed.
                 </p>
+              </div>
+            )}
+
+            {/* Payslip Preview Frame in Bulk Mode */}
+            {previewTarget && !singleTarget && (
+              <div className="border border-indigo-200 rounded-lg overflow-hidden bg-white shadow-xs">
+                <div className="bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-950 border-b border-indigo-200 flex justify-between items-center">
+                  <span>Payslip Preview — {previewTarget.employee_name} ({month})</span>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewTarget(null)}
+                    className="text-gray-500 hover:text-gray-800 text-xs px-2 py-0.5 rounded hover:bg-white"
+                  >
+                    ✕ Close Preview
+                  </button>
+                </div>
+                {loadingPreview ? (
+                  <div className="p-8 text-center text-gray-400 text-xs">Loading email preview…</div>
+                ) : (
+                  <iframe
+                    title="Bulk Payslip Preview"
+                    srcDoc={previewHtml}
+                    className="w-full h-[440px] border-0"
+                  />
+                )}
               </div>
             )}
 
@@ -493,7 +640,7 @@ export default function SendSalaryEmailModal({
                                 type="email"
                                 value={currentMail}
                                 onChange={e => handleEmailChange(emp.employee_id, e.target.value)}
-                                placeholder="Enter email address…"
+                                placeholder={emp.personal_email ? "Personal email…" : "Enter personal email…"}
                                 disabled={isSending}
                                 className={`input text-xs py-1 px-2 flex-1 ${
                                   !hasValidMail && isSelected ? 'border-amber-400 bg-amber-50/30' : ''
@@ -503,11 +650,11 @@ export default function SendSalaryEmailModal({
                                 <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded font-medium shrink-0" title="Using Personal Email from employee profile">
                                   Personal
                                 </span>
-                              ) : emp.work_email ? (
-                                <span className="text-[10px] text-gray-600 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded font-medium shrink-0" title="Using Work Email from employee profile">
-                                  Work
+                              ) : (
+                                <span className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded font-medium shrink-0" title="No personal email configured in profile">
+                                  No Personal Email
                                 </span>
-                              ) : null}
+                              )}
                             </div>
                           </td>
                           <td className="p-2 text-center whitespace-nowrap text-[11px]">
@@ -523,16 +670,26 @@ export default function SendSalaryEmailModal({
                               <span className="text-gray-400 text-[10px]">Not sent</span>
                             )}
                           </td>
-                          <td className="p-2 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handleQuickSend(emp)}
-                              disabled={isSending || !hasValidMail}
-                              title="Send slip immediately to this employee"
-                              className="btn btn-secondary text-[11px] px-1.5 py-0.5 disabled:opacity-40"
-                            >
-                              <FiSend size={11} />
-                            </button>
+                          <td className="p-2 text-center whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleTogglePreview(emp)}
+                                title="Preview payslip email for this employee"
+                                className="btn btn-secondary text-[11px] px-1.5 py-0.5 text-blue-600 hover:bg-blue-50"
+                              >
+                                <FiEye size={11} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleQuickSend(emp)}
+                                disabled={isSending || !hasValidMail}
+                                title="Send slip immediately to this employee"
+                                className="btn btn-secondary text-[11px] px-1.5 py-0.5 disabled:opacity-40"
+                              >
+                                <FiSend size={11} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

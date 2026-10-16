@@ -1292,6 +1292,8 @@ export default function Attendance() {
           absent: myHistory.filter(r => r.status === 'absent').length,
           half_day: myHistory.filter(r => r.status === 'half_day').length,
           on_leave: myHistory.filter(r => r.status === 'on_leave').length,
+          short_leave: myHistory.filter(r => !!(r.short_leave || r.leave?.leave_type === 'short_leave')).length,
+          short_leave_hours: +(myHistory.reduce((s, r) => s + (+((r.short_leave || (r.leave?.leave_type === 'short_leave' ? r.leave : null))?.hours) || 0), 0)).toFixed(1),
           week_offs: myHistory.filter(r => r.status === 'weekend').length,
           holidays: myHistory.filter(r => r.status === 'holiday').length,
           total_hours: +(myHistory.reduce((s, r) => s + (+r.total_hours || 0), 0)).toFixed(1),
@@ -1307,6 +1309,7 @@ export default function Attendance() {
           if (myHistFilter === 'absent') return d.status === 'absent';
           if (myHistFilter === 'half_day') return d.status === 'half_day';
           if (myHistFilter === 'leave') return d.status === 'on_leave';
+          if (myHistFilter === 'short_leave') return !!(d.short_leave || d.leave?.leave_type === 'short_leave');
           if (myHistFilter === 'weekend') return d.status === 'weekend';
           if (myHistFilter === 'holiday') return d.status === 'holiday';
           return true;
@@ -1364,19 +1367,24 @@ export default function Attendance() {
                     onClick={() => exportCsv(
                       `my-attendance-${myHistFrom}_to_${myHistTo}`,
                       ['Date', 'Day', 'Status', 'In Time', 'Out Time', 'Hours', 'Site / Description', 'Details'],
-                      displayedHistory.map(r => [
-                        r.date,
-                        r.day_name || '',
-                        r.status === 'on_leave' ? `Leave (${r.leave?.leave_type || 'Approved'})` :
-                        r.status === 'weekend' ? 'Week-Off' :
-                        r.status === 'holiday' ? `Holiday (${r.holiday_name || 'Public'})` :
-                        (r.status || '').toUpperCase(),
-                        r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
-                        r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : (r.missed_punch_out ? 'Missed Out' : ''),
-                        r.total_hours != null ? r.total_hours : '',
-                        r.site_name || (r.leave ? `Leave: ${r.leave.leave_type}` : r.holiday_name ? `Holiday: ${r.holiday_name}` : r.is_sunday ? 'Weekly Off' : (r.status === 'absent' ? 'Absent' : '')),
-                        r.holiday_name || (r.leave?.reason || r.remarks || '')
-                      ])
+                      displayedHistory.map(r => {
+                        const sl = r.short_leave || (r.leave?.leave_type === 'short_leave' ? r.leave : null);
+                        const slDesc = sl ? `Short Leave (${sl.hours ? `${sl.hours}h` : ''}${sl.from_time && sl.to_time ? ` ${sl.from_time}-${sl.to_time}` : ''}${sl.reason ? ` - ${sl.reason}` : ''})` : '';
+                        const siteDesc = r.site_name ? (slDesc ? `${r.site_name} | ${slDesc}` : r.site_name) : (slDesc || (r.leave ? `Leave: ${r.leave.leave_type}` : r.holiday_name ? `Holiday: ${r.holiday_name}` : r.is_sunday ? 'Weekly Off' : (r.status === 'absent' ? 'Absent' : '')));
+                        return [
+                          r.date,
+                          r.day_name || '',
+                          r.status === 'on_leave' ? `Leave (${r.leave?.leave_type || 'Approved'})` :
+                          r.status === 'weekend' ? 'Week-Off' :
+                          r.status === 'holiday' ? `Holiday (${r.holiday_name || 'Public'})` :
+                          (sl ? `${(r.status || '').toUpperCase()} + Short Leave` : (r.status || '').toUpperCase()),
+                          r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                          r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : (r.missed_punch_out ? 'Missed Out' : ''),
+                          r.total_hours != null ? r.total_hours : '',
+                          siteDesc,
+                          r.holiday_name || (r.leave?.reason || r.remarks || sl?.reason || '')
+                        ];
+                      })
                     )}
                   >
                     <FiDownload /> Export CSV
@@ -1386,7 +1394,7 @@ export default function Attendance() {
             </div>
 
             {/* Complete Executive KPI Summary Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-10 gap-2">
               <div className="card p-2.5 border-l-4 border-gray-400">
                 <div className="text-[10px] text-gray-500 uppercase font-semibold">Total Days</div>
                 <div className="text-xl font-bold text-gray-800">{histSummary.total_days}</div>
@@ -1416,6 +1424,11 @@ export default function Attendance() {
                 <div className="text-[10px] text-purple-600 uppercase font-semibold">Leave</div>
                 <div className="text-xl font-bold text-purple-600">{histSummary.on_leave}</div>
                 <div className="text-[10px] text-gray-400">Approved leaves</div>
+              </div>
+              <div className="card p-2.5 border-l-4 border-amber-600 bg-amber-50/20">
+                <div className="text-[10px] text-amber-800 uppercase font-semibold">Short Leaves</div>
+                <div className="text-xl font-bold text-amber-800">{histSummary.short_leave || 0}</div>
+                <div className="text-[10px] text-amber-700">{histSummary.short_leave_hours ? `${histSummary.short_leave_hours}h total` : 'Partial leaves'}</div>
               </div>
               <div className="card p-2.5 border-l-4 border-blue-500">
                 <div className="text-[10px] text-blue-600 uppercase font-semibold">Week-Offs</div>
@@ -1473,6 +1486,7 @@ export default function Attendance() {
                     { id: 'absent', label: `Absent (${histSummary.absent})`, alert: histSummary.absent > 0 },
                     { id: 'half_day', label: `Half Day (${histSummary.half_day})` },
                     { id: 'leave', label: `Leave (${histSummary.on_leave})` },
+                    { id: 'short_leave', label: `Short Leave (${histSummary.short_leave || 0})` },
                     { id: 'weekend', label: `Week-Off (${histSummary.week_offs})` },
                     { id: 'holiday', label: `Holiday (${histSummary.holidays || 0})` },
                   ].map(f => (
@@ -1591,17 +1605,47 @@ export default function Attendance() {
                             {r.total_hours != null ? `${r.total_hours}h` : '—'}
                           </td>
                           <td className="px-2 py-2 text-xs text-gray-700">
-                            {r.site_name || (r.leave ? `Leave: ${r.leave.leave_type}${r.leave.reason ? ` (${r.leave.reason})` : ''}` : isHol ? `Holiday: ${r.holiday_name || 'Declared'}` : isSun ? 'Weekly Off' : isAbs ? 'Unmarked Absence' : '—')}
+                            <div className="space-y-1">
+                              {r.site_name && (
+                                <div className="font-medium text-gray-800">{r.site_name}</div>
+                              )}
+                              {(r.short_leave || r.leave?.leave_type === 'short_leave') && (() => {
+                                const sl = r.short_leave || r.leave;
+                                const timeStr = sl.from_time && sl.to_time ? `${sl.from_time} – ${sl.to_time}` : (sl.hours ? `${sl.hours}h` : '');
+                                return (
+                                  <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200" title={sl.reason ? `Reason: ${sl.reason}` : 'Approved Short Leave'}>
+                                    <span className="font-semibold text-amber-800">Short Leave:</span>
+                                    {timeStr && <span>{timeStr}</span>}
+                                    {sl.reason && <span className="text-gray-500 italic max-w-[200px] truncate">({sl.reason})</span>}
+                                  </div>
+                                );
+                              })()}
+                              {!r.site_name && !r.short_leave && (r.leave?.leave_type !== 'short_leave') && (
+                                <div>
+                                  {r.leave ? `Leave: ${r.leave.leave_type}${r.leave.reason ? ` (${r.leave.reason})` : ''}` : isHol ? `Holiday: ${r.holiday_name || 'Declared'}` : isSun ? 'Weekly Off' : isAbs ? 'Unmarked Absence' : '—'}
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="px-2 py-2 text-center">
-                            {r.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
-                            {r.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({r.late_minutes ? `${r.late_minutes}m` : 'Late'})</span>}
-                            {r.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
-                            {r.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({r.leave?.leave_type || 'Approved'})</span>}
-                            {r.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
-                            {r.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={r.holiday_name}>Holiday ({r.holiday_name || 'Declared'})</span>}
-                            {r.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
-                            {r.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                            <div className="flex flex-col items-center gap-1">
+                              {r.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
+                              {r.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({r.late_minutes ? `${r.late_minutes}m` : 'Late'})</span>}
+                              {r.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
+                              {r.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({r.leave?.leave_type || 'Approved'})</span>}
+                              {r.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
+                              {r.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={r.holiday_name}>Holiday ({r.holiday_name || 'Declared'})</span>}
+                              {r.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
+                              {r.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                              {(r.short_leave || r.leave?.leave_type === 'short_leave') && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 shadow-xs"
+                                  title={(r.short_leave || r.leave)?.reason ? `Short Leave: ${(r.short_leave || r.leave).reason}` : 'Approved Short Leave'}
+                                >
+                                  Short Leave ({(r.short_leave || r.leave)?.hours ? `${(r.short_leave || r.leave).hours}h` : 'Partial'})
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-center items-center">

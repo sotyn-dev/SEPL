@@ -14,6 +14,7 @@
 const ROSTERS = {
   general: { key: 'general', label: '9:30 AM – 6:30 PM', start: '09:30', end: '18:30', offsetMin: 0 },
   early:   { key: 'early',   label: '9:00 AM – 6:00 PM', start: '09:00', end: '18:00', offsetMin: -30 },
+  late:    { key: 'late',    label: '10:30 AM – 7:00 PM', start: '10:30', end: '19:00', offsetMin: 60 },
 };
 
 const DEFAULT_ROSTER = 'general';

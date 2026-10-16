@@ -415,6 +415,35 @@
       ]
     },
     {
+      "key": "roster",
+      "label": "Shift / Roster",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "general",
+          "9:30 AM – 6:30 PM (General)"
+        ],
+        [
+          "early",
+          "9:00 AM – 6:00 PM (Early / Site)"
+        ],
+        [
+          "late",
+          "10:30 AM – 7:00 PM (Late Shift)"
+        ]
+      ]
+    },
+    {
       "key": "grade_band",
       "label": "Grade / band",
       "type": "select",
