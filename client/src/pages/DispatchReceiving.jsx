@@ -81,7 +81,7 @@ export default function DispatchReceiving() {
   const openAdd = () => { setEditing(null); setForm(BLANK); setSiteIndents([]); setOpen(true); };
   const openEdit = (r) => {
     setEditing(r);
-    const rIndent = (r.indent_number === '0' || !r.indent_number) ? '' : r.indent_number;
+    const rIndent = (!r.indent_number) ? '0' : r.indent_number;
     setForm({ site: siteKey(r.site_name), indent_number: rIndent, bill_number: r.bill_number || '', file: null });
     setOpen(true);
   };
@@ -92,8 +92,9 @@ export default function DispatchReceiving() {
 
   const indentOptions = (() => {
     const list = siteIndents.map(i => ({ value: i.indent_number, label: i.indent_number }));
-    if (form.indent_number && form.indent_number !== '0' && !list.some(o => o.value === form.indent_number)) {
-      list.unshift({ value: form.indent_number, label: form.indent_number });
+    list.unshift({ value: '0', label: '0 — Direct / No Indent' });
+    if (form.indent_number && !list.some(o => o.value === form.indent_number)) {
+      list.push({ value: form.indent_number, label: form.indent_number });
     }
     return list;
   })();
@@ -102,11 +103,8 @@ export default function DispatchReceiving() {
     e.preventDefault();
     if (saving) return;
     const trimmedIndent = String(form.indent_number || '').trim();
-    if (!form.site || !trimmedIndent || trimmedIndent === '0' || !form.bill_number.trim() || (!editing && !form.file)) {
-      if (trimmedIndent === '0') {
-        return toast.error('Please select a valid Indent No. (cannot be 0)');
-      }
-      return toast.error(editing ? 'Site, valid Indent No. and Bill Number are required' : 'All four fields with a valid Indent No. are required');
+    if (!form.site || !trimmedIndent || !form.bill_number.trim() || (!editing && !form.file)) {
+      return toast.error(editing ? 'Site, Indent No. and Bill Number are required' : 'All four fields are required');
     }
     setSaving(true);
     try {
@@ -117,7 +115,8 @@ export default function DispatchReceiving() {
         const upload = await api.post('/upload', data, { headers: { 'Content-Type': 'multipart/form-data' } });
         receivingUrl = upload.data.url;
       }
-      const body = { site: form.site, indent_number: trimmedIndent, bill_number: form.bill_number.trim(), receiving_url: receivingUrl };
+      const indentVal = /^0+$/.test(trimmedIndent) ? '0' : trimmedIndent;
+      const body = { site: form.site, indent_number: indentVal, bill_number: form.bill_number.trim(), receiving_url: receivingUrl };
       const res = editing ? await api.put(`/dispatch-receiving/${editing.id}`, body) : await api.post('/dispatch-receiving', body);
       toast.success(res.data?.message || 'Dispatch receiving saved'); setOpen(false); await load();
     } catch (err) { toast.error(err.response?.data?.error || 'Could not save dispatch receiving'); }
@@ -165,7 +164,13 @@ export default function DispatchReceiving() {
       <NumberedTable start={(pagination.page - 1) * pagination.perPage + 1} className="w-full text-sm"><thead><tr className="text-left border-b"><th className="p-3">Site Name</th><th className="p-3">Indent No.</th><th className="p-3">Bill Number</th><th className="p-3">Receiving</th><th className="p-3">Recorded By</th><th className="p-3">Status</th><th className="p-3">Actions</th></tr></thead>
         <tbody>{pagination.pageItems.map(r => <tr key={r.id} className="border-b align-top">
           <td className="p-3">{r.site_name}</td>
-          <td className="p-3 whitespace-nowrap">{r.indent_number}</td>
+          <td className="p-3 whitespace-nowrap">
+            {r.indent_number === '0' ? (
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">0 · Direct</span>
+            ) : (
+              r.indent_number
+            )}
+          </td>
           <td className="p-3">{r.bill_number}</td>
           <td className="p-3">{(r.receiving_files || [r.receiving_url]).map((file,index) => <div key={file}><a className="text-blue-700 underline" href={file} target="_blank" rel="noreferrer">{index ? `Proof ${index + 1}` : 'View receiving'}</a></div>)}
             {!!r.receiving_items?.length && <details className="mt-2 text-xs"><summary className="cursor-pointer">Received items · {r.receiving_items.length}</summary>{r.receiving_items.map(it => <div key={it.line_key} className="mt-1">{it.description}: <b>{it.received_qty} {it.unit}</b></div>)}</details>}
@@ -231,12 +236,18 @@ export default function DispatchReceiving() {
               disabled={!form.site}
               options={indentOptions}
               value={form.indent_number}
-              placeholder={!form.site ? 'Select site first…' : indentsLoading ? 'Loading indents…' : indentOptions.length === 0 ? 'No indents found for this site (+ Add Indent)' : 'Search and select indent…'}
+              placeholder={!form.site ? 'Select site first…' : indentsLoading ? 'Loading indents…' : 'Search and select indent…'}
               onChange={opt => setForm(f => ({ ...f, indent_number: opt?.value || '' }))}
             />
-            {form.site && !indentsLoading && indentOptions.length === 0 && (
+            {form.indent_number === '0' && (
+              <p className="mt-1 text-xs text-blue-600">
+                ℹ️ Direct receiving without linked indent.
+              </p>
+            )}
+            {form.site && !indentsLoading && siteIndents.length === 0 && (
               <p className="mt-1 text-xs text-amber-600">
-                No indents found for this site. Click <a href="/procurement?tab=indents" target="_blank" rel="noreferrer" className="underline font-semibold">+ Add Indent</a> to create one, then click Refresh.
+                No indents found for this site. You can choose &quot;0 — Direct / No Indent&quot; or click{' '}
+                <a href="/procurement?tab=indents" target="_blank" rel="noreferrer" className="underline font-semibold">+ Add Indent</a> to create one.
               </p>
             )}
           </div>

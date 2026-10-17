@@ -16,25 +16,30 @@ async function validProof(url) {
   return PROOF_FILE.test(filename) && await storage.exists(filename);
 }
 
-// Field checks shared by add and edit. Indent No. is typed by hand and linked
-// to the indent record only when the text matches one of this site's indents —
-// never rejected for not matching.
+// Field checks shared by add and edit. Indent No. is typed or selected from the site's indents,
+// or entered as '0' when no indent exists (direct site receiving).
 function readFields(db, body) {
   const site = sites(db).find(s => s.value === normalize(body.site));
   if (!site) return { error: 'Site Name is required' };
   const indentNumber = typeof body.indent_number === 'string' ? body.indent_number.trim() : '';
-  if (!indentNumber || indentNumber === '0' || indentNumber === '00' || indentNumber.length > 100) {
-    return { error: 'A valid Indent No. is required (cannot be 0 or empty)' };
+  if (!indentNumber || indentNumber.length > 100) {
+    return { error: 'Indent No. is required (select 0 if no indent available)' };
   }
   const bill = typeof body.bill_number === 'string' ? body.bill_number.trim() : '';
   if (!bill || bill.length > 100) return { error: 'Bill Number is required (maximum 100 characters)' };
+
+  // Allow '0' or 'N/A' for direct site purchases/receivings without a formal ERP indent
+  if (indentNumber === '0' || /^0+$/.test(indentNumber) || indentNumber.toLowerCase() === 'n/a') {
+    return { site, indentNumber: '0', bill, indentId: null };
+  }
+
   const siteIndent = indentsForSite(db, site.value).find(i => normalize(i.indent_number) === normalize(indentNumber));
   let indent = siteIndent;
   if (!indent) {
     indent = db.prepare('SELECT id, indent_number FROM indents WHERE LOWER(TRIM(indent_number))=?').get(normalize(indentNumber));
   }
   if (!indent) {
-    return { error: `Indent "${indentNumber}" was not found. Please pick an existing indent or raise it first.` };
+    return { error: `Indent "${indentNumber}" was not found. Please pick an existing indent or select "0 — Direct / No Indent".` };
   }
   return { site, indentNumber, bill, indentId: siteIndent ? siteIndent.id : null };
 }
