@@ -414,8 +414,16 @@ tbody tr:hover {
 .numbered-table.freeze-col tr > :nth-child(2) {
   position: sticky;
   left: 2.75rem;
-  background: inherit;
+  background: #ffffff;
   z-index: 1;
+}
+.numbered-table.freeze-col tr.bg-gray-50 > :nth-child(2)   { background: #f9fafb; }
+.numbered-table.freeze-col tr.bg-amber-50 > :nth-child(2)  { background: #fffbeb; }
+.numbered-table.freeze-col tr.bg-red-50 > :nth-child(2)    { background: #fef2f2; }
+.numbered-table.freeze-col tr.bg-emerald-50 > :nth-child(2) { background: #ecfdf5; }
+.numbered-table.freeze-col tr.bg-indigo-50 > :nth-child(2)  { background: #eef2ff; }
+.numbered-table.freeze-col tbody tr:hover > :nth-child(2) {
+  background: rgba(254, 226, 226, 0.4);
 }
 .numbered-table.freeze-col thead tr > :nth-child(2) {
   z-index: 30;

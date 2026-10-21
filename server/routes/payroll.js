@@ -1377,13 +1377,14 @@ function getEligiblePayrollEmployees(db, month) {
               SELECT user_id FROM attendance WHERE date BETWEEN ? AND ? AND (punch_in_time IS NOT NULL OR admin_marked = 1)
             ))
          OR (
-              (join_date IS NULL OR join_date <= ?)
-          AND (exit_date IS NULL OR exit_date >= ?)
-          AND status IN ('active', 'inactive', 'terminated')
+              status IN ('inactive', 'terminated')
+          AND exit_date IS NOT NULL
+          AND exit_date >= ?
+          AND (join_date IS NULL OR join_date <= ?)
          )
        )
      ORDER BY name COLLATE NOCASE
-  `).all(endDate, month, startDate, endDate, endDate, startDate);
+  `).all(endDate, month, startDate, endDate, startDate, endDate);
 }
 
 // GET monthly payroll for ALL employees

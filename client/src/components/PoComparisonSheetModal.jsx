@@ -19,7 +19,7 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
     if (!poId) return;
     setLoading(true);
     try {
-      const res = await api.get(`/procurement/vendor-po/${poId}/comparison-sheet`);
+      const res = await api.get(`/procurement/vendor-po/${poId}/comparison-sheet`, { timeout: 120000 });
       setData(res.data);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load PO comparison sheet');

@@ -239,7 +239,8 @@ function getFromCache(key, query = '') {
 
   if (memoryCache.has(key)) {
     const item = memoryCache.get(key);
-    if (now - item.timestamp < CACHE_TTL_MS) {
+    const ttl = item.ttl || CACHE_TTL_MS;
+    if (now - item.timestamp < ttl) {
       cached = item.data;
     } else {
       memoryCache.delete(key);
@@ -250,9 +251,13 @@ function getFromCache(key, query = '') {
     try {
       const db = getDb();
       const row = db.prepare('SELECT result_json, cached_at FROM external_price_cache WHERE query_key = ?').get(key);
-      if (row && (now - row.cached_at < CACHE_TTL_MS)) {
-        cached = JSON.parse(row.result_json);
-        memoryCache.set(key, { data: cached, timestamp: row.cached_at });
+      if (row) {
+        const parsed = JSON.parse(row.result_json);
+        const ttl = parsed?._ttl || CACHE_TTL_MS;
+        if (now - row.cached_at < ttl) {
+          cached = parsed;
+          memoryCache.set(key, { data: cached, timestamp: row.cached_at, ttl });
+        }
       }
     } catch (_) {}
   }
@@ -276,23 +281,24 @@ function getFromCache(key, query = '') {
   return null;
 }
 
-function saveToCache(key, data) {
+function saveToCache(key, data, ttlMs = CACHE_TTL_MS) {
   const now = Date.now();
-  memoryCache.set(key, { data, timestamp: now });
+  const payload = { ...data, _ttl: ttlMs };
+  memoryCache.set(key, { data: payload, timestamp: now, ttl: ttlMs });
   try {
     const db = getDb();
     db.prepare(`
       INSERT INTO external_price_cache (query_key, result_json, cached_at)
       VALUES (?, ?, ?)
       ON CONFLICT(query_key) DO UPDATE SET result_json = excluded.result_json, cached_at = excluded.cached_at
-    `).run(key, JSON.stringify(data), now);
+    `).run(key, JSON.stringify(payload), now);
   } catch (_) {}
 }
 
 /**
  * Fetch raw search results from Moglix catalog endpoint
  */
-async function fetchMoglixRaw(searchTerm, timeoutMs = 6000) {
+async function fetchMoglixRaw(searchTerm, timeoutMs = 3500) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -357,18 +363,20 @@ async function searchMoglix(query) {
     }
   }
 
-  // Fetch products across targeted variations
+  // Fetch products across targeted variations in parallel
   const allProducts = [];
   const seen = new Set();
   const uniqueTerms = [...new Set(searchTerms)].slice(0, 4);
 
-  for (const term of uniqueTerms) {
-    const prods = await fetchMoglixRaw(term);
-    for (const p of prods) {
-      const id = p.moglixPartNumber || p.productName;
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        allProducts.push(p);
+  const results = await Promise.allSettled(uniqueTerms.map(term => fetchMoglixRaw(term, 3500)));
+  for (const res of results) {
+    if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+      for (const p of res.value) {
+        const id = p.moglixPartNumber || p.productName;
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          allProducts.push(p);
+        }
       }
     }
   }
@@ -533,7 +541,7 @@ async function searchIndiaMart(query) {
   if (!cleanQuery) return [];
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
 
   try {
     const url = `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(cleanQuery)}`;
@@ -698,9 +706,12 @@ async function getMarketRates(query, options = {}) {
     searchedAt: new Date().toISOString()
   };
 
-  // Cache whenever meaningful results are found
+  // Cache whenever meaningful results are found (24 hours TTL), or cache empty results with a shorter TTL (2 hours)
   if (moglixItems.length > 0 || indiamartItems.length > 0) {
-    saveToCache(cacheKey, result);
+    saveToCache(cacheKey, result, CACHE_TTL_MS);
+  } else {
+    // Negative caching: avoid re-hammering external portals repeatedly on empty results
+    saveToCache(cacheKey, result, 2 * 60 * 60 * 1000);
   }
 
   return { ...result, isCached: false };

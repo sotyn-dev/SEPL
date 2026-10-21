@@ -30,6 +30,7 @@ import { fmtDateTime as fmtIST } from '../utils/datetime';
 // fmtDateIST: CSV date cells must read as IST like the screen, not raw UTC
 // (export audit 2026-09-03 — the same defect class found in Attendance).
 import { fmtDateIST } from '../utils/dateIST';
+import raiseIndentFlowImg from '../assets/Raise-Indent-Flow.jpg';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
@@ -513,6 +514,7 @@ export default function Procurement() {
   const [sites, setSites] = useState([]);         // unique site names (Business Book)
   const [employees, setEmployees] = useState([]); // for "Raised By" dropdown
   const [modal, setModal] = useState(false);
+  const [showFlowModal, setShowFlowModal] = useState(false);
   const [form, setForm] = useState({});
   const [matchingTarget, setMatchingTarget] = useState(null);
   const [balanceBill, setBalanceBill] = useState(null);
@@ -6306,7 +6308,28 @@ export default function Procurement() {
       </Modal>
 
       {/* Indent Modal */}
-      <Modal isOpen={modal === 'indent'} onClose={() => { setModal(false); setEditingIndentId(null); }} title={editingIndentId ? 'Edit Purchase Indent' : 'Raise Purchase Indent'} wide>
+      <Modal
+        isOpen={modal === 'indent'}
+        onClose={() => { setModal(false); setEditingIndentId(null); }}
+        title={editingIndentId ? 'Edit Purchase Indent' : 'Raise Purchase Indent'}
+        headerExtra={
+          <button
+            type="button"
+            onClick={() => setShowFlowModal(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 hover:text-blue-900 transition-all cursor-pointer shadow-2xs group flex-shrink-0"
+            title="Click to view How to Raise a Purchase Indent flow guide"
+          >
+            <img
+              src={raiseIndentFlowImg}
+              alt="Indent Flow"
+              className="h-6 w-auto max-w-[65px] object-cover rounded border border-blue-300 shadow-2xs group-hover:scale-105 transition-transform"
+            />
+            <span className="text-xs font-semibold whitespace-nowrap hidden sm:inline">Flow Guide</span>
+            <FiExternalLink size={12} className="text-blue-500 opacity-70 group-hover:opacity-100" />
+          </button>
+        }
+        wide
+      >
         <form onSubmit={saveIndent} className="space-y-4">
           {/* Auto timestamp — mirrors the 'Dated' field on the physical form */}
           <div className="text-[11px] text-gray-500 bg-gray-50 rounded px-3 py-1.5 flex justify-between items-center">
@@ -7161,6 +7184,47 @@ export default function Procurement() {
             <button type="submit" className="btn btn-primary w-full sm:w-auto">{editingIndentId ? 'Save Changes' : 'Submit Indent'}</button>
           </div>
         </form>
+      </Modal>
+
+      {/* How to Raise a Purchase Indent — Flow Guide Lightbox Modal */}
+      <Modal
+        isOpen={showFlowModal}
+        onClose={() => setShowFlowModal(false)}
+        title="How to Raise a Purchase Indent · Process Flow"
+        xwide
+        zIndex="z-[60]"
+      >
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-blue-50/80 border border-blue-100 rounded-lg p-2.5 text-xs text-blue-800">
+            <span>Follow the step-by-step procedure below before submitting an indent.</span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <a
+                href={raiseIndentFlowImg}
+                download="Raise-Indent-Flow.jpg"
+                className="btn btn-secondary !py-1 !px-2.5 !text-xs flex items-center gap-1 bg-white hover:bg-gray-50 border border-blue-200 text-blue-700"
+                title="Download full resolution flowchart image"
+              >
+                <FiDownload size={13} /> Download
+              </a>
+              <a
+                href={raiseIndentFlowImg}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-secondary !py-1 !px-2.5 !text-xs flex items-center gap-1 bg-white hover:bg-gray-50 border border-blue-200 text-blue-700"
+                title="Open image in new browser tab"
+              >
+                <FiExternalLink size={13} /> Full Size
+              </a>
+            </div>
+          </div>
+          <div className="flex justify-center bg-gray-900/5 rounded-xl p-2 border border-gray-200/80 overflow-auto max-h-[75vh]">
+            <img
+              src={raiseIndentFlowImg}
+              alt="How to Raise a Purchase Indent Flowchart"
+              className="max-w-full h-auto object-contain rounded-lg shadow-md"
+            />
+          </div>
+        </div>
       </Modal>
 
       {/* Vendor PO Modal — PO is created INSIDE the SOTYN.AI. PO number is

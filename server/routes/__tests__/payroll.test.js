@@ -21,9 +21,10 @@ const context = { module: { exports: {} }, console, require(name) {
   if (name === '../lib/numberToWords') return { rupeesInWords: () => 'Zero Rupees' };
   throw new Error(name);
 } };
-vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee, generateSalarySlipEmailContent };', context);
+vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee, generateSalarySlipEmailContent, getEligiblePayrollEmployees };', context);
 const calculate = context.module.exports.calculateForEmployee;
 const generateSalarySlip = context.module.exports.generateSalarySlipEmailContent;
+const getEligiblePayrollEmployees = context.module.exports.getEligiblePayrollEmployees;
 let activeDb;
 const settings = { late_after_time: '09:46', half_day_after_time: '10:00', min_hours_full_day: 6, min_hours_half_day: 2,
   sundays_paid: 1, late_grace_count: 3, late_per_minute_rate: 20, lates_to_absent: 0,
@@ -456,5 +457,60 @@ test('Sunday worked between 2h and 6h pays 1.5 days (half day + Sunday paid)', (
   assert.equal(sun.sunday_bonus, 0.5);
   assert.equal(sun.sunday_worked, true);
 });
+
+test('getEligiblePayrollEmployees: excludes historical inactive employees with null exit_date, includes month exits and attendees', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, staff_type TEXT);
+    CREATE TABLE employees (
+      id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, department TEXT, designation TEXT,
+      join_date TEXT, exit_date TEXT, status TEXT, salary REAL, ot_eligible INTEGER,
+      cl_eligible INTEGER, cl_opening_balance REAL, roster TEXT, email TEXT, personal_email TEXT
+    );
+    CREATE TABLE payroll_runs (id INTEGER PRIMARY KEY, month TEXT, employee_id INTEGER);
+    CREATE TABLE attendance (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT, punch_in_time TEXT, admin_marked INTEGER);
+
+    -- 1. Active employee
+    INSERT INTO employees (id, user_id, name, status, salary, join_date) VALUES (1, 101, 'Active Emp', 'active', 20000, '2025-01-01');
+
+    -- 2. Historical inactive employee with exit_date NULL and no attendance (the 118 records case)
+    INSERT INTO employees (id, user_id, name, status, salary, join_date, exit_date) VALUES (2, 102, 'Historical Inactive', 'inactive', 25000, '2024-01-01', NULL);
+
+    -- 3. Inactive employee who exited in September 2025
+    INSERT INTO employees (id, user_id, name, status, salary, join_date, exit_date) VALUES (3, 103, 'Sept Exited Emp', 'inactive', 30000, '2025-01-01', '2025-09-28');
+    -- Attended in September
+    INSERT INTO attendance (user_id, date, punch_in_time) VALUES (103, '2025-09-15', '09:30');
+
+    -- 4. Inactive employee who exited during October 2025
+    INSERT INTO employees (id, user_id, name, status, salary, join_date, exit_date) VALUES (4, 104, 'Oct Exited Emp', 'inactive', 35000, '2025-01-01', '2025-10-10');
+  `);
+
+  // October 2025:
+  const octList = getEligiblePayrollEmployees(db, '2025-10');
+  const octNames = octList.map(e => e.name);
+
+  // Active Emp should be included
+  assert.ok(octNames.includes('Active Emp'), 'Active employee must be in October');
+
+  // Historical Inactive (null exit_date, no attendance) must be EXCLUDED
+  assert.ok(!octNames.includes('Historical Inactive'), 'Historical inactive employee must NOT be in October');
+
+  // Sept Exited Emp has exit_date in Sept and NO attendance in Oct -> must be EXCLUDED
+  assert.ok(!octNames.includes('Sept Exited Emp'), 'September exited employee must NOT be in October');
+
+  // Oct Exited Emp exited during October (2025-10-10) -> must be INCLUDED
+  assert.ok(octNames.includes('Oct Exited Emp'), 'October exited employee must be in October for final settlement');
+
+  // September 2025:
+  const septList = getEligiblePayrollEmployees(db, '2025-09');
+  const septNames = septList.map(e => e.name);
+
+  // Sept Exited Emp worked in September -> must be INCLUDED in September
+  assert.ok(septNames.includes('Sept Exited Emp'), 'September exited employee must be in September');
+  // Historical Inactive still excluded
+  assert.ok(!septNames.includes('Historical Inactive'), 'Historical inactive employee must NOT be in September');
+});
+
 
 
