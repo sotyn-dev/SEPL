@@ -729,9 +729,189 @@ export default function Snags() {
         )}
       </div>
 
-      {/* Reverted to the original 10-column table per mam
-          (2026-05-21: "dont change also snag list old is ok"). */}
-      <div className="card p-0">
+      {/* Mobile cards view (< md) — full complete description & details for phones */}
+      <div className="md:hidden space-y-3">
+        {snags.length === 0 && (
+          <div className="card p-6 text-center text-gray-400 text-sm">No snags raised yet</div>
+        )}
+        {pg.rows.map((s, serialIndex) => {
+          const age = snagAge(s.raised_at);
+          const overdue = isOverdue(s);
+          return (
+            <div key={s.id} className="card p-3.5 space-y-3 border border-gray-200 shadow-xs bg-white">
+              {/* Header: S.No + Snag No + Status & Priority */}
+              <div className="flex items-start justify-between gap-2 border-b border-gray-100 pb-2">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <span className="text-xs font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                    #{pg.from + serialIndex + 1}
+                  </span>
+                  <span className="font-bold text-red-700 text-sm">
+                    {s.snag_no}
+                  </span>
+                  {s.is_client_walk === 1 && (
+                    <span className="text-[9px] bg-purple-100 text-purple-700 font-bold px-1.5 py-0.5 rounded">
+                      Client Walk
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[s.priority] || ''}`}>
+                    {s.priority}
+                  </span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[s.status] || ''}`}>
+                    {STATUS_LABEL[s.status] || s.status}
+                  </span>
+                </div>
+              </div>
+
+              {/* Site & Location */}
+              <div className="text-xs">
+                <div className="font-bold text-gray-900 flex items-center gap-1">
+                  <span className="text-gray-400">📍</span> {s.site_name || s.site_name_live || '—'}
+                </div>
+                {s.location && (
+                  <div className="text-[11px] text-gray-600 mt-0.5 ml-4">
+                    Location: <span className="text-gray-800 font-medium">{s.location}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* COMPLETE DESCRIPTION — NO TRUNCATION */}
+              <div className="bg-gray-50/90 rounded-lg p-2.5 border border-gray-100 space-y-1">
+                <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">
+                  Description
+                </div>
+                <div className="text-xs text-gray-900 whitespace-pre-wrap break-words leading-relaxed font-normal">
+                  {s.description || <span className="text-gray-400 italic">No description provided</span>}
+                </div>
+                {s.status === 'rejected' && s.reject_reason && (
+                  <div className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded p-1.5 mt-2">
+                    <span className="font-bold">Rejected reason:</span> {s.reject_reason}
+                  </div>
+                )}
+              </div>
+
+              {/* Details grid: Raised By, Assigned To, Target Date, Aging */}
+              <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-gray-100">
+                <div>
+                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Raised By</span>
+                  <span className="text-gray-800 font-medium truncate block">{s.raised_by_name || '—'}</span>
+                  <span className="text-[10px] text-gray-400">{s.raised_at ? fmtDate(s.raised_at) : ''}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Assigned To</span>
+                  <span className="text-gray-800 font-medium truncate block">{s.assigned_to_user_name || s.assigned_to_name || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Target Date</span>
+                  {s.target_date ? (
+                    <span className={`font-medium ${overdue ? 'text-red-600 font-bold' : 'text-gray-700'}`}>
+                      {fmtDate(s.target_date)}
+                      {overdue && <span className="text-[9px] bg-red-100 text-red-700 px-1 rounded ml-1 font-bold">OVERDUE</span>}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Aging</span>
+                  {s.status !== 'approved' && age ? (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border inline-block ${age.cls}`}>
+                      {age.label}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Photos Row (if any) */}
+              {(s.photo_url || s.proof_url) && (
+                <div className="flex items-center gap-4 pt-2 border-t border-gray-100">
+                  {s.photo_url && (
+                    <div className="flex items-center gap-2">
+                      <a href={s.photo_url} target="_blank" rel="noreferrer" className="block shrink-0">
+                        <img src={toThumb(s.photo_url, 120)} alt="Snag photo" className="w-12 h-12 object-cover rounded-lg border border-gray-200 shadow-2xs" />
+                      </a>
+                      <span className="text-[11px] text-gray-600 font-medium">Snag Photo</span>
+                    </div>
+                  )}
+                  {s.proof_url && (
+                    <div className="flex items-center gap-2">
+                      <a href={s.proof_url} target="_blank" rel="noreferrer" className="block shrink-0">
+                        <img src={toThumb(s.proof_url, 120)} alt="Proof photo" className="w-12 h-12 object-cover rounded-lg border-2 border-emerald-400 shadow-2xs" />
+                      </a>
+                      <span className="text-[11px] text-emerald-700 font-medium">Proof Photo</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Client Ticked status */}
+              {s.status === 'approved' && (
+                <div className="text-[10px]">
+                  {s.client_verified ? (
+                    <span className="text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 inline-block">
+                      ✓ Client Ticked
+                    </span>
+                  ) : (
+                    <span className="text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block">
+                      ⏳ Awaiting Client Tick
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Actions row */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {s.status === 'approved' && !s.client_verified && (
+                    <button
+                      onClick={() => handleClientTick(s)}
+                      className="btn btn-sm text-xs px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white font-bold inline-flex items-center gap-1 shadow-xs"
+                    >
+                      <FiCheck size={12} /> Client Tick (S4)
+                    </button>
+                  )}
+                  {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
+                    <button
+                      onClick={() => { setProofModal(s); proofModalIdRef.current = s.id; setProofForm({}); }}
+                      className="btn btn-primary text-xs px-2.5 py-1 inline-flex items-center gap-1"
+                    >
+                      <FiUploadCloud size={13} /> {s.status === 'rejected' ? 'Resubmit Proof' : 'Submit Proof'}
+                    </button>
+                  )}
+                  {s.status === 'submitted' && canActAsApprover(s) && (
+                    <>
+                      <button onClick={() => approve(s)} className="btn btn-success text-xs px-2.5 py-1 inline-flex items-center gap-1">
+                        <FiCheckCircle size={13} /> Approve
+                      </button>
+                      <button onClick={() => reject(s)} className="btn btn-danger text-xs px-2.5 py-1 inline-flex items-center gap-1">
+                        <FiXCircle size={13} /> Reject
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {(canEdit('snags') || isAdmin()) && s.status !== 'approved' && (
+                    <button onClick={() => openEdit(s)} className="p-1.5 hover:bg-blue-50 text-gray-500 hover:text-blue-600 rounded" title="Edit">
+                      <FiEdit2 size={14} />
+                    </button>
+                  )}
+                  {canDelete('snags') && (
+                    <button onClick={() => remove(s)} className="p-1.5 hover:bg-red-50 text-gray-400 hover:text-red-600 rounded" title="Delete">
+                      <FiTrash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop 10-column table (hidden on mobile, visible on md+) */}
+      <div className="hidden md:block card p-0">
         {/* Own bounded scroll box → the sticky `freeze-head` thead pins to
             THIS container's top (Excel-style frozen header), and `freeze-col`
             keeps the Snag-No column fixed during horizontal scroll.
@@ -779,9 +959,9 @@ export default function Snags() {
                     {s.location && <div className="text-[10px] text-gray-500">{s.location}</div>}
                   </td>
                   <td className="text-xs max-w-md">
-                    <div className="line-clamp-2" title={s.description}>{s.description}</div>
+                    <div className="whitespace-pre-wrap break-words leading-relaxed" title={s.description}>{s.description}</div>
                     {s.status === 'rejected' && s.reject_reason && (
-                      <div className="text-[10px] text-red-600 mt-0.5 italic" title={s.reject_reason}>↳ rejected: {s.reject_reason.slice(0, 60)}</div>
+                      <div className="text-[10px] text-red-600 mt-1 italic bg-red-50 p-1 rounded border border-red-200" title={s.reject_reason}>↳ rejected: {s.reject_reason}</div>
                     )}
                   </td>
                   <td>

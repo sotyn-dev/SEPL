@@ -264,11 +264,11 @@ export default function UserManagement() {
     : filter === 'admin' ? u.role === 'admin'
     : true;
 
-  // Status tab + search (username/email) combined, then paginated (15/page).
+  // Status tab + search (name/username/email/phone) combined, then paginated (15/page).
   const q = search.trim().toLowerCase();
   const filteredUsers = users.filter(u =>
     matchFilter(u) && matchesStaffType(u.staff_type, staffType) &&
-    (!q || [u.username, u.email].some(v => String(v || '').toLowerCase().includes(q)))
+    (!q || [u.name, u.username, u.email, u.phone].some(v => String(v || '').toLowerCase().includes(q)))
   );
   const pg = usePagination(filteredUsers, perPage, page, setPage);
 
@@ -321,7 +321,7 @@ export default function UserManagement() {
           <StaffTypeFilter value={staffType} onChange={value => { setStaffType(value); setPage(1); }} />
           <div className="relative w-full sm:max-w-xs">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search username or email…"
+            <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search name, username, email, phone…"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1); }} />
             {search && (

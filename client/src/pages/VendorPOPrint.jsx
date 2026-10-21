@@ -100,7 +100,7 @@ export default function VendorPOPrint() {
       .then(r => setData(r.data))
       .catch(err => setError(err.response?.data?.error || 'Failed to load'));
 
-    api.get(`/procurement/vendor-po/${id}/comparison-sheet`)
+    api.get(`/procurement/vendor-po/${id}/comparison-sheet`, { timeout: 120000 })
       .then(r => setCompData(r.data))
       .catch(() => setCompData(null));
   }, [id]);

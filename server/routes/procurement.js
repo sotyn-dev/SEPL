@@ -5042,55 +5042,29 @@ router.get('/vendor-po/:id/cost-evaluation', (req, res) => {
 
 // TSK-0943: Comparison sheet with online data for approval of PO
 router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
-  const db = getDb();
-  const id = +req.params.id;
-  const po = db.prepare(`
-    SELECT vp.*, v.name as vendor_name, v.firm_name as vendor_firm_name, v.contact_person, v.phone as vendor_phone,
-           v.email as vendor_email, v.gst as vendor_gst, ind.indent_number, ind.site_name,
-           u.name as created_by_name
-      FROM vendor_pos vp
-      LEFT JOIN vendors v ON v.id = vp.vendor_id
-      LEFT JOIN indents ind ON ind.id = vp.indent_id
-      LEFT JOIN users u ON u.id = vp.created_by
-     WHERE vp.id = ?
-  `).get(id);
+  try {
+    const db = getDb();
+    const id = +req.params.id;
+    const po = db.prepare(`
+      SELECT vp.*, v.name as vendor_name, v.firm_name as vendor_firm_name, v.contact_person, v.phone as vendor_phone,
+             v.email as vendor_email, v.gst_number as vendor_gst, ind.indent_number, ind.site_name,
+             u.name as created_by_name
+        FROM vendor_pos vp
+        LEFT JOIN vendors v ON v.id = vp.vendor_id
+        LEFT JOIN indents ind ON ind.id = vp.indent_id
+        LEFT JOIN users u ON u.id = vp.created_by
+       WHERE vp.id = ?
+    `).get(id);
 
-  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+    if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
 
-  // Items in this PO
-  let items = db.prepare(`
-    SELECT vpi.id, vpi.vendor_po_id, vpi.indent_item_id, vpi.quantity, vpi.rate as actual_rate,
-           vpi.amount as actual_amount, vpi.description, vpi.unit,
-           COALESCE(vpi.specification, im.specification) as specification,
-           ii.description as indent_description, ii.unit as indent_unit,
-           ii.make as indent_make, ii.size as indent_size, ii.weight_per_meter,
-           im.item_code, im.item_name as master_name, im.size as master_size,
-           im.make as master_make, im.current_price as master_price,
-           poi.part_price as pp_rate,
-           ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
-           ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
-           ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
-           ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
-           ir.marketing_rate
-      FROM vendor_po_items vpi
-      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
-      LEFT JOIN item_master im ON im.id = ii.item_master_id
-      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-      LEFT JOIN indent_item_rates ir ON ir.id = (
-        SELECT MAX(r2.id) FROM indent_item_rates r2 WHERE r2.indent_item_id = ii.id
-      )
-     WHERE vpi.vendor_po_id = ?
-     ORDER BY vpi.id
-  `).all(id);
-
-  // Fallback for legacy POs where vendor_po_items was empty
-  if (items.length === 0 && po.indent_id) {
-    items = db.prepare(`
-      SELECT 'ind-' || ii.id as id, NULL as vendor_po_id, ii.id as indent_item_id,
-             ii.quantity, ii.rate as actual_rate, ii.amount as actual_amount,
-             ii.description, ii.unit, im.specification,
+    // Items in this PO
+    let items = db.prepare(`
+      SELECT vpi.id, vpi.vendor_po_id, vpi.indent_item_id, vpi.quantity, vpi.rate as actual_rate,
+             vpi.amount as actual_amount, vpi.description, ii.unit,
+             COALESCE(vpi.specification, im.specification) as specification,
              ii.description as indent_description, ii.unit as indent_unit,
-             ii.make as indent_make, ii.size as indent_size, ii.weight_per_meter,
+             ii.make as indent_make, im.size as indent_size, ii.weight_per_meter,
              im.item_code, im.item_name as master_name, im.size as master_size,
              im.make as master_make, im.current_price as master_price,
              poi.part_price as pp_rate,
@@ -5099,16 +5073,43 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
              ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
              ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
              ir.marketing_rate
-        FROM indent_items ii
+        FROM vendor_po_items vpi
+        LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
         LEFT JOIN item_master im ON im.id = ii.item_master_id
         LEFT JOIN po_items poi ON poi.id = ii.po_item_id
         LEFT JOIN indent_item_rates ir ON ir.id = (
           SELECT MAX(r2.id) FROM indent_item_rates r2 WHERE r2.indent_item_id = ii.id
         )
-       WHERE ii.indent_id = ?
-       ORDER BY ii.id
-    `).all(po.indent_id);
-  }
+       WHERE vpi.vendor_po_id = ?
+       ORDER BY vpi.id
+    `).all(id);
+
+    // Fallback for legacy POs where vendor_po_items was empty
+    if (items.length === 0 && po.indent_id) {
+      items = db.prepare(`
+        SELECT 'ind-' || ii.id as id, NULL as vendor_po_id, ii.id as indent_item_id,
+               ii.quantity, ii.rate as actual_rate, ii.amount as actual_amount,
+               ii.description, ii.unit, im.specification,
+               ii.description as indent_description, ii.unit as indent_unit,
+               ii.make as indent_make, im.size as indent_size, ii.weight_per_meter,
+               im.item_code, im.item_name as master_name, im.size as master_size,
+               im.make as master_make, im.current_price as master_price,
+               poi.part_price as pp_rate,
+               ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
+               ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
+               ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
+               ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
+               ir.marketing_rate
+          FROM indent_items ii
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+          LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+          LEFT JOIN indent_item_rates ir ON ir.id = (
+            SELECT MAX(r2.id) FROM indent_item_rates r2 WHERE r2.indent_item_id = ii.id
+          )
+         WHERE ii.indent_id = ?
+         ORDER BY ii.id
+      `).all(po.indent_id);
+    }
 
   // Cost estimate evaluation
   let costEval = null;
@@ -5116,8 +5117,8 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
     costEval = evaluatePoCostEstimate(db, id);
   } catch (_) {}
 
-  // Fetch online market data and historical rates in parallel
-  const enrichedItems = await Promise.all(items.map(async (it) => {
+  // Helper to enrich a single item with online market benchmarks and internal historical rates
+  const enrichItem = async (it) => {
     const rawName = it.master_name || it.description || it.indent_description || '';
     const size = it.indent_size || it.master_size || '';
     const make = it.indent_make || it.master_make || '';
@@ -5138,7 +5139,10 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
     };
 
     try {
-      const res = await getMarketRates(cleanQ, { size, make, spec });
+      // 5-second per-item safety timeout so one hung socket can never stall the response
+      const fetchPromise = getMarketRates(cleanQ, { size, make, spec });
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 5000));
+      const res = await Promise.race([fetchPromise, timeoutPromise]);
       if (res) marketData = res;
     } catch (_) {}
 
@@ -5256,7 +5260,16 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
       // Historical rates
       history: pastPoRates.slice(0, 3)
     };
-  }));
+  };
+
+  // Process items in chunks of 3 to prevent socket contention and ensure rapid, stable execution
+  const enrichedItems = [];
+  const chunkSize = 3;
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(it => enrichItem(it)));
+    enrichedItems.push(...chunkResults);
+  }
 
   // Aggregated Summary
   const totalActual = enrichedItems.reduce((s, it) => s + it.actual_amount, 0);
@@ -5306,6 +5319,10 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
       is_rejected: po.po_approval === 'rejected'
     }
   });
+  } catch (err) {
+    console.error('[comparison-sheet] error:', err);
+    res.status(500).json({ error: err.message || 'Failed to load PO comparison sheet' });
+  }
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.
