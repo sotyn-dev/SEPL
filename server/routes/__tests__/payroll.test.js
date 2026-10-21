@@ -312,6 +312,8 @@ test('hour thresholds: <2h is absent, 2h-6h is half day, >=6h is full day, >9h i
   const day1 = r.breakdown.find(b => b.date === '2025-08-01');
   assert.equal(day1.label, 'absent_low_hours');
   assert.equal(day1.pay, 0);
+  assert.equal(day1.hours, 1.5); // exact worked hours reported
+  assert.equal(day1.ot_hours, 1.5); // OT credited because worked 1.5h (>=0.5h) and ot_eligible = 1
 
   const day2 = r.breakdown.find(b => b.date === '2025-08-02');
   assert.equal(day2.label, 'half_day_low_hours');
@@ -326,7 +328,7 @@ test('hour thresholds: <2h is absent, 2h-6h is half day, >=6h is full day, >9h i
   assert.equal(day5.label, 'present');
   assert.equal(day5.pay, 1);
   assert.equal(day5.ot_hours, 2);
-  assert.equal(r.ot_hours, 2);
+  assert.equal(r.ot_hours, 3.5); // 1.5h from day 1 + 2h from day 5
 });
 
 test('Sundays have no late penalties or cutoffs regardless of punch in time', () => {
@@ -363,4 +365,96 @@ test('inactive employee: dates after exit_date are marked left_company with pay 
   // Total absent days should only be from days 1 to 15 (11 days), NOT days 16-31
   assert.equal(r.absent_days, 11);
 });
+
+test('missed punch-out: up to 3 times per month counts as Full Day (Grace); 4th time counts 0 pay (absent)', () => {
+  // August 2025: Aug 1 (Fri), Aug 4 (Mon), Aug 5 (Tue), Aug 6 (Wed) - all have punch_in but NO punch_out
+  const r = run({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:27', punch_out_time: null, total_hours: 0 }, // 1st missed out -> grace
+      { date: '2025-08-04', punch_in_time: '09:30', punch_out_time: null, total_hours: 0 }, // 2nd missed out -> grace
+      { date: '2025-08-05', punch_in_time: '09:15', punch_out_time: null, total_hours: 0 }, // 3rd missed out -> grace
+      { date: '2025-08-06', punch_in_time: '09:20', punch_out_time: null, total_hours: 0 }, // 4th missed out -> absent (0 pay)
+      { date: '2025-08-07', punch_in_time: '09:25', punch_out_time: '18:30', total_hours: 9.08 }, // punch out added -> normal present
+    ]
+  }, employee, settings);
+
+  const day1 = r.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(day1.label, 'missed_punch_out_grace');
+  assert.equal(day1.pay, 1); // Full day
+
+  const day2 = r.breakdown.find(b => b.date === '2025-08-04');
+  assert.equal(day2.label, 'missed_punch_out_grace');
+  assert.equal(day2.pay, 1); // Full day
+
+  const day3 = r.breakdown.find(b => b.date === '2025-08-05');
+  assert.equal(day3.label, 'missed_punch_out_grace');
+  assert.equal(day3.pay, 1); // Full day
+
+  const day4 = r.breakdown.find(b => b.date === '2025-08-06');
+  assert.equal(day4.label, 'missed_punch_out_absent');
+  assert.equal(day4.pay, 0); // Absent (exceeded grace)
+
+  const day5 = r.breakdown.find(b => b.date === '2025-08-07');
+  assert.equal(day5.label, 'present');
+  assert.equal(day5.pay, 1);
+
+  assert.equal(r.missed_punch_out_count, 4);
+  assert.equal(r.missed_punch_out_grace, 3);
+});
+
+test('worked hours under 2h: credits OT only if worked >= 0.5h and employee is ot_eligible; exact worked hours reported', () => {
+  // Employee 1: ot_eligible = 1
+  const otEmp = { ...employee, ot_eligible: 1 };
+  const r1 = run({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:00', punch_out_time: '10:12', total_hours: 1.2 }, // 1.2h: >=0.5h and <2h -> OT
+      { date: '2025-08-04', punch_in_time: '09:00', punch_out_time: '09:20', total_hours: 0.33 }, // 0.33h: <0.5h -> No OT
+    ]
+  }, otEmp, settings);
+
+  const b1 = r1.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(b1.label, 'absent_low_hours');
+  assert.equal(b1.pay, 0);
+  assert.equal(b1.hours, 1.2);
+  assert.equal(b1.ot_hours, 1.2);
+
+  const b2 = r1.breakdown.find(b => b.date === '2025-08-04');
+  assert.equal(b2.label, 'absent_low_hours');
+  assert.equal(b2.pay, 0);
+  assert.equal(b2.hours, 0.33);
+  assert.equal(b2.ot_hours, 0);
+
+  assert.equal(r1.ot_hours, 1.2);
+
+  // Employee 2: ot_eligible = 0
+  const nonOtEmp = { ...employee, ot_eligible: 0 };
+  const r2 = run({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:00', punch_out_time: '10:12', total_hours: 1.2 },
+    ]
+  }, nonOtEmp, settings);
+
+  const b3 = r2.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(b3.label, 'absent_low_hours');
+  assert.equal(b3.pay, 0);
+  assert.equal(b3.hours, 1.2);
+  assert.equal(b3.ot_hours, 0); // No OT because not ot_eligible
+  assert.equal(r2.ot_hours, 0);
+});
+
+test('Sunday worked between 2h and 6h pays 1.5 days (half day + Sunday paid)', () => {
+  // 2025-08-03 is Sunday. Worked 3.64 hours (between 2h and 6h)
+  const r = run({
+    attendance: [
+      { date: '2025-08-03', punch_in_time: '10:00', punch_out_time: '13:38', total_hours: 3.64 },
+    ]
+  }, employee, settings);
+
+  const sun = r.breakdown.find(b => b.date === '2025-08-03');
+  assert.equal(sun.label, 'sunday_half_day');
+  assert.equal(sun.pay, 1.5); // 0.5 half-day work + 1.0 Sunday paid = 1.5
+  assert.equal(sun.sunday_bonus, 0.5);
+  assert.equal(sun.sunday_worked, true);
+});
+
 

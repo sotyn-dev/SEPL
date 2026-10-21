@@ -152,6 +152,8 @@ const LABEL_PILL = {
   half_day_low_hours: 'bg-orange-100 text-orange-700',
   absent_no_punch: 'bg-red-100 text-red-700',
   absent_low_hours: 'bg-red-100 text-red-700',
+  missed_punch_out_grace: 'bg-emerald-100 text-emerald-800 font-semibold',
+  missed_punch_out_absent: 'bg-rose-100 text-rose-700',
   sunday_paid: 'bg-blue-100 text-blue-700',
   sunday_unpaid: 'bg-gray-100 text-gray-500',
   sunday_worked: 'bg-emerald-100 text-emerald-800 font-semibold',
@@ -1213,10 +1215,17 @@ export default function Payroll() {
                               (short leave applied)
                             </span>
                           )}
+                          {d.note && (
+                            <span className="block text-[9px] text-gray-500 font-normal">
+                              ({d.note})
+                            </span>
+                          )}
                         </td>
                         <td className="p-2">{d.punch_in ? fmtTime(d.punch_in, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                         <td className="p-2">{d.punch_out ? fmtTime(d.punch_out, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                        <td className="p-2 text-right">{d.hours || '-'}</td>
+                        <td className="p-2 text-right">
+                          {d.hours != null && d.hours !== '' ? (Number(d.hours) > 0 ? `${d.hours} h` : (d.punch_in && d.punch_out ? '0 h' : '-')) : '-'}
+                        </td>
                         <td className="p-2 text-right text-blue-600 font-medium">{d.ot_hours ? `${d.ot_hours} h` : '-'}</td>
                         <td className="p-2 text-right font-semibold">
                           {d.pay}

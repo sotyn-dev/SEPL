@@ -95,6 +95,30 @@ function timeToMinutes(t) {
   return h * 60 + (m || 0);
 }
 
+// Compute hours duration between punch_in and punch_out as fallback when total_hours is missing or 0
+function getPunchDurationHours(inTime, outTime, storedHours) {
+  if (storedHours != null && Number(storedHours) > 0) {
+    return round2(Number(storedHours));
+  }
+  if (!inTime || !outTime) return 0;
+  if (inTime.includes('T') || inTime.includes(' ') || outTime.includes('T') || outTime.includes(' ')) {
+    const dIn = new Date(inTime);
+    const dOut = new Date(outTime);
+    if (!isNaN(dIn) && !isNaN(dOut)) {
+      const diffHours = (dOut.getTime() - dIn.getTime()) / (1000 * 60 * 60);
+      if (diffHours > 0 && diffHours <= 24) {
+        return round2(diffHours);
+      }
+    }
+  }
+  const inMin = timeToMinutes(inTime);
+  const outMin = timeToMinutes(outTime);
+  if (inMin !== null && outMin !== null && outMin > inMin) {
+    return round2((outMin - inMin) / 60);
+  }
+  return 0;
+}
+
 // ─── Salary Slip Email Template Generator (TSK-0924) ─────────────────────────
 const COMPANY_INFO = {
   name: 'Secured Engineers Private Limited',
@@ -155,7 +179,7 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
   const absentDays = Number(data.absent_days || 0);
   const sundayWorked = Number(data.sunday_worked || 0);
   const presentDays = data.breakdown
-    ? data.breakdown.filter(b => ['present', 'late', 'admin_present', 'admin_late'].includes(b.label)).length
+    ? data.breakdown.filter(b => ['present', 'late', 'admin_present', 'admin_late', 'missed_punch_out_grace'].includes(b.label)).length
     : Math.max(0, paidDays - sundayCount - paidLeaves - holidayDays);
 
   const totalEarnings = Number(data.total_earnings != null ? (data.total_earnings + otPay + food) : (basicPay + conveyance + hra + adhoc + misc + otPay + food));
@@ -625,6 +649,7 @@ function calculateForEmployee(db, settings, employee, month) {
   const todayY = istNow.getUTCFullYear();
   const todayM = istNow.getUTCMonth() + 1;
   const todayD = istNow.getUTCDate();
+  const todayStr = `${todayY}-${pad(todayM)}-${pad(todayD)}`;
   let lastDay = totalDays;
   if (year > todayY || (year === todayY && mm > todayM)) {
     lastDay = 0; // future month — nothing to calc yet
@@ -696,6 +721,7 @@ function calculateForEmployee(db, settings, employee, month) {
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
   let holidayDays = 0; // declared paid holidays (payroll_holidays) + admin 'holiday' marks
   let latePenalty = 0; // accumulated Rs deduction for late punches over grace
+  let missedPunchOutCount = 0; // number of times employee forgot to punch out this month (max 3 grace)
   const breakdown = []; // per-day for slip
   const lateDays = []; // [{date, minutes_late, applies_penalty: bool}]
 
@@ -873,20 +899,113 @@ function calculateForEmployee(db, settings, employee, month) {
     // Attendance row
     if (att && att.punch_in_time) {
       const punchInMin = timeToMinutes(att.punch_in_time);
-      const hours = att.total_hours || 0;
-
       const minHalfHours = settings.min_hours_half_day != null ? Number(settings.min_hours_half_day) : 2;
       const minFullHours = settings.min_hours_full_day != null ? Number(settings.min_hours_full_day) : 6;
       const otThreshold = settings.ot_threshold_hours != null ? Number(settings.ot_threshold_hours) : 9;
-
-      // Skip half-day if short leave was applied that day (and setting enabled)
       const shortLeaveSavesIt = isShortLeave && settings.skip_half_day_if_short_leave;
-      const dayOtHours = (employee.ot_eligible && hours > otThreshold)
-        ? round2(hours - otThreshold)
-        : 0;
 
-      // Sunday rule: late rules and punch-time cutoff NEVER apply on Sunday (weekly off)
-      const veryLate = !sun && punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
+      // A missed punch-out occurs when there is punch_in but NO punch_out AND total_hours is missing or 0.
+      // If punch_out_time is present OR total_hours > 0 is already recorded, it is NOT a missed punch-out.
+      const hasPunchOut = !!att.punch_out_time || (att.total_hours != null && Number(att.total_hours) > 0);
+      const isPastDay = dateStr < todayStr || month < todayStr.slice(0, 7);
+
+      if (!hasPunchOut) {
+        if (!isPastDay) {
+          // Today's shift in progress: punched in, not yet punched out.
+          // Award full day without consuming a missed punch-out grace.
+          dayPay = 1;
+          dayLabel = sun ? 'sunday_worked' : (isShortLeave ? 'short_leave' : 'present');
+          paidDays += dayPay;
+          breakdown.push({
+            date: dateStr,
+            day: dayName(year, mm, day),
+            label: dayLabel,
+            pay: dayPay,
+            punch_in: att.punch_in_time,
+            punch_out: null,
+            hours: 0,
+            ot_hours: 0,
+            note: 'Shift in progress (punched in)',
+            short_leave_applied: isShortLeave,
+            ...(leaveType ? { applied_leave: leaveType } : {}),
+          });
+          continue;
+        }
+
+        // Missed punch-out on a past day:
+        // Grace rule: up to 3 times per month counts as Full Day.
+        // 4th time onwards counts as 0 hours / absent (or pays applied leave if approved).
+        missedPunchOutCount += 1;
+        let note = '';
+
+        if (missedPunchOutCount <= 3) {
+          // Grace applied -> Full Day
+          dayPay = 1;
+          dayLabel = 'missed_punch_out_grace';
+          note = `Missed punch-out (Grace ${missedPunchOutCount}/3 - full day)`;
+        } else {
+          // Grace exceeded -> 0 hours / absent unless applied leave pays
+          if (sun) {
+            dayPay = settings.sundays_paid ? 1 : 0;
+            if (settings.sundays_paid) sundayCount += 1;
+            dayLabel = settings.sundays_paid ? 'sunday_paid' : 'sunday_unpaid';
+            note = 'Missed punch-out on Sunday (exceeded 3 grace times - no bonus)';
+          } else {
+            let leavePaid = false;
+            if (leaveType === 'casual') {
+              if ((settings.cl_per_month || 0) > 0 && clUsed < settings.cl_per_month) {
+                leavePaid = true; clUsed += 1; dayPay = 1; paidLeaves += 1; dayLabel = 'paid_casual_leave';
+              }
+            } else if (leaveType === 'sick') {
+              if ((settings.sl_per_month || 0) > 0 && slUsed < settings.sl_per_month) {
+                leavePaid = true; slUsed += 1; dayPay = 1; paidLeaves += 1; dayLabel = 'paid_sick_leave';
+              }
+            } else if (leaveType === 'earned') {
+              if ((settings.pl_per_month || 0) > 0 && plUsed < settings.pl_per_month) {
+                leavePaid = true; plUsed += 1; dayPay = 1; paidLeaves += 1; dayLabel = 'paid_earned_leave';
+              }
+            } else if (leaveType === 'comp_off') {
+              leavePaid = true; dayPay = 1; paidLeaves += 1; dayLabel = 'paid_comp_off_leave';
+            } else if (leaveType === 'half_day') {
+              leavePaid = true; dayPay = 0.5; halfDays += 1; dayLabel = 'half_day_leave';
+            }
+
+            if (!leavePaid) {
+              dayPay = 0;
+              absentDays += 1;
+              dayLabel = 'missed_punch_out_absent';
+              note = 'Missed punch-out (exceeded 3 grace times - 0 hrs)';
+            }
+          }
+        }
+
+        paidDays += dayPay;
+        breakdown.push({
+          date: dateStr,
+          day: dayName(year, mm, day),
+          label: dayLabel,
+          pay: dayPay,
+          punch_in: att.punch_in_time,
+          punch_out: null,
+          hours: 0,
+          ot_hours: 0,
+          note,
+          missed_punch_out: true,
+          short_leave_applied: isShortLeave,
+          ...(leaveType ? { applied_leave: leaveType } : {}),
+        });
+        continue;
+      }
+
+      // Normal attendance when punch_out IS present:
+      let hours = Number(att.total_hours || 0);
+      if (hours <= 0 && att.punch_in_time && att.punch_out_time) {
+        hours = getPunchDurationHours(att.punch_in_time, att.punch_out_time, att.total_hours);
+      }
+      hours = round2(hours);
+
+      let dayOtHours = 0;
+      let note = '';
 
       if (sun) {
         // SUNDAY attendance:
@@ -894,12 +1013,18 @@ function calculateForEmployee(db, settings, employee, month) {
         if (hours >= minFullHours) {
           dayPay = 1;
           dayLabel = 'sunday_worked';
+          note = 'Sunday full day worked';
+          if (employee.ot_eligible && hours > otThreshold) {
+            dayOtHours = round2(hours - otThreshold);
+            otHours += dayOtHours;
+          }
         } else if (hours >= minHalfHours) {
           dayPay = 0.5;
           halfDays += 1;
           dayLabel = 'half_day_low_hours';
+          note = 'Sunday half day (2h - 6h)';
         } else {
-          // Worked under minimum hours on Sunday (< 2h)
+          // Under minimum hours on Sunday (< 2h)
           if (settings.sundays_paid) {
             dayPay = 1;
             sundayCount += 1;
@@ -908,42 +1033,62 @@ function calculateForEmployee(db, settings, employee, month) {
             dayPay = 0;
             dayLabel = 'sunday_unpaid';
           }
-        }
-        if (dayOtHours > 0) {
-          otHours += dayOtHours;
+          if (employee.ot_eligible && hours >= 0.5) {
+            dayOtHours = round2(hours);
+            otHours += dayOtHours;
+            note = `Under 2h on Sunday (${dayOtHours}h OT credited)`;
+          } else {
+            note = 'Under 2h on Sunday';
+          }
         }
       } else {
         // WEEKDAY / SATURDAY attendance:
-        // 1. Under minimum hours (< 2h) → absent (unless saved by short leave)
-        // 2. Between 2h and < 6h → half day
-        // 3. 6h+ → full day (punch after 10:00 AM on weekday is half day unless saved by short leave)
-        const lowHoursAbsent = hours < minHalfHours;
-        const lowHoursHalf = hours >= minHalfHours && hours < minFullHours;
-
-        if (lowHoursAbsent && !shortLeaveSavesIt) {
+        if (hours < minHalfHours && !shortLeaveSavesIt) {
+          // Under 2h -> Absent, but calculate OT if worked >= 0.5h for OT-eligible staff
           absentDays += 1;
           dayPay = 0;
           dayLabel = 'absent_low_hours';
-        } else if ((veryLate || lowHoursHalf) && !shortLeaveSavesIt) {
+          if (employee.ot_eligible && hours >= 0.5) {
+            dayOtHours = round2(hours);
+            otHours += dayOtHours;
+            note = `Under 2h (${dayOtHours}h OT credited)`;
+          } else {
+            note = 'Under 2h';
+          }
+        } else if (hours < minFullHours && !shortLeaveSavesIt) {
+          // 2h to < 6h -> Half Day
           halfDays += 1;
           dayPay = 0.5;
-          dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';
+          dayLabel = 'half_day_low_hours';
+          note = 'Half day (2h - 6h)';
         } else {
-          // Full day (hours >= minFullHours or saved by short leave)
-          if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
-            if (!shortLeaveSavesIt) {
-              lateMarks += 1;
-              lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
-              dayLabel = 'late';
-            } else {
-              dayLabel = 'short_leave';
-            }
-          } else {
-            dayLabel = (veryLate || lowHoursHalf || isShortLeave) ? 'short_leave' : 'present';
-          }
-          dayPay = 1;
-          if (dayOtHours > 0) {
+          // 6h+ or saved by short leave
+          const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
+          if (employee.ot_eligible && hours > otThreshold) {
+            dayOtHours = round2(hours - otThreshold);
             otHours += dayOtHours;
+          }
+
+          if (veryLate && !shortLeaveSavesIt) {
+            halfDays += 1;
+            dayPay = 0.5;
+            dayLabel = 'half_day_late';
+            note = 'Late arrival after 10:00 (half day)';
+          } else {
+            dayPay = 1;
+            if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
+              if (!shortLeaveSavesIt) {
+                lateMarks += 1;
+                lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
+                dayLabel = 'late';
+                note = `Late arrival (${punchInMin - lateAfter + 1} min)`;
+              } else {
+                dayLabel = 'short_leave';
+                note = 'Late excused by short leave';
+              }
+            } else {
+              dayLabel = isShortLeave ? 'short_leave' : 'present';
+            }
           }
         }
       }
@@ -958,6 +1103,7 @@ function calculateForEmployee(db, settings, employee, month) {
         punch_out: att.punch_out_time || null,
         hours,
         ot_hours: dayOtHours,
+        note: note || undefined,
         short_leave_applied: isShortLeave,
         ...(leaveType ? { applied_leave: leaveType } : {}),
       });
@@ -1047,7 +1193,7 @@ function calculateForEmployee(db, settings, employee, month) {
   let sundayWorkedPay = 0;  // extra day-equivalents credited
   const SUN_WORK_LABELS = new Set([
     'present', 'late', 'half_day_late', 'half_day_low_hours', 'short_leave', 'sunday_worked',
-    'admin_present', 'admin_late', 'admin_half_day', 'admin_short_day',
+    'admin_present', 'admin_late', 'admin_half_day', 'admin_short_day', 'missed_punch_out_grace',
   ]);
   for (const b of breakdown) {
     if (b.day !== 'Sun' || !SUN_WORK_LABELS.has(b.label) || !(b.pay > 0)) continue;
@@ -1065,7 +1211,7 @@ function calculateForEmployee(db, settings, employee, month) {
       paidDays += b.pay;
       b.pay = round2(b.pay * 2);
     }
-    if (b.label === 'present' || b.label === 'late' || b.label === 'short_leave') {
+    if (b.label === 'present' || b.label === 'late' || b.label === 'short_leave' || b.label === 'missed_punch_out_grace') {
       b.label = 'sunday_worked';
     } else if (b.label === 'admin_present' || b.label === 'admin_late') {
       b.label = 'admin_sunday_worked';
@@ -1156,6 +1302,8 @@ function calculateForEmployee(db, settings, employee, month) {
     // override doesn't distort the breakdown.
     present_days: round2(paidDays - sundayCount - paidLeaves - holidayDays),
     holiday_days: round2(holidayDays),
+    missed_punch_out_count: missedPunchOutCount,
+    missed_punch_out_grace: Math.min(missedPunchOutCount, 3),
     sunday_worked: sundayWorked,            // # of Sundays the person worked
     sunday_worked_pay: round2(sundayWorkedPay), // extra day-equivalents paid for them
     half_days: halfDays,
