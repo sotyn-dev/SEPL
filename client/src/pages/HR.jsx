@@ -517,7 +517,7 @@ export default function HR() {
           { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
           { id: 'manpower',        label: 'Manpower Plan',      icon: FiUsers },
           { id: 'candidates',      label: 'Candidates (ATS)',   icon: FiUser },
-          { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
+          { id: 'hiring-requests', label: 'Hiring Requirements & Blueprints', icon: FiBriefcase },
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
           { id: 'screening',       label: 'Screening Qs',       icon: FiClipboard },
           { id: 'final-round',     label: 'Final-Round Qs',     icon: FiAward },

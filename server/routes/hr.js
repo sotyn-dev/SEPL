@@ -1052,8 +1052,15 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const normalized = masterValues(input);
   const values = { ...terms };
   for (const key of Object.keys(normalized)) if (has(key)) values[key] = normalized[key];
-  for (const key of ['name','phone','email','personal_email','designation','department','join_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
+  for (const key of ['name','phone','email','personal_email','designation','department','join_date','exit_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
     if (has(key)) values[key] = input[key] === '' ? null : input[key];
+  }
+  if (['terminated','inactive'].includes(newStatus)) {
+    if (!values.exit_date && !existing.exit_date) {
+      values.exit_date = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    }
+  } else if (newStatus === 'active' && existing.status !== 'active') {
+    if (!has('exit_date')) values.exit_date = null;
   }
   if (has('name')) values.name = input.name.trim();
   if (has('roster')) values.roster = normalizeRoster(input.roster);
@@ -1127,7 +1134,7 @@ router.post('/employees/bulk-status', requirePermission('employees', 'edit'), (r
   if (reason.length < 5) return res.status(400).json({ error: 'A reason (min 5 characters) is required for a bulk status change' });
 
   const changed = [], skipped = [];
-  const upd = db.prepare('UPDATE employees SET status=? WHERE id=?');
+  const upd = db.prepare("UPDATE employees SET status=?, exit_date = COALESCE(exit_date, DATE('now', '+5.5 hours')) WHERE id=?");
   const tx = db.transaction(() => {
     for (const id of ids) {
       const emp = db.prepare('SELECT id, name, status, user_id FROM employees WHERE id=?').get(id);
@@ -2144,23 +2151,96 @@ function isHrOrAdmin(req) {
 router.get('/hiring-requests', (req, res) => {
   const { status, department } = req.query;
   let sql = `SELECT hr.*, e.name AS reporting_manager_name,
+                    ex.name AS exiting_employee_name,
                     (SELECT COUNT(*) FROM candidates c WHERE c.hiring_request_id = hr.id) AS candidates_count
                FROM hiring_requests hr
                LEFT JOIN employees e ON e.id = hr.reporting_manager_id
+               LEFT JOIN employees ex ON ex.id = hr.exiting_employee_id
               WHERE 1=1`;
   const args = [];
   if (status)     { sql += ' AND hr.status = ?';     args.push(status); }
   if (department) { sql += ' AND hr.department = ?'; args.push(department); }
   sql += ' ORDER BY hr.created_at DESC';
-  res.json(getDb().prepare(sql).all(...args));
+  const list = getDb().prepare(sql).all(...args);
+  res.json(list);
+});
+
+// TSK-0944: Real-time department budget & headcount summary for MD Sir's guardrails
+router.get('/department-budget-summary', (req, res) => {
+  const db = getDb();
+  try {
+    const deptStats = db.prepare(`
+      SELECT department,
+             COUNT(*) as active_headcount,
+             COALESCE(SUM(salary), 0) as current_monthly_payroll
+        FROM employees
+       WHERE status = 'active' AND department IS NOT NULL AND TRIM(department) != ''
+       GROUP BY department
+    `).all();
+
+    let budgets = [];
+    try {
+      budgets = db.prepare('SELECT * FROM department_budgets ORDER BY department').all();
+    } catch (_) {}
+
+    res.json({ stats: deptStats, budgets });
+  } catch (err) {
+    console.error('GET /hr/department-budget-summary error', err);
+    res.status(500).json({ error: 'Failed to fetch department budget summary' });
+  }
+});
+
+// TSK-0944: Update department budget caps (Admin / MD only)
+router.put('/department-budgets/:department', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'Admin or HR only' });
+  const db = getDb();
+  const { monthly_budget, max_headcount } = req.body || {};
+  try {
+    db.prepare(`
+      INSERT INTO department_budgets (department, monthly_budget, max_headcount, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(department) DO UPDATE SET
+        monthly_budget = excluded.monthly_budget,
+        max_headcount = excluded.max_headcount,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(req.params.department, +monthly_budget || 0, +max_headcount || 0, req.user.id);
+    res.json({ message: 'Department budget updated' });
+  } catch (err) {
+    console.error('PUT /hr/department-budgets error', err);
+    res.status(500).json({ error: err.message || 'Failed to update department budget' });
+  }
+});
+
+// TSK-0944: Pre-built Role Blueprint Templates (1-click clone for JD, KRAs, KPIs, Scorecards)
+router.get('/role-templates', (req, res) => {
+  const db = getDb();
+  try {
+    const templates = db.prepare('SELECT * FROM role_blueprint_templates ORDER BY department, title').all();
+    const formatted = templates.map(t => {
+      let jd = null, kras = [], kpis = [], weekly = [], monthly = [];
+      try { jd = t.jd_details ? JSON.parse(t.jd_details) : null; } catch (_) {}
+      try { kras = t.kras ? JSON.parse(t.kras) : []; } catch (_) {}
+      try { kpis = t.kpis ? JSON.parse(t.kpis) : []; } catch (_) {}
+      try { weekly = t.weekly_scorecard ? JSON.parse(t.weekly_scorecard) : []; } catch (_) {}
+      try { monthly = t.monthly_scorecard ? JSON.parse(t.monthly_scorecard) : []; } catch (_) {}
+      return { ...t, jd_details: jd, kras, kpis, weekly_scorecard: weekly, monthly_scorecard: monthly };
+    });
+    res.json(formatted);
+  } catch (err) {
+    console.error('GET /hr/role-templates error', err);
+    res.json([]);
+  }
 });
 
 router.get('/hiring-requests/:id', (req, res) => {
   const db = getDb();
   const row = db.prepare(
-    `SELECT hr.*, e.name AS reporting_manager_name
+    `SELECT hr.*, e.name AS reporting_manager_name,
+            ex.name AS exiting_employee_name
        FROM hiring_requests hr
        LEFT JOIN employees e ON e.id = hr.reporting_manager_id
+       LEFT JOIN employees ex ON ex.id = hr.exiting_employee_id
       WHERE hr.id = ?`
   ).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Hiring request not found' });
@@ -2174,21 +2254,36 @@ router.get('/hiring-requests/:id', (req, res) => {
 
 router.post('/hiring-requests', (req, res) => {
   try {
-    const { department, position_title, num_openings, salary_min, salary_max,
-            experience_required, employment_type, hiring_deadline,
-            reporting_manager_id, job_description } = req.body || {};
+    const {
+      department, position_title, num_openings, salary_min, salary_max,
+      experience_required, employment_type, hiring_deadline,
+      reporting_manager_id, job_description,
+      // TSK-0944 fields
+      job_level, hiring_type, exiting_employee_id, file_attachments,
+      jd_details, kras, kpis, weekly_scorecard, monthly_scorecard,
+      dept_budget, dept_current_payroll, is_over_budget,
+      over_budget_amount, over_budget_pct, over_budget_justification
+    } = req.body || {};
+
     if (!department || !String(department).trim()) return res.status(400).json({ error: 'Department is required' });
     if (!position_title || !String(position_title).trim()) return res.status(400).json({ error: 'Position title is required' });
     const allowedTypes = ['full_time','part_time','contract','internship','freelance'];
     const empType = allowedTypes.includes(employment_type) ? employment_type : 'full_time';
     const db = getDb();
+
+    const ser = (val) => (val != null && typeof val === 'object') ? JSON.stringify(val) : (val || null);
+
     const r = db.prepare(`
       INSERT INTO hiring_requests
         (department, position_title, num_openings, salary_min, salary_max,
          experience_required, employment_type, hiring_deadline,
          reporting_manager_id, job_description,
+         job_level, hiring_type, exiting_employee_id, file_attachments,
+         jd_details, kras, kpis, weekly_scorecard, monthly_scorecard,
+         dept_budget, dept_current_payroll, is_over_budget,
+         over_budget_amount, over_budget_pct, over_budget_justification,
          status, requested_by, requested_by_name)
-      VALUES (?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?)
+      VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?, ?)
     `).run(
       department.trim(), position_title.trim(),
       num_openings ? +num_openings : 1,
@@ -2197,6 +2292,21 @@ router.post('/hiring-requests', (req, res) => {
       experience_required || null, empType, hiring_deadline || null,
       reporting_manager_id ? +reporting_manager_id : null,
       job_description || null,
+      job_level || 'L2',
+      hiring_type || 'new_addition',
+      exiting_employee_id ? +exiting_employee_id : null,
+      ser(file_attachments),
+      ser(jd_details),
+      ser(kras),
+      ser(kpis),
+      ser(weekly_scorecard),
+      ser(monthly_scorecard),
+      dept_budget != null ? +dept_budget : 0,
+      dept_current_payroll != null ? +dept_current_payroll : 0,
+      is_over_budget ? 1 : 0,
+      over_budget_amount != null ? +over_budget_amount : 0,
+      over_budget_pct != null ? +over_budget_pct : 0,
+      over_budget_justification || null,
       req.user.id, req.user.name || null,
     );
     res.status(201).json({ id: r.lastInsertRowid });
@@ -2214,9 +2324,18 @@ router.put('/hiring-requests/:id', (req, res) => {
   if (cur.status !== 'pending' && req.user.role !== 'admin') {
     return res.status(403).json({ error: `Cannot edit a ${cur.status} request — admin only` });
   }
-  const { department, position_title, num_openings, salary_min, salary_max,
-          experience_required, employment_type, hiring_deadline,
-          reporting_manager_id, job_description } = req.body || {};
+  const {
+    department, position_title, num_openings, salary_min, salary_max,
+    experience_required, employment_type, hiring_deadline,
+    reporting_manager_id, job_description,
+    job_level, hiring_type, exiting_employee_id, file_attachments,
+    jd_details, kras, kpis, weekly_scorecard, monthly_scorecard,
+    dept_budget, dept_current_payroll, is_over_budget,
+    over_budget_amount, over_budget_pct, over_budget_justification
+  } = req.body || {};
+
+  const ser = (val) => (val != null && typeof val === 'object') ? JSON.stringify(val) : (val || null);
+
   db.prepare(`
     UPDATE hiring_requests SET
       department = COALESCE(?, department),
@@ -2228,7 +2347,22 @@ router.put('/hiring-requests/:id', (req, res) => {
       employment_type = COALESCE(?, employment_type),
       hiring_deadline = ?,
       reporting_manager_id = ?,
-      job_description = COALESCE(?, job_description)
+      job_description = COALESCE(?, job_description),
+      job_level = COALESCE(?, job_level),
+      hiring_type = COALESCE(?, hiring_type),
+      exiting_employee_id = ?,
+      file_attachments = COALESCE(?, file_attachments),
+      jd_details = COALESCE(?, jd_details),
+      kras = COALESCE(?, kras),
+      kpis = COALESCE(?, kpis),
+      weekly_scorecard = COALESCE(?, weekly_scorecard),
+      monthly_scorecard = COALESCE(?, monthly_scorecard),
+      dept_budget = COALESCE(?, dept_budget),
+      dept_current_payroll = COALESCE(?, dept_current_payroll),
+      is_over_budget = COALESCE(?, is_over_budget),
+      over_budget_amount = COALESCE(?, over_budget_amount),
+      over_budget_pct = COALESCE(?, over_budget_pct),
+      over_budget_justification = COALESCE(?, over_budget_justification)
     WHERE id = ?
   `).run(
     department || null, position_title || null,
@@ -2239,9 +2373,84 @@ router.put('/hiring-requests/:id', (req, res) => {
     hiring_deadline || null,
     reporting_manager_id ? +reporting_manager_id : null,
     job_description || null,
+    job_level || null,
+    hiring_type || null,
+    exiting_employee_id ? +exiting_employee_id : null,
+    ser(file_attachments),
+    ser(jd_details),
+    ser(kras),
+    ser(kpis),
+    ser(weekly_scorecard),
+    ser(monthly_scorecard),
+    dept_budget != null ? +dept_budget : null,
+    dept_current_payroll != null ? +dept_current_payroll : null,
+    is_over_budget != null ? (is_over_budget ? 1 : 0) : null,
+    over_budget_amount != null ? +over_budget_amount : null,
+    over_budget_pct != null ? +over_budget_pct : null,
+    over_budget_justification || null,
     req.params.id,
   );
   res.json({ message: 'Updated' });
+});
+
+// TSK-0944: Auto-provision score_template and score_kpis from hiring requirement blueprint
+router.post('/hiring-requests/:id/provision-scorecard', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'HR or Admin only' });
+  const db = getDb();
+  const hrReq = db.prepare('SELECT * FROM hiring_requests WHERE id=?').get(req.params.id);
+  if (!hrReq) return res.status(404).json({ error: 'Hiring request not found' });
+
+  const { employee_id, user_id } = req.body || {};
+  if (!user_id && !employee_id) {
+    return res.status(400).json({ error: 'Target user_id or employee_id is required' });
+  }
+
+  let weeklyKpis = [], monthlyKpis = [];
+  try { weeklyKpis = hrReq.weekly_scorecard ? JSON.parse(hrReq.weekly_scorecard) : []; } catch (_) {}
+  try { monthlyKpis = hrReq.monthly_scorecard ? JSON.parse(hrReq.monthly_scorecard) : []; } catch (_) {}
+
+  if (weeklyKpis.length === 0 && monthlyKpis.length === 0) {
+    return res.status(400).json({ error: 'No weekly or monthly scorecards configured in this requirement blueprint' });
+  }
+
+  try {
+    const tplName = `${hrReq.position_title} (${hrReq.department} - ${hrReq.job_level || 'Role'})`;
+    let tpl = db.prepare('SELECT id FROM score_templates WHERE name=?').get(tplName);
+    let templateId = tpl?.id;
+
+    if (!templateId) {
+      const insTpl = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)')
+        .run(tplName, `Auto-provisioned from Hiring Requisition #${hrReq.id}`);
+      templateId = insTpl.lastInsertRowid;
+
+      // Insert Weekly KPIs
+      const insKpi = db.prepare(`
+        INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, default_planned, display_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      let order = 1;
+      for (const w of weeklyKpis) {
+        insKpi.run(templateId, 'Weekly', w.metric || 'Weekly Target', w.weight || 0, 'higher_better', w.target || 0, order++);
+      }
+      // Insert Monthly KPIs
+      for (const m of monthlyKpis) {
+        insKpi.run(templateId, 'Monthly', m.metric || 'Monthly Target', m.weight || 0, 'higher_better', m.target || 0, order++);
+      }
+    }
+
+    // Link user if user_id provided
+    const targetUserId = user_id || (employee_id ? db.prepare('SELECT user_id FROM employees WHERE id=?').get(employee_id)?.user_id : null);
+    if (targetUserId) {
+      db.prepare('INSERT OR IGNORE INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, ?)')
+        .run(targetUserId, templateId, req.user.id);
+    }
+
+    db.prepare('UPDATE hiring_requests SET target_scorecard_template_id=? WHERE id=?').run(templateId, hrReq.id);
+    res.json({ message: 'Scorecard template successfully provisioned and linked', template_id: templateId });
+  } catch (err) {
+    console.error('Provision scorecard error', err);
+    res.status(500).json({ error: err.message || 'Failed to provision scorecard' });
+  }
 });
 
 router.post('/hiring-requests/:id/approve', (req, res) => {

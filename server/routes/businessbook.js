@@ -69,7 +69,7 @@ const ALL_FIELDS = [
   'guarantee_required', 'guarantee_percentage', 'sale_amount_without_gst', 'po_amount',
   'management_discount_pct', 'management_discount_amount', 'net_sale_amount',
   'order_type', 'penalty_clause', 'penalty_clause_date',
-  'committed_start_date', 'committed_delivery_date', 'committed_completion_date', 'freight_extra',
+  'committed_start_date', 'committed_delivery_date', 'committed_completion_date', 'freight_extra', 'freight_mentioned_in_po',
   'category', 'customer_type', 'client_type', 'customer_code',
   'employee_assigned', 'employee_id', 'lead_by',
   'management_person_name', 'management_person_contact',
@@ -91,7 +91,7 @@ const ALL_FIELDS = [
 
 // GET all with filters
 router.get('/', requirePermission('business_book', 'view'), (req, res) => {
-  const { status, category, order_type, lead_type, search, date_from, date_to } = req.query;
+  const { status, category, order_type, lead_type, freight_mentioned_in_po, search, date_from, date_to } = req.query;
   // order_po_files: the client PO copy / BOQ uploaded against this lead in
   // Order to Planning, so the list row can link them next to the lead's own
   // files (mam 2026-09-10: "if po upload show here"). One lead can have
@@ -108,6 +108,7 @@ router.get('/', requirePermission('business_book', 'view'), (req, res) => {
   if (category) { sql += ' AND bb.category=?'; params.push(category); }
   if (order_type) { sql += ' AND bb.order_type=?'; params.push(order_type); }
   if (lead_type) { sql += ' AND bb.lead_type=?'; params.push(lead_type); }
+  if (freight_mentioned_in_po) { sql += ' AND bb.freight_mentioned_in_po=?'; params.push(freight_mentioned_in_po); }
   if (date_from) { sql += ' AND bb.created_at >= ?'; params.push(date_from); }
   if (date_to) { sql += ' AND bb.created_at <= ?'; params.push(date_to + ' 23:59:59'); }
   if (search) {
@@ -203,7 +204,7 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     guarantee_required, guarantee_percentage, sale_amount_without_gst, po_amount,
     management_discount_pct, management_discount_amount, net_sale_amount,
     order_type, penalty_clause, penalty_clause_date,
-    committed_start_date, committed_delivery_date, committed_completion_date, freight_extra,
+    committed_start_date, committed_delivery_date, committed_completion_date, freight_extra, freight_mentioned_in_po,
     category, customer_type, client_type, customer_code,
     employee_assigned, employee_id, lead_by,
     management_person_name, management_person_contact,
@@ -221,14 +222,14 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
     working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(78).fill('?').join(',')})`).run(
+  ) VALUES (${Array(79).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.site_location_url || null, b.site_latitude ? Number(b.site_latitude) : null, b.site_longitude ? Number(b.site_longitude) : null,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type || 'Supply', b.penalty_clause || 'No', b.penalty_clause_date || null,
-    b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',
+    b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No', b.freight_mentioned_in_po || 'No',
     b.category, b.customer_type, b.client_type, b.customer_code,
     b.employee_assigned, b.employee_id || null, b.lead_by,
     b.management_person_name, b.management_person_contact,
@@ -367,7 +368,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     guarantee_required=?, guarantee_percentage=?, sale_amount_without_gst=?, po_amount=?,
     management_discount_pct=?, management_discount_amount=?, net_sale_amount=?,
     order_type=?, penalty_clause=?, penalty_clause_date=?,
-    committed_start_date=?, committed_delivery_date=?, committed_completion_date=?, freight_extra=?,
+    committed_start_date=?, committed_delivery_date=?, committed_completion_date=?, freight_extra=?, freight_mentioned_in_po=?,
     category=?, customer_type=?, client_type=?, customer_code=?,
     employee_assigned=?, employee_id=?, lead_by=?,
     management_person_name=?, management_person_contact=?,
@@ -391,7 +392,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type, b.penalty_clause, b.penalty_clause_date || null,
-    b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',
+    b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No', b.freight_mentioned_in_po || 'No',
     b.category, b.customer_type, b.client_type, b.customer_code,
     b.employee_assigned, b.employee_id || null, b.lead_by,
     b.management_person_name, b.management_person_contact,

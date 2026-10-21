@@ -83,10 +83,12 @@ const statusFromPunches = (inHHMM, outHHMM, cfg) => {
   const hours = (outM - inM) / 60;
   const lateAt = cfg?.late_after_time || '09:46';
   const halfAt = cfg?.half_day_after_time || '10:00';
-  const minHalf = Number(cfg?.min_hours_half_day ?? 4);
+  const minHalf = Number(cfg?.min_hours_half_day ?? 2);
+  const minFull = Number(cfg?.min_hours_full_day ?? 6);
   const hrsTxt = `${hours.toFixed(2)} h`;
+  if (hours < minHalf) return { status: 'absent', why: `only ${hrsTxt} (under ${minHalf} h min)` };
+  if (hours < minFull) return { status: 'half_day', why: `only ${hrsTxt} (under ${minFull} h for full day)` };
   if (inM > hhmmToMin(halfAt)) return { status: 'half_day', why: `came in after ${halfAt} · ${hrsTxt}` };
-  if (hours < minHalf) return { status: 'half_day', why: `only ${hrsTxt} (under ${minHalf} h)` };
   if (inM >= hhmmToMin(lateAt)) return { status: 'late', why: `came in at ${inHHMM}, late from ${lateAt} · ${hrsTxt}` };
   return { status: 'present', why: `on time · ${hrsTxt}` };
 };

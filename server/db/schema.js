@@ -430,6 +430,7 @@ function initializeDatabase() {
       committed_delivery_date DATE,
       committed_completion_date DATE,
       freight_extra TEXT DEFAULT 'No',
+      freight_mentioned_in_po TEXT DEFAULT 'No',
       category TEXT,
       customer_type TEXT,
       client_type TEXT,
@@ -1645,8 +1646,8 @@ function initializeDatabase() {
                                                      -- so 09:46 is 1 minute late. Penalty minutes are counted from
                                                      -- the last on-time minute (this value - 1).
       half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day deduction
-      min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
-      min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
+      min_hours_full_day REAL DEFAULT 6,              -- work >= this = full day; below this = half day
+      min_hours_half_day REAL DEFAULT 2,              -- work >= this and < full day = half day; below this = absent
       skip_half_day_if_short_leave INTEGER DEFAULT 1, -- if short leave applied that day → no half-day deduction
       late_grace_count INTEGER DEFAULT 3,             -- N late marks per month are free
       late_per_minute_rate REAL DEFAULT 20,           -- Rs / minute deduction once over grace
@@ -4319,6 +4320,25 @@ function initializeDatabase() {
     ['sites', 'location_url TEXT'],
     ['sites', 'latitude REAL'],
     ['sites', 'longitude REAL'],
+    // TSK-0944: Role blueprint, JD, KRA, KPI, Weekly & Monthly scorecards, file attachments, levels & budget impact
+    ['hiring_requests', 'job_level TEXT'],
+    ['hiring_requests', "hiring_type TEXT DEFAULT 'new_addition'"],
+    ['hiring_requests', 'exiting_employee_id INTEGER REFERENCES employees(id)'],
+    ['hiring_requests', 'file_attachments TEXT'],
+    ['hiring_requests', 'jd_details TEXT'],
+    ['hiring_requests', 'kras TEXT'],
+    ['hiring_requests', 'kpis TEXT'],
+    ['hiring_requests', 'weekly_scorecard TEXT'],
+    ['hiring_requests', 'monthly_scorecard TEXT'],
+    ['hiring_requests', 'dept_budget REAL DEFAULT 0'],
+    ['hiring_requests', 'dept_current_payroll REAL DEFAULT 0'],
+    ['hiring_requests', 'is_over_budget INTEGER DEFAULT 0'],
+    ['hiring_requests', 'over_budget_amount REAL DEFAULT 0'],
+    ['hiring_requests', 'over_budget_pct REAL DEFAULT 0'],
+    ['hiring_requests', 'over_budget_justification TEXT'],
+    ['hiring_requests', 'target_scorecard_template_id INTEGER REFERENCES score_templates(id)'],
+    // TK-01456: Freight mentioned in PO (Pooja Kaplesh)
+    ['business_book', "freight_mentioned_in_po TEXT DEFAULT 'No'"],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -5117,6 +5137,264 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) { }
   }
 
+  // TSK-0944: Department budgets & Headcount caps for MD Sir's budget guardrails
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS department_budgets (
+      department TEXT PRIMARY KEY,
+      monthly_budget REAL DEFAULT 0,
+      max_headcount INTEGER DEFAULT 0,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    const count = db.prepare('SELECT COUNT(*) as c FROM department_budgets').get()?.c || 0;
+    if (count === 0) {
+      const defaultBudgets = [
+        ['Operations', 1500000, 25],
+        ['Solar', 1200000, 20],
+        ['Accounts & Finance', 600000, 8],
+        ['Procurement & Purchase', 800000, 10],
+        ['HR & Admin', 450000, 6],
+        ['Sales & BD', 1000000, 12],
+        ['Design & Engineering', 700000, 8],
+        ['Civil Execution', 900000, 15],
+        ['Electrical & Fire', 850000, 12],
+      ];
+      const ins = db.prepare('INSERT OR IGNORE INTO department_budgets (department, monthly_budget, max_headcount) VALUES (?, ?, ?)');
+      for (const [dept, mb, hc] of defaultBudgets) ins.run(dept, mb, hc);
+    }
+  } catch (e) { console.error('[schema] department_budgets create failed:', e.message); }
+
+  // TSK-0944: Pre-configured Role Blueprint Templates (1-click clone for JD, KRAs, KPIs, Scorecards)
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS role_blueprint_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      department TEXT NOT NULL,
+      job_level TEXT NOT NULL,
+      experience_required TEXT,
+      salary_min REAL,
+      salary_max REAL,
+      jd_details TEXT,
+      kras TEXT,
+      kpis TEXT,
+      weekly_scorecard TEXT,
+      monthly_scorecard TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    const tCount = db.prepare('SELECT COUNT(*) as c FROM role_blueprint_templates').get()?.c || 0;
+    if (tCount === 0) {
+      const insTemplate = db.prepare(`
+        INSERT INTO role_blueprint_templates
+          (title, department, job_level, experience_required, salary_min, salary_max,
+           jd_details, kras, kpis, weekly_scorecard, monthly_scorecard)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      // 1. Solar Site Engineer (L2)
+      insTemplate.run(
+        'Solar Site Engineer',
+        'Solar',
+        'L2',
+        '1-3 years',
+        28000,
+        42000,
+        JSON.stringify({
+          summary: 'Responsible for on-site Solar PV installation, string inverter cabling, structure mounting, and daily milestone execution.',
+          responsibilities: '• Supervise PV module mounting, inverter station wiring, and AC/DC terminations.\n• Coordinate with client engineers and discom inspectors for site visits.\n• Submit daily progress reports (DPR) with photos and labour muster.\n• Track material consumption against BOQ and prevent scrap leakage.',
+          skills: 'Solar PV, Cable Sizing, Inverter Commissioning, Site DPR, AutoCAD basic, Team Handling',
+          qualifications: 'B.Tech / Diploma in Electrical / Mechanical Engineering',
+          work_mode: 'On-site'
+        }),
+        JSON.stringify([
+          { id: 1, title: 'Execution Schedule & Milestones', description: 'Deliver solar capacity installation according to the project timeline.', weightage: 30 },
+          { id: 2, title: 'Quality & Electrical Compliance', description: 'Zero deviations from MNRE / DISCOM installation standards and safety protocols.', weightage: 25 },
+          { id: 3, title: 'Material Reconciliation', description: 'Ensure module and cable consumption is within 1% of design BOQ.', weightage: 25 },
+          { id: 4, title: 'DPR & Operational Reporting', description: 'Timely daily reporting and contractor attendance logging.', weightage: 20 }
+        ]),
+        JSON.stringify([
+          { id: 1, kra_id: 1, metric: 'Milestone Adherence Rate', target: 95, unit: '%', direction: 'higher_better' },
+          { id: 2, kra_id: 2, metric: 'Pre-Commissioning Punch List Items', target: 0, unit: 'defects', direction: 'lower_better' },
+          { id: 3, kra_id: 3, metric: 'Cable Scrap Variance vs BOQ', target: 1.5, unit: '%', direction: 'lower_better' },
+          { id: 4, kra_id: 4, metric: 'Daily DPR On-Time Submission', target: 100, unit: '%', direction: 'higher_better' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Daily DPR Submitted with photos (6/6 days)', target: 6, weight: 25, notes: 'Logged in SOTYN DPR before 8:00 PM' },
+          { id: 2, metric: 'Subcontractor muster verification vs physical headcount', target: 100, weight: 25, notes: 'Verified daily' },
+          { id: 3, metric: 'Indent to store consumption reconciliation', target: 100, weight: 25, notes: 'Zero untracked inventory' },
+          { id: 4, metric: 'Site Safety inspection checklist done', target: 2, weight: 25, notes: 'Bi-weekly toolbox meeting & safety audit' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Target MWp Installed vs Monthly Plan', target: 100, weight: 35, notes: 'Achieved against master schedule' },
+          { id: 2, metric: 'Zero Electrical or Safety Infractions', target: 100, weight: 25, notes: 'Safety audit rating' },
+          { id: 3, metric: 'Subcontractor RA bill verification accuracy', target: 100, weight: 20, notes: 'Within 3 days of submission' },
+          { id: 4, metric: 'Client Site Inspection Signoff', target: 1, weight: 20, notes: 'Obtain monthly inspection certificate' }
+        ])
+      );
+
+      // 2. Senior Civil / Project Engineer (L3)
+      insTemplate.run(
+        'Senior Civil / Project Engineer',
+        'Operations',
+        'L3',
+        '4-7 years',
+        45000,
+        65000,
+        JSON.stringify({
+          summary: 'Leads end-to-end civil site construction, foundation works, contractor supervision, and ensures delivery on time and within budget.',
+          responsibilities: '• Manage site civil works including grading, foundations, cable trenches, and control rooms.\n• Certify contractor measurement book (MB) entries and review RA bills.\n• Maintain strict project cash outflow and material consumption control.\n• Lead weekly progress reviews with client representatives and management.',
+          skills: 'Civil Construction, Foundation Design, MB Verification, Billing, Project Planning, Contractor Management',
+          qualifications: 'B.Tech in Civil Engineering',
+          work_mode: 'On-site'
+        }),
+        JSON.stringify([
+          { id: 1, title: 'Project Timeline & Delivery', description: 'Deliver project stages according to master baseline schedule.', weightage: 35 },
+          { id: 2, title: 'Budget Adherence & Cost Control', description: 'Ensure execution costs remain within approved project budget.', weightage: 30 },
+          { id: 3, title: 'Measurement Book & Billing Precision', description: 'Timely certification of work orders and contractor RA bills.', weightage: 20 },
+          { id: 4, title: 'Quality, Safety & Client Snag Closure', description: 'Ensure high civil structural quality and rapid snag clearance.', weightage: 15 }
+        ]),
+        JSON.stringify([
+          { id: 1, kra_id: 1, metric: 'Project Schedule Variance (SV)', target: 5, unit: '%', direction: 'lower_better' },
+          { id: 2, kra_id: 2, metric: 'Cost Overrun vs Sanctioned Budget', target: 0, unit: '₹', direction: 'lower_better' },
+          { id: 3, kra_id: 3, metric: 'MB Sheet Verification Turnaround', target: 3, unit: 'days', direction: 'lower_better' },
+          { id: 4, kra_id: 4, metric: 'Client Snag Resolution SLA', target: 48, unit: 'hours', direction: 'lower_better' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Weekly master schedule vs actual progress audit', target: 1, weight: 30, notes: 'Submitted every Saturday' },
+          { id: 2, metric: 'Contractor MB entries checked and verified', target: 100, weight: 30, notes: '100% physically cross-checked' },
+          { id: 3, metric: 'Material indent review & approval on SOTYN', target: 100, weight: 20, notes: 'Cleared within 24 hours' },
+          { id: 4, metric: 'Weekly coordination meeting with client engineers', target: 1, weight: 20, notes: 'Minutes recorded' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Milestone Progress Billing achieved vs Target', target: 100, weight: 35, notes: 'Financial progress target' },
+          { id: 2, metric: 'Project cost variance within sanctioned budget', target: 100, weight: 30, notes: 'Zero unapproved cost escalations' },
+          { id: 3, metric: 'Subcontractor performance rating > 85%', target: 85, weight: 20, notes: 'Average subcon SLA score' },
+          { id: 4, metric: 'Client satisfaction and safety signoff', target: 100, weight: 15, notes: 'Monthly quality certification' }
+        ])
+      );
+
+      // 3. Billing & Accounts Executive (L2)
+      insTemplate.run(
+        'Billing & Accounts Executive',
+        'Accounts & Finance',
+        'L2',
+        '2-4 years',
+        25000,
+        38000,
+        JSON.stringify({
+          summary: 'Handles sales invoice generation, client payment follow-ups, Tally ERP entries, GST reconciliation, and vendor bill verifications.',
+          responsibilities: '• Generate client sales invoices and delivery bills on SOTYN within 24h of MB certification.\n• Reconcile monthly GSTR-2B with purchase ledgers and resolve mismatches.\n• Track accounts receivable (AR) aging and drive collections follow-ups.\n• Process vendor payments after 3-way matching (PO, Delivery, Verification).',
+          skills: 'Tally Prime, GST, TDS, AR/AP Tracking, Bank Reconciliation, Excel Advanced',
+          qualifications: 'B.Com / M.Com / Inter CA',
+          work_mode: 'Office'
+        }),
+        JSON.stringify([
+          { id: 1, title: 'Invoicing & Revenue Realization', description: 'Rapid, error-free client billing following milestone completion.', weightage: 35 },
+          { id: 2, title: 'Vendor Bill Processing & Reconciliation', description: 'Accurate 3-way matching and timely ledger entries in Tally.', weightage: 30 },
+          { id: 3, title: 'Statutory Compliance & Filings', description: 'On-time GST, TDS, and PF/ESIC reconciliation with zero penalty.', weightage: 20 },
+          { id: 4, title: 'Collections & AR Aging Management', description: 'Follow up on outstanding receivables to optimize working capital.', weightage: 15 }
+        ]),
+        JSON.stringify([
+          { id: 1, kra_id: 1, metric: 'Invoice Turnaround from MB Approval', target: 24, unit: 'hours', direction: 'lower_better' },
+          { id: 2, kra_id: 2, metric: 'Tally vs SOTYN Ledger Sync Accuracy', target: 100, unit: '%', direction: 'higher_better' },
+          { id: 3, kra_id: 3, metric: 'Monthly Statutory Return Deadlines Met', target: 100, unit: '%', direction: 'higher_better' },
+          { id: 4, kra_id: 4, metric: 'Receivables Overdue > 60 Days', target: 5, unit: '%', direction: 'lower_better' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'All verified project MB bills converted to invoices', target: 100, weight: 30, notes: 'Zero backlog > 2 days' },
+          { id: 2, metric: 'Vendor payment vouchers processed', target: 20, weight: 30, notes: 'Verified with purchase & store' },
+          { id: 3, metric: 'Weekly AR aging debtor follow-up calls logged', target: 15, weight: 20, notes: 'Collection remarks updated' },
+          { id: 4, metric: 'Bank reconciliation completed every Friday', target: 1, weight: 20, notes: 'Zero unexplained ledger diffs' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Monthly Sales Invoicing Target Hit (₹)', target: 100, weight: 35, notes: 'Planned vs billed revenue' },
+          { id: 2, metric: 'Timely GST/TDS Filings (Zero penalties)', target: 100, weight: 25, notes: 'Filed before due date' },
+          { id: 3, metric: 'Month-end Trial Balance closure by 5th', target: 5, weight: 25, notes: 'Days to close books' },
+          { id: 4, metric: 'Collections Realized vs Billing Ratio', target: 90, weight: 15, notes: '% of due collections realized' }
+        ])
+      );
+
+      // 4. Procurement & Purchase Officer (L3)
+      insTemplate.run(
+        'Procurement & Purchase Officer',
+        'Procurement & Purchase',
+        'L3',
+        '3-6 years',
+        40000,
+        60000,
+        JSON.stringify({
+          summary: 'Leads procurement of electrical equipment, solar components, cables, and civil materials at optimal rates with strict delivery SLAs.',
+          responsibilities: '• Float RFQs to approved vendors and conduct comparative rate negotiations.\n• Issue Purchase Orders (POs) with clear specifications and dispatch deadlines.\n• Coordinate logistics and ensure materials reach site without delaying project timelines.\n• Evaluate vendor performance and enforce defect resolution SLAs.',
+          skills: 'Vendor Negotiation, Sourcing, RFQ Management, Contract Terms, Logistics, SOTYN Purchase',
+          qualifications: 'B.Tech / Diploma in Electrical / Supply Chain / Commerce',
+          work_mode: 'Office'
+        }),
+        JSON.stringify([
+          { id: 1, title: 'Cost Optimization & Negotiation', description: 'Drive purchase price variance (PPV) savings against estimated budgets.', weightage: 35 },
+          { id: 2, title: 'On-time Site Delivery SLA', description: 'Ensure materials reach project sites before stock-out dates.', weightage: 35 },
+          { id: 3, title: 'Vendor Quality & Spec Compliance', description: 'Zero rejected dispatches and adherence to engineering makes.', weightage: 20 },
+          { id: 4, title: 'Order to Dispatch Turnaround', description: 'Speed of converting verified indents to executed purchase orders.', weightage: 10 }
+        ]),
+        JSON.stringify([
+          { id: 1, kra_id: 1, metric: 'Purchase Cost Savings vs Budget/Last PO', target: 4, unit: '%', direction: 'higher_better' },
+          { id: 2, kra_id: 2, metric: 'On-time Delivery (OTD) to Project Sites', target: 95, unit: '%', direction: 'higher_better' },
+          { id: 3, kra_id: 3, metric: 'Vendor Defect / Rejection Rate', target: 0.5, unit: '%', direction: 'lower_better' },
+          { id: 4, kra_id: 4, metric: 'RFQ to PO Release Turnaround', target: 48, unit: 'hours', direction: 'lower_better' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Indents converted to POs within 48h SLA', target: 95, weight: 35, notes: 'Zero backlog of open indents' },
+          { id: 2, metric: 'In-transit shipment tracking updates logged', target: 100, weight: 25, notes: 'Daily dispatch tracking' },
+          { id: 3, metric: 'Vendor rate comparisons completed for new items', target: 5, weight: 20, notes: 'Min 3 quotes evaluated' },
+          { id: 4, metric: 'Site urgent material expediting calls', target: 100, weight: 20, notes: 'Zero site stoppages' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Cumulative Purchase Savings vs BOQ Target', target: 100, weight: 40, notes: 'Target savings achieved' },
+          { id: 2, metric: 'Vendor On-time Delivery SLA > 95%', target: 95, weight: 35, notes: 'Measured across all project dispatches' },
+          { id: 3, metric: 'Vendor Quality Compliance & Zero Returns', target: 100, weight: 25, notes: 'Clean site inspection reports' }
+        ])
+      );
+
+      // 5. HR & Talent Acquisition Executive (L2)
+      insTemplate.run(
+        'HR & Talent Acquisition Executive',
+        'HR & Admin',
+        'L2',
+        '1-3 years',
+        25000,
+        38000,
+        JSON.stringify({
+          summary: 'Drives recruitment across departments, candidate sourcing, screening, interview coordination, offer rollout, and new-hire onboarding.',
+          responsibilities: '• Post job openings on job portals, LinkedIn, and engage candidate pipelines.\n• Conduct first-round screening against role KRAs and qualifying questions.\n• Schedule technical and MD interview rounds with prompt candidate feedback.\n• Drive documentation collection, offer letter generation, and day-1 orientation.',
+          skills: 'Talent Acquisition, Portal Search (Naukri/LI), Interviewing, HR Policies, Communication',
+          qualifications: 'MBA in HR / BBA / Graduate',
+          work_mode: 'Office'
+        }),
+        JSON.stringify([
+          { id: 1, title: 'Time-to-Fill & Requisition Closure', description: 'Close open hiring requisitions within target hiring deadlines.', weightage: 40 },
+          { id: 2, title: 'Candidate Pipeline Quality', description: 'Deliver screened candidates with high interview conversion ratios.', weightage: 30 },
+          { id: 3, title: 'Offer-to-Joining Conversion', description: 'Maintain high joining ratios through proactive candidate engagement.', weightage: 15 },
+          { id: 4, title: 'Onboarding & Day-1 Experience', description: 'Zero-friction document verification, asset setup, and orientation.', weightage: 15 }
+        ]),
+        JSON.stringify([
+          { id: 1, kra_id: 1, metric: 'Average Days to Fill Open Position', target: 18, unit: 'days', direction: 'lower_better' },
+          { id: 2, kra_id: 2, metric: 'Screening to Interview Shortlist Ratio', target: 60, unit: '%', direction: 'higher_better' },
+          { id: 3, kra_id: 3, metric: 'Offer to Joining Acceptance Rate', target: 85, unit: '%', direction: 'higher_better' },
+          { id: 4, kra_id: 4, metric: 'New Joiner 90-Day Retention Rate', target: 90, unit: '%', direction: 'higher_better' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Qualified candidate profiles screened & called', target: 25, weight: 35, notes: 'Logged in SOTYN Candidates' },
+          { id: 2, metric: 'Interviews scheduled with HODs / MD Sir', target: 8, weight: 30, notes: 'Followed up with feedback' },
+          { id: 3, metric: 'Candidate offer & onboarding follow-ups', target: 100, weight: 20, notes: 'Pre-boarding calls made' },
+          { id: 4, metric: 'Weekly Hiring Funnel Review report submitted', target: 1, weight: 15, notes: 'Every Monday' }
+        ]),
+        JSON.stringify([
+          { id: 1, metric: 'Requisitions closed within deadline %', target: 85, weight: 40, notes: 'Closed vs open roles' },
+          { id: 2, metric: 'Offer acceptance and joining rate > 85%', target: 85, weight: 30, notes: 'Min dropouts' },
+          { id: 3, metric: 'Pre-onboarding document verification 100%', target: 100, weight: 30, notes: 'Zero compliance gap' }
+        ])
+      );
+    }
+  } catch (e) { console.error('[schema] role_blueprint_templates create failed:', e.message); }
+
   // Manpower Plan — admin override of the auto (value-slab) required manpower
   // per project (mam 2026-06-12: "admin wants to edit required manpower").
   // Keyed by the normalized project key the manpower-plan endpoint groups by.
@@ -5178,6 +5456,7 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_phone TEXT`); } catch (_) { }
     try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) { }
     try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN exit_date DATE`); } catch (_) { }
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) { }
     // Labour quotation supporting document (2026-08): the raiser can attach a
     // PDF/photo of the client's BOQ, contractor's rate card, or site photo —

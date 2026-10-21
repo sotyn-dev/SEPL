@@ -711,12 +711,19 @@ function calculateForEmployee(db, settings, employee, month) {
 
   const joinDate = String(employee.join_date || '').slice(0, 10);
   const hasJoinDate = isRealDate(joinDate);
+  const exitDate = String(employee.exit_date || '').slice(0, 10);
+  const hasExitDate = isRealDate(exitDate);
 
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
     // Before employment: no holiday, weekly-off, leave, absence or penalty.
     if (hasJoinDate && dateStr < joinDate) {
       breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'not_joined', pay: 0 });
+      continue;
+    }
+    // After leaving / inactive: no holiday, weekly-off, leave, absence or penalty.
+    if (hasExitDate && dateStr > exitDate) {
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'left_company', pay: 0 });
       continue;
     }
     const sun = isSunday(year, mm, day);
@@ -868,53 +875,79 @@ function calculateForEmployee(db, settings, employee, month) {
       const punchInMin = timeToMinutes(att.punch_in_time);
       const hours = att.total_hours || 0;
 
-      // Half-day triggers (mam 2026-06-09):
-      //   - punched in AFTER 10:00 (half_day_after_time) → half day, no grace
-      //   - worked UNDER min_hours_half_day (4h) → half day (NOT absent)
-      // A day with 4h+ of work counts as a FULL day even if it's under 8h —
-      // mam dropped the old 8h-minimum half-day docking ("Full day" for the
-      // 4–8h case). Coming in during the 09:46–10:00 window is only a late
-      // MARK on an otherwise full day, handled in the else branch below.
-      const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
-      const lowHoursHalf = hours > 0 && hours < settings.min_hours_half_day;
+      const minHalfHours = settings.min_hours_half_day != null ? Number(settings.min_hours_half_day) : 2;
+      const minFullHours = settings.min_hours_full_day != null ? Number(settings.min_hours_full_day) : 6;
+      const otThreshold = settings.ot_threshold_hours != null ? Number(settings.ot_threshold_hours) : 9;
 
       // Skip half-day if short leave was applied that day (and setting enabled)
       const shortLeaveSavesIt = isShortLeave && settings.skip_half_day_if_short_leave;
-      const dayOtHours = (employee.ot_eligible && hours > settings.ot_threshold_hours)
-        ? round2(hours - settings.ot_threshold_hours)
+      const dayOtHours = (employee.ot_eligible && hours > otThreshold)
+        ? round2(hours - otThreshold)
         : 0;
 
-      if ((veryLate || lowHoursHalf) && !shortLeaveSavesIt) {
-        halfDays += 1;
-        dayPay = 0.5;
-        dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';
-      } else {
-        // Late mark check (between late_after and half_day_after).
-        // late_after_time is the FIRST LATE MINUTE — the field is labelled
-        // "Late Zone Start" and mam's rule is "after 09:45", so with 09:46
-        // configured a punch AT 09:46 is already late (it used to need 09:47,
-        // silently letting every 09:46 arrival off free — mam 2026-08-19).
-        // Minutes are therefore counted from the last ON-TIME minute
-        // (lateAfter - 1), so 09:46 = 1 minute late, 09:56 = 11.
-        if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
-          if (!shortLeaveSavesIt) {
-            lateMarks += 1;
-            lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
-            dayLabel = 'late';
-          } else {
-            // When short leave forgives the late arrival, label it short_leave
-            // so the breakdown matches the summary (Late: 0) with no contradiction.
-            dayLabel = 'short_leave';
-          }
+      // Sunday rule: late rules and punch-time cutoff NEVER apply on Sunday (weekly off)
+      const veryLate = !sun && punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
+
+      if (sun) {
+        // SUNDAY attendance:
+        // No late marks, no late penalty, no punch-in late cutoffs apply.
+        if (hours >= minFullHours) {
+          dayPay = 1;
+          dayLabel = 'sunday_worked';
+        } else if (hours >= minHalfHours) {
+          dayPay = 0.5;
+          halfDays += 1;
+          dayLabel = 'half_day_low_hours';
         } else {
-          dayLabel = (veryLate || lowHoursHalf || isShortLeave) ? 'short_leave' : 'present';
+          // Worked under minimum hours on Sunday (< 2h)
+          if (settings.sundays_paid) {
+            dayPay = 1;
+            sundayCount += 1;
+            dayLabel = 'sunday_paid';
+          } else {
+            dayPay = 0;
+            dayLabel = 'sunday_unpaid';
+          }
         }
-        dayPay = 1;
-        // Overtime — only for employees explicitly marked OT-eligible.
         if (dayOtHours > 0) {
           otHours += dayOtHours;
         }
+      } else {
+        // WEEKDAY / SATURDAY attendance:
+        // 1. Under minimum hours (< 2h) → absent (unless saved by short leave)
+        // 2. Between 2h and < 6h → half day
+        // 3. 6h+ → full day (punch after 10:00 AM on weekday is half day unless saved by short leave)
+        const lowHoursAbsent = hours < minHalfHours;
+        const lowHoursHalf = hours >= minHalfHours && hours < minFullHours;
+
+        if (lowHoursAbsent && !shortLeaveSavesIt) {
+          absentDays += 1;
+          dayPay = 0;
+          dayLabel = 'absent_low_hours';
+        } else if ((veryLate || lowHoursHalf) && !shortLeaveSavesIt) {
+          halfDays += 1;
+          dayPay = 0.5;
+          dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';
+        } else {
+          // Full day (hours >= minFullHours or saved by short leave)
+          if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
+            if (!shortLeaveSavesIt) {
+              lateMarks += 1;
+              lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
+              dayLabel = 'late';
+            } else {
+              dayLabel = 'short_leave';
+            }
+          } else {
+            dayLabel = (veryLate || lowHoursHalf || isShortLeave) ? 'short_leave' : 'present';
+          }
+          dayPay = 1;
+          if (dayOtHours > 0) {
+            otHours += dayOtHours;
+          }
+        }
       }
+
       paidDays += dayPay;
       breakdown.push({
         date: dateStr,
@@ -979,7 +1012,7 @@ function calculateForEmployee(db, settings, employee, month) {
   for (let i = 0; i < breakdown.length; i++) {
     const b = breakdown[i];
     if (b.day !== 'Sun') continue;
-    if (!(b.label && b.label.startsWith('sunday'))) continue;
+    if (b.label !== 'sunday_paid' && b.label !== 'sunday_unpaid') continue; // worked or on-leave Sundays keep their outcome
     const prev = i > 0 ? breakdown[i - 1] : null;
     const next = i < breakdown.length - 1 ? breakdown[i + 1] : null;
     const prevAbsent = !!prev && prev.label !== 'not_joined' && prev.pay === 0; // Saturday absent (no pay)
@@ -1013,7 +1046,7 @@ function calculateForEmployee(db, settings, employee, month) {
   let sundayWorked = 0;     // # of Sundays actually worked
   let sundayWorkedPay = 0;  // extra day-equivalents credited
   const SUN_WORK_LABELS = new Set([
-    'present', 'late', 'half_day_late', 'half_day_low_hours', 'short_leave',
+    'present', 'late', 'half_day_late', 'half_day_low_hours', 'short_leave', 'sunday_worked',
     'admin_present', 'admin_late', 'admin_half_day', 'admin_short_day',
   ]);
   for (const b of breakdown) {
@@ -1177,6 +1210,34 @@ function dayName(y, m, d) {
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(y, m - 1, d).getDay()];
 }
 
+function getEligiblePayrollEmployees(db, month) {
+  const [y, m] = month.split('-').map(Number);
+  const totalDays = new Date(y, m, 0).getDate();
+  const startDate = `${month}-01`;
+  const endDate = `${month}-${pad(totalDays)}`;
+
+  return db.prepare(`
+    SELECT id, user_id, name, department, designation, join_date, exit_date, status, salary,
+           ot_eligible, cl_eligible, cl_opening_balance, roster, email, personal_email,
+           (SELECT staff_type FROM users WHERE id=employees.user_id) AS staff_type
+      FROM employees
+     WHERE salary > 0
+       AND (
+         (status = 'active' AND (join_date IS NULL OR join_date <= ?))
+         OR id IN (SELECT employee_id FROM payroll_runs WHERE month = ? AND employee_id IS NOT NULL)
+         OR (user_id IS NOT NULL AND user_id IN (
+              SELECT user_id FROM attendance WHERE date BETWEEN ? AND ? AND (punch_in_time IS NOT NULL OR admin_marked = 1)
+            ))
+         OR (
+              (join_date IS NULL OR join_date <= ?)
+          AND (exit_date IS NULL OR exit_date >= ?)
+          AND status IN ('active', 'inactive', 'terminated')
+         )
+       )
+     ORDER BY name COLLATE NOCASE
+  `).all(endDate, month, startDate, endDate, endDate, startDate);
+}
+
 // GET monthly payroll for ALL employees
 router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
   try {
@@ -1184,9 +1245,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster, email, personal_email,
-      (SELECT staff_type FROM users WHERE id=employees.user_id) AS staff_type
-      FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = getEligiblePayrollEmployees(db, month);
     // Active employees with NO salary set are silently excluded from payroll —
     // surface them so admin knows who's missing and why (mam 2026-06-12:
     // "X not in payroll even they present").  Salary, not attendance, gates
@@ -1212,6 +1271,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
           staff_type: emp.staff_type,
           department: emp.department,
           designation: emp.designation,
+          status: emp.status || snap.status,
           sunday_count: snap.sundays,
           locked: true,
           email: emp.personal_email || '',
@@ -1226,6 +1286,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
         staff_type: emp.staff_type,
         department: emp.department,
         designation: emp.designation,
+        status: emp.status,
         email: emp.personal_email || '',
         personal_email: emp.personal_email || '',
         work_email: emp.email || '',
@@ -1335,7 +1396,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
     }
     ensureHolidaysTable(db);   // payroll_runs.holiday_days column must exist before the INSERT below is prepared
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = getEligiblePayrollEmployees(db, month);
 
     const ins = db.prepare(`INSERT OR REPLACE INTO payroll_runs (
       month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,
