@@ -18,9 +18,9 @@ function onUserDeactivatedOrArchived(userId, isArchived = false) {
   // 1. Synchronize linked employee
   try {
     if (isArchived) {
-      db.prepare("UPDATE employees SET status = 'terminated' WHERE user_id = ?").run(userId);
+      db.prepare("UPDATE employees SET status = 'terminated', exit_date = COALESCE(exit_date, DATE('now', '+5.5 hours')) WHERE user_id = ?").run(userId);
     } else {
-      db.prepare("UPDATE employees SET status = 'inactive' WHERE user_id = ? AND LOWER(COALESCE(status, '')) != 'terminated'").run(userId);
+      db.prepare("UPDATE employees SET status = 'inactive', exit_date = COALESCE(exit_date, DATE('now', '+5.5 hours')) WHERE user_id = ? AND LOWER(COALESCE(status, '')) != 'terminated'").run(userId);
     }
   } catch (e) {
     console.error(`[userStatusSync] employee sync failed for user ${userId}:`, e.message);

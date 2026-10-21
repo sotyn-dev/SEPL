@@ -93,7 +93,8 @@ const SETTING_GROUPS = [
     fields: [
       { key: 'late_after_time', label: 'Late Zone Start', help: 'FIRST late minute — punching in AT or after this is a late mark (09:46 = on time until 09:45). Still a full day; counts toward the monthly grace, and penalty minutes are counted from the minute before this.', type: 'time' },
       { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day, no grace (e.g. 10:00)', type: 'time' },
-      { key: 'min_hours_half_day', label: 'Min Hours for Full Day', help: 'Work this many hours or more = full day; less = half day (e.g. 4)', type: 'number', step: 0.5 },
+      { key: 'min_hours_half_day', label: 'Min Hours for Half Day', help: 'Work this many hours or more for half day; less than this = absent (e.g. 2)', type: 'number', step: 0.5 },
+      { key: 'min_hours_full_day', label: 'Min Hours for Full Day', help: 'Work this many hours or more = full day; less than this = half day (e.g. 6)', type: 'number', step: 0.5 },
     ]
   },
   {
@@ -142,6 +143,7 @@ const SETTING_GROUPS = [
 
 const LABEL_PILL = {
   not_joined: 'bg-gray-100 text-gray-500',
+  left_company: 'bg-gray-100 text-gray-500',
   present: 'bg-emerald-100 text-emerald-700',
   late: 'bg-amber-100 text-amber-700',
   short_leave: 'bg-purple-100 text-purple-700 font-medium',
@@ -682,6 +684,11 @@ export default function Payroll() {
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
                       {r.employee_name}
+                      {r.status && r.status !== 'active' && (
+                        <span className="ml-1 text-[10px] bg-slate-200 text-slate-700 font-semibold px-1 py-0.5 rounded uppercase" title={`Status: ${r.status}`}>
+                          {r.status}
+                        </span>
+                      )}
                       <div className="text-xs font-normal text-gray-500">{staffTypeLabel(r.staff_type)}</div>
                       {r.locked && <FiLock size={11} className="inline text-emerald-600 ml-1" title={lockTooltip(r)} />}
                       {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — attendance can't be looked up. Open HR → Employees and set the User for this employee.">⚠ no login</span>}

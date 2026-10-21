@@ -65,6 +65,11 @@ const punchHours = (inIso, outIso) => {
 // `4 > 9` was false → no one got flagged late before 15:15 IST. Bug
 // affected every attendance row since deploy.
 function isPunchLate(db, whenIso, roster) {
+  // Shift UTC → IST by adding 5h30m, then read 'UTC' day/hours/minutes from
+  // the shifted Date — those values are now the actual IST time-of-day.
+  const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
+  if (ist.getUTCDay() === 0) return false; // Sunday rule: late rules do not apply on Sunday
+
   let cutoffMin = 9 * 60 + 46; // default 09:46 IST
   try {
     const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
@@ -74,9 +79,6 @@ function isPunchLate(db, whenIso, roster) {
       cutoffMin = h * 60 + (m || 0);
     }
   } catch { }
-  // Shift UTC → IST by adding 5h30m, then read 'UTC' hours/minutes from
-  // the shifted Date — those values are now the actual IST time-of-day.
-  const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
   const istMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   return istMin >= cutoffMin;   // late_after_time is the FIRST late minute (see payroll.js)
 }
@@ -386,7 +388,7 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       if (att.auto_punched_in) summary.auto_punched_in++;
       if (att.auto_punched_out) summary.auto_punched_out++;
 
-      if (att.punch_in_time && !att.admin_marked && !att.regularized_at) {
+      if (!isSunday && att.punch_in_time && !att.admin_marked && !att.regularized_at) {
         const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 3600 * 1000);
         if (!isNaN(piIst)) {
           const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
@@ -396,7 +398,7 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
             lateMin = Math.max(0, piMin - lateCutoffMin + 1);
           }
         }
-      } else if (att.punch_in_time && att.regularized_at && status !== 'present') {
+      } else if (!isSunday && att.punch_in_time && att.regularized_at && status !== 'present') {
         const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 3600 * 1000);
         if (!isNaN(piIst)) {
           const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
@@ -406,7 +408,11 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
           }
         }
       }
-      if (status === 'late') isLate = true;
+      if (status === 'late' && !isSunday) isLate = true;
+      else if (isSunday && status === 'late') {
+        status = 'present';
+        isLate = false;
+      }
 
       if (att.punch_in_time && !att.punch_out_time && dStr < todayStr) {
         missedPunchOut = true;
@@ -429,7 +435,7 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
 
     if (status === 'present' || status === 'late' || (isSunday && att) || (isHoliday && att)) {
       summary.present++;
-      if (isLate) summary.late++;
+      if (isLate && !isSunday) summary.late++;
     } else if (status === 'half_day') {
       summary.half_day++;
       summary.present += 0.5;

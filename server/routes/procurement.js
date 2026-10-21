@@ -19,6 +19,8 @@ const { getDispatchDocuments } = require('../lib/dispatchDocuments');
 const rentalDispatch = require('../lib/rentalDispatch');
 // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
 const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
+// TSK-0943: Comparison sheets with online data for approval of PO
+const { getMarketRates, getInternalHistoricalRates, extractCleanProcurementQuery } = require('../services/externalProcurementService');
 
 // Unit spellings that mean the same thing. Kept identical to the SQL CASE the
 // one-time unit_overridden backfill uses (db/schema.js), so "pcs" vs "nos" or
@@ -5036,6 +5038,274 @@ router.get('/vendor-po/:id/cost-evaluation', (req, res) => {
   const db = getDb();
   const evaluation = evaluatePoCostEstimate(db, +req.params.id);
   res.json(evaluation);
+});
+
+// TSK-0943: Comparison sheet with online data for approval of PO
+router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const po = db.prepare(`
+    SELECT vp.*, v.name as vendor_name, v.firm_name as vendor_firm_name, v.contact_person, v.phone as vendor_phone,
+           v.email as vendor_email, v.gst as vendor_gst, ind.indent_number, ind.site_name,
+           u.name as created_by_name
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON v.id = vp.vendor_id
+      LEFT JOIN indents ind ON ind.id = vp.indent_id
+      LEFT JOIN users u ON u.id = vp.created_by
+     WHERE vp.id = ?
+  `).get(id);
+
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  // Items in this PO
+  let items = db.prepare(`
+    SELECT vpi.id, vpi.vendor_po_id, vpi.indent_item_id, vpi.quantity, vpi.rate as actual_rate,
+           vpi.amount as actual_amount, vpi.description, vpi.unit,
+           COALESCE(vpi.specification, im.specification) as specification,
+           ii.description as indent_description, ii.unit as indent_unit,
+           ii.make as indent_make, ii.size as indent_size, ii.weight_per_meter,
+           im.item_code, im.item_name as master_name, im.size as master_size,
+           im.make as master_make, im.current_price as master_price,
+           poi.part_price as pp_rate,
+           ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
+           ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
+           ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
+           ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
+           ir.marketing_rate
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      LEFT JOIN indent_item_rates ir ON ir.id = (
+        SELECT MAX(r2.id) FROM indent_item_rates r2 WHERE r2.indent_item_id = ii.id
+      )
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(id);
+
+  // Fallback for legacy POs where vendor_po_items was empty
+  if (items.length === 0 && po.indent_id) {
+    items = db.prepare(`
+      SELECT 'ind-' || ii.id as id, NULL as vendor_po_id, ii.id as indent_item_id,
+             ii.quantity, ii.rate as actual_rate, ii.amount as actual_amount,
+             ii.description, ii.unit, im.specification,
+             ii.description as indent_description, ii.unit as indent_unit,
+             ii.make as indent_make, ii.size as indent_size, ii.weight_per_meter,
+             im.item_code, im.item_name as master_name, im.size as master_size,
+             im.make as master_make, im.current_price as master_price,
+             poi.part_price as pp_rate,
+             ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
+             ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
+             ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
+             ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
+             ir.marketing_rate
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+        LEFT JOIN indent_item_rates ir ON ir.id = (
+          SELECT MAX(r2.id) FROM indent_item_rates r2 WHERE r2.indent_item_id = ii.id
+        )
+       WHERE ii.indent_id = ?
+       ORDER BY ii.id
+    `).all(po.indent_id);
+  }
+
+  // Cost estimate evaluation
+  let costEval = null;
+  try {
+    costEval = evaluatePoCostEstimate(db, id);
+  } catch (_) {}
+
+  // Fetch online market data and historical rates in parallel
+  const enrichedItems = await Promise.all(items.map(async (it) => {
+    const rawName = it.master_name || it.description || it.indent_description || '';
+    const size = it.indent_size || it.master_size || '';
+    const make = it.indent_make || it.master_make || '';
+    const spec = it.specification || '';
+    const cleanQ = extractCleanProcurementQuery(rawName, size, make, spec) || rawName;
+
+    let marketData = {
+      query: cleanQ,
+      moglix: [],
+      indiamart: [],
+      summary: null,
+      directLinks: {
+        moglix: `https://www.moglix.com/search?controller=search&s=${encodeURIComponent(cleanQ)}`,
+        indiamart: `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(cleanQ)}`,
+        amazon: `https://www.amazon.in/s?k=${encodeURIComponent(cleanQ)}`,
+        industrybuying: `https://www.industrybuying.com/search/?q=${encodeURIComponent(cleanQ)}`
+      }
+    };
+
+    try {
+      const res = await getMarketRates(cleanQ, { size, make, spec });
+      if (res) marketData = res;
+    } catch (_) {}
+
+    // Internal SEPL PO history
+    let internalHist = { pastPoRates: [] };
+    try {
+      internalHist = getInternalHistoricalRates(cleanQ);
+    } catch (_) {}
+
+    const pastPoRates = (internalHist?.pastPoRates || []).filter(h => h.po_number !== po.po_number);
+
+    // Resolve benchmark rate
+    let estimatedRate = null;
+    let benchmarkSource = 'None';
+    if (+it.pp_rate > 0) {
+      estimatedRate = +it.pp_rate;
+      benchmarkSource = 'BOQ PP Rate';
+    } else if (+it.master_price > 0) {
+      estimatedRate = +it.master_price;
+      benchmarkSource = 'Item Master';
+    } else if (+it.marketing_rate > 0) {
+      estimatedRate = +it.marketing_rate;
+      benchmarkSource = 'AI Market Rate';
+    } else if (+it.final_rate > 0) {
+      estimatedRate = +it.final_rate;
+      benchmarkSource = 'Indent Final Quote';
+    }
+
+    const actualRate = +it.actual_rate || 0;
+    const qty = +it.quantity || 0;
+    const actualAmount = Math.round((+it.actual_amount || (actualRate * qty)) * 100) / 100;
+
+    let varianceAmount = 0;
+    let variancePct = 0;
+    let isOverrun = false;
+    let isWithin = false;
+
+    if (estimatedRate > 0) {
+      varianceAmount = Math.round((actualRate - estimatedRate) * qty * 100) / 100;
+      variancePct = Math.round(((actualRate - estimatedRate) / estimatedRate) * 1000) / 10;
+      isOverrun = varianceAmount > 0;
+      isWithin = varianceAmount <= 0;
+    }
+
+    // Lowest online benchmark
+    const minOnline = marketData.summary?.lowestPrice || null;
+    let onlineVariancePct = null;
+    if (minOnline && minOnline > 0) {
+      onlineVariancePct = Math.round(((actualRate - minOnline) / minOnline) * 1000) / 10;
+    }
+
+    // Quotes collection summary
+    const quotesList = [
+      { num: 1, name: it.vendor1_name, rate: +it.vendor1_rate || 0, terms: it.vendor1_terms, credit_days: it.vendor1_credit_days },
+      { num: 2, name: it.vendor2_name, rate: +it.vendor2_rate || 0, terms: it.vendor2_terms, credit_days: it.vendor2_credit_days },
+      { num: 3, name: it.vendor3_name, rate: +it.vendor3_rate || 0, terms: it.vendor3_terms, credit_days: it.vendor3_credit_days }
+    ].filter(q => q.rate > 0 && String(q.name || '').trim());
+
+    const minQuoteRate = quotesList.length > 0 ? Math.min(...quotesList.map(q => q.rate)) : null;
+
+    return {
+      id: it.id,
+      vendor_po_id: it.vendor_po_id,
+      indent_item_id: it.indent_item_id,
+      description: it.description || it.master_name,
+      master_name: it.master_name,
+      item_code: it.item_code,
+      specification: it.specification,
+      size,
+      make,
+      unit: it.unit || it.indent_unit || 'nos',
+      quantity: qty,
+      actual_rate: actualRate,
+      actual_amount: actualAmount,
+
+      // Benchmarks
+      estimated_rate: estimatedRate,
+      estimated_amount: estimatedRate ? Math.round(estimatedRate * qty * 100) / 100 : null,
+      benchmark_source: benchmarkSource,
+      variance_amount: varianceAmount,
+      variance_pct: variancePct,
+      is_overrun: isOverrun,
+      is_within: isWithin,
+
+      // Indent quotes
+      quotes: {
+        vendor1_name: it.vendor1_name,
+        vendor1_rate: it.vendor1_rate,
+        vendor1_terms: it.vendor1_terms,
+        vendor2_name: it.vendor2_name,
+        vendor2_rate: it.vendor2_rate,
+        vendor2_terms: it.vendor2_terms,
+        vendor3_name: it.vendor3_name,
+        vendor3_rate: it.vendor3_rate,
+        vendor3_terms: it.vendor3_terms,
+        final_vendor_name: it.final_vendor_name,
+        final_rate: it.final_rate,
+        min_quote_rate: minQuoteRate,
+        all_quotes: quotesList
+      },
+
+      // Online Data
+      online: {
+        query: cleanQ,
+        lowest_price: minOnline,
+        average_price: marketData.summary?.averagePrice || null,
+        highest_price: marketData.summary?.highestPrice || null,
+        sample_count: marketData.summary?.sampleCount || 0,
+        moglix: (marketData.moglix || []).slice(0, 3),
+        indiamart: (marketData.indiamart || []).slice(0, 3),
+        direct_links: marketData.directLinks,
+        variance_pct_vs_online: onlineVariancePct
+      },
+
+      // Historical rates
+      history: pastPoRates.slice(0, 3)
+    };
+  }));
+
+  // Aggregated Summary
+  const totalActual = enrichedItems.reduce((s, it) => s + it.actual_amount, 0);
+  let totalEstimated = 0;
+  let estimatedItemsCount = 0;
+  let totalOnline = 0;
+  let onlineItemsCount = 0;
+
+  for (const it of enrichedItems) {
+    if (it.estimated_amount != null) {
+      totalEstimated += it.estimated_amount;
+      estimatedItemsCount++;
+    }
+    if (it.online.lowest_price != null) {
+      totalOnline += (it.online.lowest_price * it.quantity);
+      onlineItemsCount++;
+    }
+  }
+
+  const level = poLevelOf(po.po_approval);
+  const canApprove = level ? canApprovePoLevel(db, req.user.id, level) : false;
+  const approvers = level ? poApproversFor(db, level).map(a => a.name) : [];
+
+  res.json({
+    po,
+    items: enrichedItems,
+    summary: {
+      total_items: enrichedItems.length,
+      total_actual_amount: totalActual,
+      total_estimated_amount: totalEstimated,
+      estimated_items_count: estimatedItemsCount,
+      total_online_amount: totalOnline,
+      online_items_count: onlineItemsCount,
+      savings_vs_estimated: totalEstimated > 0 ? (totalEstimated - totalActual) : 0,
+      savings_vs_estimated_pct: totalEstimated > 0 ? Math.round(((totalEstimated - totalActual) / totalEstimated) * 1000) / 10 : 0,
+      savings_vs_online: totalOnline > 0 ? (totalOnline - totalActual) : 0,
+      savings_vs_online_pct: totalOnline > 0 ? Math.round(((totalOnline - totalActual) / totalOnline) * 1000) / 10 : 0,
+      cost_status: costEval?.cost_status || (totalActual > totalEstimated && totalEstimated > 0 ? 'cost_overrun' : 'within_estimate'),
+      reason: costEval?.reason || null
+    },
+    approval: {
+      can_approve: canApprove,
+      pending_level: level,
+      pending_stage: po.po_approval,
+      pending_approvers: approvers,
+      is_approved: po.po_approval === 'approved',
+      is_rejected: po.po_approval === 'rejected'
+    }
+  });
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.

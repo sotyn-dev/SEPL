@@ -90,10 +90,19 @@ export default function VendorPOPrint() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
+  // TSK-0378 / TSK-0943: Attached Rate Comparison Statement with Moglix/IndiaMart data for MD physical signature
+  const [compData, setCompData] = useState(null);
+  const [includeComparison, setIncludeComparison] = useState(true);
+  const [onlyComparison, setOnlyComparison] = useState(false);
+
   useEffect(() => {
     api.get(`/procurement/vendor-po/${id}/print`)
       .then(r => setData(r.data))
       .catch(err => setError(err.response?.data?.error || 'Failed to load'));
+
+    api.get(`/procurement/vendor-po/${id}/comparison-sheet`)
+      .then(r => setCompData(r.data))
+      .catch(() => setCompData(null));
   }, [id]);
 
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600">{error}</div>;
@@ -194,11 +203,39 @@ export default function VendorPOPrint() {
           <button onClick={() => window.history.back()} className="btn btn-secondary flex items-center gap-2">
             <FiArrowLeft size={14} /> Back
           </button>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {compData && (
+              <>
+                <label className="flex items-center gap-1.5 text-xs text-gray-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded border border-amber-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeComparison}
+                    onChange={e => {
+                      setIncludeComparison(e.target.checked);
+                      if (onlyComparison) setOnlyComparison(false);
+                    }}
+                    className="rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="font-semibold text-gray-900">Attach Comparison Sheet (for Signature)</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !onlyComparison;
+                    setOnlyComparison(next);
+                    if (next) setIncludeComparison(true);
+                  }}
+                  className={`btn text-xs flex items-center gap-1.5 ${onlyComparison ? 'btn-primary font-bold' : 'btn-secondary'}`}
+                  title="Toggle view to print only the Comparison Sheet"
+                >
+                  {onlyComparison ? 'Show Full PO + Sheet' : 'Comparison Sheet Only'}
+                </button>
+              </>
+            )}
             <button onClick={sharePO} className="btn btn-success flex items-center gap-2" title="Share via WhatsApp">
               <FiMessageCircle size={14} /> WhatsApp
             </button>
-            <button onClick={() => window.print()} className="btn btn-primary flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn btn-primary flex items-center gap-2 font-bold shadow">
               <FiPrinter size={14} /> Print / Save as PDF
             </button>
           </div>
@@ -208,7 +245,7 @@ export default function VendorPOPrint() {
       {/* PO body — printable. Branded Tally style with SEPL red accents.
           The outer text color is locked to gray-900 so no inherited link
           color (e.g. visited link blue) bleeds into descriptions. */}
-      <div className="max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border-2 border-gray-800 print:border-black text-[12px] text-gray-900 overflow-hidden po-body">
+      <div className={`max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border-2 border-gray-800 print:border-black text-[12px] text-gray-900 overflow-hidden po-body ${onlyComparison ? 'hidden' : ''}`}>
         {/* RED branded title bar — pops the document immediately as a SEPL PO */}
         {/* Mam (2026-06-04): "do it some congested" — the title bar had too
             much empty height.  GSTIN / PAN now flank the title on the SAME
@@ -543,10 +580,246 @@ export default function VendorPOPrint() {
         </div>
       </div>
 
+      {/* TSK-0378 / TSK-0943: Attached Rate Comparison Statement for Physical Hard Copy Signature */}
+      {includeComparison && compData && (
+        <div className="comparison-sheet-print max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border-2 border-gray-800 print:border-black text-[11px] text-gray-900 overflow-hidden">
+          {/* Header */}
+          <div className="bg-slate-800 text-white py-2 px-3 print:bg-slate-800 flex items-center justify-between">
+            <span className="text-[10px] uppercase font-bold tracking-wider">Internal Procurement Audit &amp; Approval</span>
+            <span className="font-extrabold text-[13px] tracking-wide uppercase">Rate Comparison &amp; Online Market Discovery</span>
+            <span className="text-[10px] font-mono">PO: {compData.po?.po_number || po.po_number}</span>
+          </div>
+
+          <div className="p-3 bg-slate-50 border-b border-gray-300">
+            <div className="text-center pb-2 border-b border-gray-200">
+              <div className="text-[16px] font-extrabold uppercase text-gray-900">{COMPANY.name}</div>
+              <div className="text-[11px] font-semibold text-blue-900 uppercase tracking-wide">
+                Purchase Order Rate Comparative Statement with Online Market Data (Moglix / IndiaMART)
+              </div>
+              <div className="text-[9.5px] text-gray-500 italic">
+                Mandatory Physical Hard Copy Attachment for Managing Director (MD Sir) Signature
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-[10.5px]">
+              <div><span className="text-gray-500">PO Number:</span> <strong className="text-gray-900 font-mono">{compData.po?.po_number || po.po_number}</strong></div>
+              <div><span className="text-gray-500">PO Date:</span> <strong className="text-gray-900">{fmtDate(compData.po?.po_date || po.po_date)}</strong></div>
+              <div><span className="text-gray-500">Vendor:</span> <strong className="text-gray-900">{compData.po?.vendor_name || po.vendor_name}</strong></div>
+              <div><span className="text-gray-500">Site / Project:</span> <strong className="text-gray-900">{compData.po?.site_name || po.site_name || '—'}</strong></div>
+              <div><span className="text-gray-500">Indent No:</span> <strong className="text-gray-900">{compData.po?.indent_number || po.indent_number || '—'}</strong></div>
+              <div><span className="text-gray-500">Created By:</span> <strong className="text-gray-900">{compData.po?.created_by_name || 'Divyanshi (Purchase)'}</strong></div>
+              <div><span className="text-gray-500">Items Count:</span> <strong className="text-gray-900">{(compData.items || []).length} lines</strong></div>
+              <div>
+                <span className="text-gray-500">Overall Status:</span>{' '}
+                <strong className={compData.summary?.cost_status === 'cost_overrun' ? 'text-red-700' : 'text-emerald-700'}>
+                  {compData.summary?.cost_status === 'cost_overrun' ? 'Cost Overrun (MD Approval Req.)' : 'Within Budget Benchmarks'}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Items Table */}
+          <table className="w-full text-[10px] border-collapse border-b border-gray-800">
+            <thead>
+              <tr className="bg-gray-100 border-b border-gray-400 text-gray-800 font-bold uppercase text-[9.5px]">
+                <th className="border-r border-gray-300 px-1 py-1.5 text-center w-6" rowSpan="2">#</th>
+                <th className="border-r border-gray-300 px-2 py-1.5 text-left" rowSpan="2">Item Description &amp; Specification</th>
+                <th className="border-r border-gray-300 px-1 py-1.5 text-center w-12" rowSpan="2">Qty</th>
+                <th className="border-r border-gray-300 px-2 py-1.5 text-right bg-blue-50 text-blue-900 font-extrabold w-20" rowSpan="2">
+                  PO Rate<br />(₹)
+                </th>
+                <th className="border-r border-gray-300 px-2 py-1 text-center bg-orange-50/70 text-orange-950" colSpan="2">
+                  Online Market Benchmarks
+                </th>
+                <th className="border-r border-gray-300 px-2 py-1.5 text-right w-16" rowSpan="2">
+                  Last SEPL<br />PO Rate
+                </th>
+                <th className="border-r border-gray-300 px-2 py-1.5 text-right w-16" rowSpan="2">
+                  BOQ PP /<br />Target
+                </th>
+                <th className="border-r border-gray-300 px-1.5 py-1.5 text-center w-16" rowSpan="2">
+                  Variance<br />vs Target
+                </th>
+                <th className="px-1.5 py-1.5 text-center w-16" rowSpan="2">Audit Status</th>
+              </tr>
+              <tr className="bg-gray-100 border-b border-gray-400 text-gray-700 text-[9px]">
+                <th className="border-r border-gray-300 px-1.5 py-0.5 bg-orange-50/70 text-right w-16">Moglix Rate</th>
+                <th className="border-r border-gray-300 px-1.5 py-0.5 bg-orange-50/70 text-right w-16">IndiaMART</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(compData.items || []).map((it, idx) => {
+                const poRate = +it.actual_rate || 0;
+                const moglixPrice = it.marketData?.moglix?.[0]?.price;
+                const indiamartPrice = it.marketData?.indiamart?.[0]?.price;
+                const pastRate = it.pastPoRates?.[0]?.rate;
+                const targetRate = it.estimatedRate;
+                const variancePct = it.variancePct;
+                const isOverrun = targetRate && poRate > targetRate;
+                const isSaving = targetRate && poRate < targetRate;
+
+                return (
+                  <tr key={idx} className={`border-b border-gray-200 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                    <td className="border-r border-gray-300 px-1 py-1.5 text-center font-mono text-gray-500">{idx + 1}</td>
+                    <td className="border-r border-gray-300 px-2 py-1.5">
+                      <div className="font-semibold text-gray-900">{it.master_name || it.description}</div>
+                      {it.specification && <div className="text-[9px] text-gray-600 leading-tight mt-0.5">{it.specification}</div>}
+                      <div className="flex gap-2 text-[8.5px] text-gray-500 mt-0.5">
+                        {it.size && <span>Size: <b>{it.size}</b></span>}
+                        {it.make && <span>Make: <b>{it.make}</b></span>}
+                        {it.item_code && <span>Code: <b>{it.item_code}</b></span>}
+                      </div>
+                    </td>
+                    <td className="border-r border-gray-300 px-1 py-1.5 text-center whitespace-nowrap">
+                      <b>{it.quantity}</b> <span className="text-gray-500 text-[9px]">{it.unit || ''}</span>
+                    </td>
+                    <td className="border-r border-gray-300 px-2 py-1.5 text-right font-bold text-blue-900 bg-blue-50/30 whitespace-nowrap">
+                      ₹ {poRate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap bg-orange-50/20">
+                      {moglixPrice ? `₹ ${Math.round(moglixPrice).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap bg-orange-50/20">
+                      {indiamartPrice ? `₹ ${Math.round(indiamartPrice).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap">
+                      {pastRate ? `₹ ${Math.round(pastRate).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap">
+                      {targetRate ? `₹ ${Math.round(targetRate).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="border-r border-gray-300 px-1.5 py-1.5 text-center whitespace-nowrap">
+                      {variancePct != null ? (
+                        <span className={`font-semibold ${isOverrun ? 'text-red-600' : isSaving ? 'text-emerald-700' : 'text-gray-700'}`}>
+                          {variancePct > 0 ? `+${variancePct}%` : `${variancePct}%`}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-1.5 py-1.5 text-center whitespace-nowrap">
+                      {isOverrun ? (
+                        <span className="text-red-700 font-bold bg-red-50 border border-red-200 px-1 py-0.5 rounded text-[8.5px]">
+                          OVERRUN
+                        </span>
+                      ) : isSaving ? (
+                        <span className="text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-1 py-0.5 rounded text-[8.5px]">
+                          SAVING
+                        </span>
+                      ) : (
+                        <span className="text-gray-600 bg-gray-100 border border-gray-200 px-1 py-0.5 rounded text-[8.5px]">
+                          OK
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-100 font-bold border-t-2 border-gray-600 text-gray-900">
+                <td colSpan="3" className="border-r border-gray-300 px-2 py-2 text-right uppercase text-[9.5px]">
+                  Total Actual PO (Taxable)
+                </td>
+                <td className="border-r border-gray-300 px-2 py-2 text-right text-blue-900 text-[11px] font-extrabold whitespace-nowrap">
+                  ₹ {Math.round(compData.summary?.total_actual_amount || subtotal).toLocaleString('en-IN')}
+                </td>
+                <td colSpan="4" className="border-r border-gray-300 px-2 py-2 text-right uppercase text-[9.5px]">
+                  Estimated Target Benchmark Total:
+                </td>
+                <td colSpan="2" className="px-2 py-2 text-right text-[11px] whitespace-nowrap">
+                  {compData.summary?.total_estimated_amount > 0 ? (
+                    <span className="font-extrabold text-gray-900">
+                      ₹ {Math.round(compData.summary.total_estimated_amount).toLocaleString('en-IN')}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 font-normal">No est. baseline</span>
+                  )}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+
+          {/* Savings / Variance Analysis note */}
+          <div className="p-3 bg-gray-50 border-b border-gray-400 text-[10.5px]">
+            <div className="font-bold text-gray-800 mb-1 uppercase tracking-wide text-[10px]">
+              Procurement Audit Summary &amp; Market Justification:
+            </div>
+            <div className="text-gray-700 leading-snug">
+              {compData.summary?.savings_vs_estimated != null ? (
+                compData.summary.savings_vs_estimated >= 0 ? (
+                  <span className="text-emerald-800 font-semibold">
+                    ✓ Net Procurement Savings: ₹ {Math.round(compData.summary.savings_vs_estimated).toLocaleString('en-IN')} ({compData.summary.savings_vs_estimated_pct}%) below estimated benchmark. Rates verified against online portals and vendor quotations.
+                  </span>
+                ) : (
+                  <span className="text-red-700 font-semibold">
+                    ⚠️ Net Cost Overrun: ₹ {Math.round(Math.abs(compData.summary.savings_vs_estimated)).toLocaleString('en-IN')} ({Math.abs(compData.summary.savings_vs_estimated_pct)}%) above target. Rates justified by market conditions / specific technical requirements.
+                  </span>
+                )
+              ) : (
+                <span>Market rate comparison verified against Moglix, IndiaMART, and past SEPL PO history.</span>
+              )}
+            </div>
+          </div>
+
+          {/* PHYSICAL SIGNATURES BOX */}
+          <div className="p-4 bg-white">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-3 border-b pb-1">
+              Authorisation &amp; Approval Signatures (Mandatory for PO Issuance)
+            </div>
+            <div className="grid grid-cols-3 gap-6 text-center text-[10.5px]">
+              {/* Prepared by */}
+              <div className="border border-gray-300 rounded p-2.5 flex flex-col justify-between h-28 bg-gray-50/30">
+                <div>
+                  <div className="font-bold text-gray-800 uppercase text-[10px]">Prepared By</div>
+                  <div className="text-[10px] text-gray-600 mt-0.5">{compData.po?.created_by_name || 'Divyanshi (Purchase)'}</div>
+                  <div className="text-[9px] text-gray-400">Procurement Coordinator</div>
+                </div>
+                <div className="border-t border-dashed border-gray-400 pt-1 text-[9px] text-gray-500">
+                  Signature &amp; Date
+                </div>
+              </div>
+
+              {/* Checked by */}
+              <div className="border border-gray-300 rounded p-2.5 flex flex-col justify-between h-28 bg-gray-50/30">
+                <div>
+                  <div className="font-bold text-gray-800 uppercase text-[10px]">Checked &amp; Verified By</div>
+                  <div className="text-[10px] text-gray-600 mt-0.5">Purchase Head / Project Lead</div>
+                  <div className="text-[9px] text-gray-400">Technical &amp; Commercial Review</div>
+                </div>
+                <div className="border-t border-dashed border-gray-400 pt-1 text-[9px] text-gray-500">
+                  Signature &amp; Date
+                </div>
+              </div>
+
+              {/* Approved by */}
+              <div className="border-2 border-gray-800 rounded p-2.5 flex flex-col justify-between h-28 bg-amber-50/30">
+                <div>
+                  <div className="font-extrabold text-gray-900 uppercase text-[10.5px]">Approved By</div>
+                  <div className="text-[10.5px] font-bold text-blue-900 mt-0.5">Managing Director (MD Sir)</div>
+                  <div className="text-[9px] text-gray-500">Final Commercial Approval</div>
+                </div>
+                <div className="border-t border-dashed border-gray-500 pt-1 text-[9px] text-gray-600 font-semibold">
+                  MD Signature &amp; Date
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-center border-t border-gray-300 py-1.5 text-[9px] text-gray-500 italic bg-gray-50">
+            Internal Document · Generated on {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · SOTYN.AI
+          </div>
+        </div>
+      )}
+
       <style>{`
         @media print {
           @page { size: A4; margin: 6mm; }
           body { background: white !important; }
+          .comparison-sheet-print {
+            page-break-before: always !important;
+            break-before: page !important;
+          }
           /* Force browsers to print background colors / images so the royal
              blue header bar, totals bar and section tints appear in the PDF. */
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }

@@ -27,6 +27,7 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import FlowBoard from '../components/FlowBoard';
 import Modal from '../components/Modal';
+import PoComparisonSheetModal from '../components/PoComparisonSheetModal';
 import { FiFileText, FiCheckCircle, FiTruck, FiPackage, FiCreditCard, FiAlertTriangle, FiClock, FiDollarSign, FiFilePlus, FiXCircle } from 'react-icons/fi';
 
 // Tab keys must be ones Procurement.jsx accepts (VALID_TABS) — an unknown
@@ -86,6 +87,7 @@ export default function ProcurementBoard() {
   const [act, setAct] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [comparePoId, setComparePoId] = useState(null);
   const open = (stage, card, reload) => { setAct({ stage, card, reload }); setForm(initForm(stage, card)); };
   const close = () => { setAct(null); setForm({}); };
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -276,6 +278,26 @@ export default function ProcurementBoard() {
           </div>
 
           {/* Stage body */}
+          {stage === 'po_approval' && (
+            <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                  <span>📊 PO Rate Comparison Sheet</span>
+                </div>
+                <div className="text-[11px] text-blue-700 mt-0.5">
+                  Compare line-item rates against 3 vendor quotes & online market benchmark (Moglix, IndiaMART)
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setComparePoId(card.rid)}
+                className="btn btn-primary text-xs py-1.5 px-3 font-semibold whitespace-nowrap shadow-xs"
+              >
+                View Comparison
+              </button>
+            </div>
+          )}
+
           {(stage === 'indent' || stage === 'po_approval') && (
             <div>
               <label className="label">Rejection Reason <span className="text-gray-400 font-normal text-[10px]">(only needed to reject)</span></label>
@@ -425,6 +447,14 @@ export default function ProcurementBoard() {
         );
       })()}
     </Modal>
+
+    {/* TSK-0943: Comparison sheet with online data for approval of PO */}
+    <PoComparisonSheetModal
+      isOpen={!!comparePoId}
+      poId={comparePoId}
+      onClose={() => setComparePoId(null)}
+      onPoAction={() => { act?.reload?.(); close(); }}
+    />
     </>
   );
 }

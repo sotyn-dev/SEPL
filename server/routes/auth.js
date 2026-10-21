@@ -464,7 +464,7 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     onUserDeactivatedOrArchived(req.params.id, false);
   } else if (prev.active === 0 && nowActive === 1) {
     try {
-      db.prepare("UPDATE employees SET status = 'active' WHERE user_id = ? AND status = 'inactive'").run(req.params.id);
+      db.prepare("UPDATE employees SET status = 'active', exit_date = NULL WHERE user_id = ? AND status = 'inactive'").run(req.params.id);
     } catch (_) {}
   }
   const demoted = prev.role === 'admin' && role && role !== 'admin';

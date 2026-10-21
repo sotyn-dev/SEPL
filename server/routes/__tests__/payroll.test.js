@@ -25,7 +25,7 @@ vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee, generate
 const calculate = context.module.exports.calculateForEmployee;
 const generateSalarySlip = context.module.exports.generateSalarySlipEmailContent;
 let activeDb;
-const settings = { late_after_time: '09:46', half_day_after_time: '10:00', min_hours_half_day: 4,
+const settings = { late_after_time: '09:46', half_day_after_time: '10:00', min_hours_full_day: 6, min_hours_half_day: 2,
   sundays_paid: 1, late_grace_count: 3, late_per_minute_rate: 20, lates_to_absent: 0,
   working_days_per_month: 26, ot_threshold_hours: 9, basic_pct: 100 };
 const employee = { id: 1, user_id: 1, name: 'Example', salary: 31000, join_date: '2025-01-01' };
@@ -66,12 +66,12 @@ test('a pre-joining Saturday does not make the joining Sunday sandwiched absence
   const r = run({}, { ...employee, join_date: '2025-08-17' });
   assert.equal(r.breakdown.find(b => b.date === '2025-08-17').label, 'sunday_paid');
 });
-test('25 attended dates with 9 late half-days give 20.5 payroll day equivalents', () => {
+test('25 attended dates with 8 weekday late half-days (Sunday 10:01 not docked) give 21 payroll day equivalents', () => {
   const attendance = Array.from({ length: 25 }, (_, i) => ({ date: `2025-08-${String(i + 1).padStart(2, '0')}`,
     punch_in_time: i < 9 ? '10:01' : '09:30', total_hours: 10 }));
   const r = run({ attendance });
-  assert.equal(r.present_days, 20.5);
-  assert.equal(r.half_days, 9);
+  assert.equal(r.present_days, 21);
+  assert.equal(r.half_days, 8);
 });
 test('late deductions remain automatic even with a saved manual override', () => {
   const options = { attendance: [{ date: '2025-08-04', punch_in_time: '09:50', total_hours: 10 }], adjustments: {} };
@@ -296,5 +296,71 @@ test('salary slip email delivery targets strictly personal_email and never falls
   assert.equal(res2.code, 400);
   assert.match(res2.body.error, /personal email/i);
   assert.equal(sentEmails.length, 0, 'Must NOT deliver to work email');
+});
+
+test('hour thresholds: <2h is absent, 2h-6h is half day, >=6h is full day, >9h is OT', () => {
+  const customEmployee = { ...employee, ot_eligible: 1 };
+  const r = run({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:30', total_hours: 1.5 }, // Fri: <2h -> absent
+      { date: '2025-08-02', punch_in_time: '09:30', total_hours: 3.5 }, // Sat: 2h-6h -> half day
+      { date: '2025-08-04', punch_in_time: '09:30', total_hours: 7.0 }, // Mon: 6h-9h -> full day
+      { date: '2025-08-05', punch_in_time: '09:30', total_hours: 11.0 }, // Tue: >9h -> full day + 2h OT
+    ]
+  }, customEmployee, settings);
+
+  const day1 = r.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(day1.label, 'absent_low_hours');
+  assert.equal(day1.pay, 0);
+
+  const day2 = r.breakdown.find(b => b.date === '2025-08-02');
+  assert.equal(day2.label, 'half_day_low_hours');
+  assert.equal(day2.pay, 0.5);
+
+  const day4 = r.breakdown.find(b => b.date === '2025-08-04');
+  assert.equal(day4.label, 'present');
+  assert.equal(day4.pay, 1);
+  assert.equal(day4.ot_hours, 0);
+
+  const day5 = r.breakdown.find(b => b.date === '2025-08-05');
+  assert.equal(day5.label, 'present');
+  assert.equal(day5.pay, 1);
+  assert.equal(day5.ot_hours, 2);
+  assert.equal(r.ot_hours, 2);
+});
+
+test('Sundays have no late penalties or cutoffs regardless of punch in time', () => {
+  // 2025-08-03 is Sunday. Punched at 11:30 AM (very late on weekdays) and worked 7h
+  const r = run({
+    attendance: [
+      { date: '2025-08-03', punch_in_time: '11:30', total_hours: 7 },
+    ]
+  }, employee, settings);
+
+  const sun = r.breakdown.find(b => b.date === '2025-08-03');
+  assert.equal(sun.label, 'sunday_worked');
+  assert.equal(sun.pay, 2); // full double pay
+  assert.equal(r.late_marks, 0); // 0 late marks
+  assert.equal(r.late_penalty, 0); // 0 late penalty
+});
+
+test('inactive employee: dates after exit_date are marked left_company with pay 0 and no absent deduction', () => {
+  const inactiveEmp = { ...employee, exit_date: '2025-08-15' };
+  const r = run({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:30', total_hours: 8 },
+      { date: '2025-08-02', punch_in_time: '09:30', total_hours: 8 },
+    ]
+  }, inactiveEmp, settings);
+
+  const afterExit = r.breakdown.filter(b => b.label === 'left_company');
+  // Days 16 to 31 in August = 16 days
+  assert.equal(afterExit.length, 16);
+  for (const b of afterExit) {
+    assert.equal(b.pay, 0);
+  }
+  // Days 1-15: Aug 1 (P), Aug 2 (P), Aug 3 (Sun paid), Aug 4-9 (6 absent), Aug 10 (Sun paid), Aug 11-15 (5 absent)
+  // Total absent days should only be from days 1 to 15 (11 days), NOT days 16-31
+  assert.equal(r.absent_days, 11);
 });
 

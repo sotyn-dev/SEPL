@@ -22,7 +22,9 @@ import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import IndentHelp from '../components/IndentHelp';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLoader } from 'react-icons/fi';
+import PoComparisonSheetModal from '../components/PoComparisonSheetModal';
+import MarketRatesModal from '../components/MarketRatesModal';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLoader, FiSearch } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 // fmtDateIST: CSV date cells must read as IST like the screen, not raw UTC
@@ -337,6 +339,40 @@ export default function Procurement() {
   };
   // ⚙ Workflow Settings popup — approval gate config (who may act + on/off).
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
+  // TSK-0943: Comparison sheet with online data for approval of PO
+  const [comparePoId, setComparePoId] = useState(null);
+
+  // TSK-0378: Live Market Rates & Price Discovery for PO Creation & Editing
+  const [marketModal, setMarketModal] = useState(false);
+  const [marketItem, setMarketItem] = useState(null);
+  const [marketTargetId, setMarketTargetId] = useState(null);
+  const [marketTargetMode, setMarketTargetMode] = useState('create'); // 'create' | 'edit'
+
+  const openMarketRateForPo = (it, targetId, mode = 'create') => {
+    setMarketItem({
+      id: targetId,
+      description: it.description || it.master_name || it.indent_description || '',
+      specification: it.specification || '',
+      size: it.indent_size || it.master_size || it.size || '',
+      make: it.indent_make || it.master_make || it.make || '',
+      unit: it.unit || it.indent_unit || it.uom || ''
+    });
+    setMarketTargetId(targetId);
+    setMarketTargetMode(mode);
+    setMarketModal(true);
+  };
+
+  const handleApplyMarketRateToPo = (rate) => {
+    if (!rate || isNaN(rate)) return;
+    if (marketTargetMode === 'create') {
+      togglePoItem(marketTargetId, { rate: +rate, checked: true });
+      toast.success(`Applied market rate ₹${rate} to line item`);
+    } else if (marketTargetMode === 'edit') {
+      setEditPoItems(prev => prev.map((r, i) => i === marketTargetId ? { ...r, rate: +rate } : r));
+      toast.success(`Applied market rate ₹${rate} to line item`);
+    }
+    setMarketModal(false);
+  };
   const [indents, setIndents] = useState([]);
   const [tallyIndents, setTallyIndents] = useState([]);
   const [paymentVendorPos, setPaymentVendorPos] = useState([]);
@@ -5001,6 +5037,14 @@ export default function Procurement() {
                       <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
                         <FiPrinter size={11} /> View / Print
                       </a>
+                      <button
+                        type="button"
+                        onClick={() => setComparePoId(v.id)}
+                        className="text-blue-700 hover:text-blue-900 underline text-xs font-semibold inline-flex items-center gap-1 text-left cursor-pointer"
+                        title="View Comparative Statement with online market benchmarks & 3 vendor quotes"
+                      >
+                        📊 Comparison Sheet
+                      </button>
                       {/* Mam (2026-05-22): "show here also delivery
                           note" — DN link on every PO row across the
                           procurement views. */}
@@ -5018,6 +5062,14 @@ export default function Procurement() {
                             <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
                               Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => setComparePoId(v.id)}
+                              className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition cursor-pointer flex items-center gap-0.5"
+                              title="Review rates vs online market data & 3 quotes before approval"
+                            >
+                              📊 Compare Online
+                            </button>
                             {v.cost_status === 'cost_overrun' && (
                               <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
                                 ⚠️ Overrun (+{v.max_overrun_pct}%)
@@ -5186,6 +5238,13 @@ export default function Procurement() {
                   <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                     <FiPrinter size={11} /> Print PO
                   </a>
+                  <button
+                    type="button"
+                    onClick={() => setComparePoId(v.id)}
+                    className="text-blue-700 hover:underline flex items-center gap-1 font-semibold text-xs"
+                  >
+                    📊 Comparison Sheet
+                  </button>
                   <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
                     🚚 Delivery Note
                   </a>
@@ -7261,6 +7320,15 @@ export default function Procurement() {
                             <td className="px-2 py-1.5 text-center text-gray-600">{isPipe ? <span className="text-blue-700 font-semibold">MTR → KG</span> : (unit || <span className="text-gray-300">—</span>)}</td>
                             <td className="px-1 py-1">
                               <NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={fullyOrdered} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} />
+                              <button
+                                type="button"
+                                disabled={fullyOrdered}
+                                onClick={() => openMarketRateForPo(it, it.indent_item_id, 'create')}
+                                className="mt-1 w-full text-[9.5px] text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-1 py-0.5 flex items-center justify-center gap-1 font-medium transition cursor-pointer"
+                                title="Check Moglix, IndiaMART & online market rates for this item"
+                              >
+                                <FiSearch size={9} /> Rates
+                              </button>
                             </td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
@@ -7997,6 +8065,16 @@ export default function Procurement() {
                               <NumInput className="input text-xs w-full text-right" disabled={editPoLocked} emitZeroOnEmpty min="0"
                                 value={it.rate}
                                 onChange={v => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, rate: v } : r))} />
+                              {!editPoLocked && (
+                                <button
+                                  type="button"
+                                  onClick={() => openMarketRateForPo(it, idx, 'edit')}
+                                  className="mt-1 w-full text-[9.5px] text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded px-1 py-0.5 flex items-center justify-center gap-1 font-medium transition cursor-pointer"
+                                  title="Check Moglix, IndiaMART & online market rates for this item"
+                                >
+                                  <FiSearch size={9} /> Rates
+                                </button>
+                              )}
                               {it.estimated_rate > 0 && (
                                 <div className={`text-[10px] font-medium mt-0.5 whitespace-nowrap ${it.is_overrun ? 'text-rose-600 font-semibold' : 'text-emerald-700'}`}>
                                   {it.is_overrun ? `⚠️ Overrun +${it.variance_pct}%` : '✓ ≤ Est'} (₹{it.estimated_rate})
@@ -8385,6 +8463,22 @@ export default function Procurement() {
           </div>
         )}
       </Modal>
+
+      {/* TSK-0943: PO Rate Comparison Sheet with Online Data & 3 Vendor Quotes */}
+      <PoComparisonSheetModal
+        isOpen={!!comparePoId}
+        poId={comparePoId}
+        onClose={() => setComparePoId(null)}
+        onPoAction={load}
+      />
+
+      {/* TSK-0378: Live Market Rates & Price Discovery Modal */}
+      <MarketRatesModal
+        isOpen={marketModal}
+        onClose={() => setMarketModal(false)}
+        item={marketItem}
+        onApplyRate={handleApplyMarketRateToPo}
+      />
     </div>
   );
 }

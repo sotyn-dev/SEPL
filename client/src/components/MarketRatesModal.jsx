@@ -123,7 +123,7 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
 
   useEffect(() => {
     if (isOpen && item) {
-      const rawName = item.item_name || item.name || '';
+      const rawName = item.item_name || item.name || item.master_name || item.description || item.indent_description || '';
       const suggs = getQuerySuggestions(rawName, item.size, item.make, item.specification);
       setSuggestions(suggs);
       const defaultQ = suggs[0]?.query || rawName;
@@ -183,14 +183,14 @@ export default function MarketRatesModal({ isOpen, onClose, item, onApplyRate })
         {item && (
           <div className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-semibold text-slate-800 line-clamp-2 flex-1" title={item.item_name}>
-                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1.5 tracking-wider">BOQ Line:</span>
-                {item.item_name}
+              <div className="font-semibold text-slate-800 line-clamp-2 flex-1" title={item.item_name || item.description || item.name || ''}>
+                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1.5 tracking-wider">Item:</span>
+                {item.item_name || item.description || item.master_name || item.name || 'Selected Item'}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
                 {item.size && <span>Size: <strong className="text-slate-900">{item.size}</strong></span>}
                 {item.make && <span className="border-l pl-2 border-slate-200">Make: <strong className="text-slate-900">{item.make}</strong></span>}
-                {item.uom && <span className="border-l pl-2 border-slate-200">UOM: <strong className="text-slate-900">{item.uom}</strong></span>}
+                {(item.uom || item.unit) && <span className="border-l pl-2 border-slate-200">Unit: <strong className="text-slate-900">{item.uom || item.unit}</strong></span>}
               </div>
             </div>
           </div>

@@ -75,7 +75,7 @@ const emptyForm = {
   guarantee_required: 'No', guarantee_percentage: '', sale_amount_without_gst: 0, po_amount: 0,
   management_discount_pct: 0, management_discount_amount: 0, net_sale_amount: 0,
   order_type: 'Supply', penalty_clause: 'No', penalty_clause_date: '',
-  committed_start_date: '', committed_delivery_date: '', committed_completion_date: '', freight_extra: 'No',
+  committed_start_date: '', committed_delivery_date: '', committed_completion_date: '', freight_extra: 'No', freight_mentioned_in_po: 'No',
   category: '', customer_type: '', client_type: '', customer_code: '',
   employee_assigned: '', employee_id: '', lead_by: '',
   management_person_name: '', management_person_contact: '',
@@ -112,7 +112,7 @@ export default function BusinessBook() {
   const [form, setForm] = useState({ ...emptyForm });
   const [viewEntry, setViewEntry] = useState(null);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: '', category: '', order_type: '', lead_type: '' });
+  const [filters, setFilters] = useState({ status: '', category: '', order_type: '', lead_type: '', freight_mentioned_in_po: '' });
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'dashboard'
   const [expanded, setExpanded] = useState({});      // dashboard: which client+site groups are open
@@ -283,11 +283,11 @@ export default function BusinessBook() {
 
   const exportCSV = () => {
     if (entries.length === 0) return toast.error('No data');
-    const headers = ['Lead No','Lead Type','Client','Company','Project','Category','Order Type','PO Number',
+    const headers = ['Lead No','Lead Type','Client','Company','Project','Category','Order Type','PO Number','Freight Mentioned in PO',
       'Sale Amount','Discount %','Discount Amount','Net Sale','PO Amount','Advance','Balance','Start','Delivery','Completion','District','State','Site Location',
       'Customer Type','Employee','Status','Remarks'];
     const rows = entries.map(e => [e.lead_no, e.lead_type, e.client_name, e.company_name, e.project_name,
-      e.category, e.order_type, e.po_number, e.sale_amount_without_gst,
+      e.category, e.order_type, e.po_number, e.freight_mentioned_in_po || 'No', e.sale_amount_without_gst,
       e.management_discount_pct, e.management_discount_amount, e.net_sale_amount,
       e.po_amount, e.advance_received,
       e.balance_amount, e.committed_start_date, e.committed_delivery_date, e.committed_completion_date,
@@ -300,7 +300,7 @@ export default function BusinessBook() {
     a.click(); toast.success('Exported');
   };
 
-  const clearFilters = () => { setFilters({ status: '', category: '', order_type: '', lead_type: '' }); setSearch(''); };
+  const clearFilters = () => { setFilters({ status: '', category: '', order_type: '', lead_type: '', freight_mentioned_in_po: '' }); setSearch(''); };
   const activeFilters = Object.values(filters).filter(Boolean).length + (search ? 1 : 0);
   const fmt = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
   // Mam (2026-05-21): PO Amount (with GST) is always (NET Sale) × 1.18.
@@ -522,6 +522,18 @@ export default function BusinessBook() {
         {b.category ? <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${catColor(b.category)}`}>{b.category}</span> : <span className="text-gray-300 text-[12px]">-</span>}
         {b.order_type && <div className="text-[10px] text-gray-500 italic mt-1">{b.order_type}</div>}
       </td>
+      {/* Freight in PO */}
+      <td className="px-3 py-1.5 align-top text-center whitespace-nowrap">
+        {b.freight_mentioned_in_po === 'Yes' ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+            Yes
+          </span>
+        ) : (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+            No
+          </span>
+        )}
+      </td>
       {/* Sales amount */}
       <td className="px-3 py-2 text-right align-top whitespace-nowrap font-semibold text-[13px]">{fmt(b.sale_amount_without_gst)}</td>
       {/* GST sales amount (Sale + GST) */}
@@ -659,11 +671,12 @@ export default function BusinessBook() {
           {activeFilters > 0 && <button onClick={clearFilters} className="btn btn-secondary text-red-500"><FiX size={14} /> Clear</button>}
         </div>
         {showFilters && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t">
             <div><label className="label">Status</label><select className="select" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All</option>{STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}</select></div>
             <div><label className="label">Category</label><select className="select" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
             <div><label className="label">Order Type</label><select className="select" value={filters.order_type} onChange={e => setFilters(f => ({ ...f, order_type: e.target.value }))}><option value="">All</option>{ORDER_TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
             <div><label className="label">Lead Type</label><select className="select" value={filters.lead_type} onChange={e => setFilters(f => ({ ...f, lead_type: e.target.value }))}><option value="">All</option>{LEAD_TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
+            <div><label className="label">Freight in PO</label><select className="select" value={filters.freight_mentioned_in_po} onChange={e => setFilters(f => ({ ...f, freight_mentioned_in_po: e.target.value }))}><option value="">All</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
           </div>
         )}
       </div>
@@ -708,6 +721,7 @@ export default function BusinessBook() {
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Client</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Project / Location</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Category</th>
+              <th className="px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-wider text-gray-500">Freight in PO</th>
               <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">Sales Amt</th>
               <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">GST Sales</th>
               <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">Mgmt Disc</th>
@@ -757,6 +771,7 @@ export default function BusinessBook() {
                         </div>
                       </td>
                       <td className="px-3 py-1.5" />
+                      <td className="px-3 py-1.5" />
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-blue-700">{fmt(g.gstIncl)}<div className="text-[9px] text-gray-400 font-normal uppercase">incl GST</div></td>
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-amber-700">{g.mgmtDisc > 0 ? fmt(g.mgmtDisc) : '-'}<div className="text-[9px] text-gray-400 font-normal uppercase">mgmt disc</div></td>
@@ -774,6 +789,7 @@ export default function BusinessBook() {
                         <td className="px-3 py-1">Client</td>
                         <td className="px-3 py-1">Project / Location</td>
                         <td className="px-3 py-1">Category</td>
+                        <td className="px-3 py-1 text-center">Freight in PO</td>
                         <td className="px-3 py-1 text-right">Sales Amt</td>
                         <td className="px-3 py-1 text-right">GST Sales</td>
                         <td className="px-3 py-1 text-right">Mgmt Disc</td>
@@ -784,7 +800,7 @@ export default function BusinessBook() {
                   </Fragment>
                 );
               })}
-              {entries.length === 0 && <tr><td colSpan="8" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
+              {entries.length === 0 && <tr><td colSpan="9" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
           </NumberedTable>
         </div>
@@ -1039,7 +1055,7 @@ export default function BusinessBook() {
                 </div>
               </div>
             )}
-            <DSection title="Project & Order" items={[['Project', viewEntry.project_name], ['Category', viewEntry.category], ['Order Type', viewEntry.order_type], ['PO Number', viewEntry.po_number], ['PO Date', viewEntry.po_date], ['Guarantee', viewEntry.guarantee_required], ['Guarantee %', viewEntry.guarantee_percentage], ['Penalty Clause', viewEntry.penalty_clause], ['Penalty Date', viewEntry.penalty_clause_date], ['Freight Extra', viewEntry.freight_extra]]} />
+            <DSection title="Project & Order" items={[['Project', viewEntry.project_name], ['Category', viewEntry.category], ['Order Type', viewEntry.order_type], ['PO Number', viewEntry.po_number], ['PO Date', viewEntry.po_date], ['Guarantee', viewEntry.guarantee_required], ['Guarantee %', viewEntry.guarantee_percentage], ['Penalty Clause', viewEntry.penalty_clause], ['Penalty Date', viewEntry.penalty_clause_date], ['Freight Extra', viewEntry.freight_extra], ['Freight Mentioned in PO', viewEntry.freight_mentioned_in_po || 'No']]} />
             <DSection title="Committed Dates" items={[['Start', viewEntry.committed_start_date], ['Delivery', viewEntry.committed_delivery_date], ['Completion', viewEntry.committed_completion_date]]} />
             <DSection title="People" items={[['Employee', viewEntry.employee_assigned], ['Lead By', viewEntry.lead_by], ['Management Person', viewEntry.management_person_name], ['Mgmt Contact', viewEntry.management_person_contact], ['Operations Person', viewEntry.operations_person_name], ['Ops Contact', viewEntry.operations_person_contact], ['PMC Person', viewEntry.pmc_person_name], ['PMC Contact', viewEntry.pmc_person_contact], ['Architect', viewEntry.architect_person_name], ['Architect Contact', viewEntry.architect_person_contact], ['Accounts Person', viewEntry.accounts_person_name], ['Accounts Contact', viewEntry.accounts_person_contact]]} />
             <DSection title="TPA Details" items={[['TPA Items Count', viewEntry.tpa_items_count], ['TPA Qty', viewEntry.tpa_items_qty], ['TPA Material', fmt(viewEntry.tpa_material_amount)], ['TPA Labour', fmt(viewEntry.tpa_labour_amount)], ['Accessory Amt', fmt(viewEntry.accessory_amount)], ['Labour/Day', viewEntry.required_labour_per_day], ['Actual Margin %', viewEntry.actual_margin_pct]]} />
@@ -1197,6 +1213,7 @@ export default function BusinessBook() {
               <Sel label="Penalty Clause" value={form.penalty_clause} onChange={v => F('penalty_clause', v)} options={['No', 'Yes']} />
               {form.penalty_clause === 'Yes' && <Inp label="Penalty Date" value={form.penalty_clause_date} onChange={v => F('penalty_clause_date', v)} type="date" />}
               <Sel label="Freight Extra" value={form.freight_extra} onChange={v => F('freight_extra', v)} options={['No', 'Yes']} />
+              <Sel label="Freight Mentioned in PO" value={form.freight_mentioned_in_po || 'No'} onChange={v => F('freight_mentioned_in_po', v)} options={['No', 'Yes']} />
               <Inp label="PO Number" value={form.po_number} onChange={v => F('po_number', v)} />
               <Inp label="PO Date" value={form.po_date} onChange={v => F('po_date', v)} type="date" />
             </div>
