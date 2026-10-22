@@ -11,7 +11,7 @@ import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock, FiXCircle, FiSettings } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import Pagination, { usePagination } from '../components/PaginationBar';
@@ -97,11 +97,36 @@ const TAB_STYLES = {
 // Stage 6 + Stage 10 are GATE stages — they need an explicit approval
 // and are visually distinguished with a 🚦 marker on the tab.
 const GATE_STAGES = new Set(['pricing_review', 'contract_signed']);
-// Sales-funnel category list — exactly mam's 7-option spec (Section 3 of 7
-// of her form): Low Voltage, Fire Fighting, Electrical, SOLAR, MEP, HVAC,
-// Plumbing. Order and casing kept verbatim per mam's screenshot.
-const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Electrical', 'SOLAR', 'MEP', 'HVAC', 'Plumbing'];
-const PIE_COLORS = ['#3b82f6', '#6366f1', '#8b5cf6', '#f59e0b', '#f97316', '#06b6d4', '#10b981', '#ef4444', '#ec4899'];
+// Sales-funnel category list — including Consultancy (TK-01487) and Supply Only (TK-01488)
+const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Electrical', 'SOLAR', 'MEP', 'HVAC', 'Plumbing', 'Consultancy', 'Supply Only'];
+
+// Ticket TK-01487: Consultancy sub-categories
+const CONSULTANCY_CATEGORIES = [
+  'MEP',
+  'Fire Fighting / NOC',
+  'Electrical',
+  'HVAC',
+  'Solar',
+  'Low Voltage',
+  'Plumbing',
+  'Civil / Structural',
+  'Other',
+];
+
+// Standard Loss Reason Categories for Move-to-Lost (from any stage)
+const LOSS_REASON_CATEGORIES = [
+  'Price / Budget Mismatch',
+  'Lost to Competitor',
+  'Project Dropped / Cancelled by Client',
+  'Client Unresponsive / Ghosted',
+  'Scope / Technical Feasibility Issue',
+  'Timeline / Delivery Schedule Mismatch',
+  'Compliance / Regulatory Rejection',
+  'Internal Decision / Not Feasible for SEPL',
+  'Other',
+];
+
+const PIE_COLORS = ['#3b82f6', '#6366f1', '#8b5cf6', '#f59e0b', '#f97316', '#06b6d4', '#10b981', '#ef4444', '#ec4899', '#14b8a6'];
 
 // Mam (2026-06-01) · Stage 1 Lead Capture changes:
 //   3) Tentative timeline now a dropdown of fixed buckets.
@@ -186,6 +211,22 @@ export default function Leads() {
   const [emailingMom, setEmailingMom] = useState(false);
   const [momRecipient, setMomRecipient] = useState('');
 
+  // Move-to-Lost functionality (Any stage)
+  const [canMoveToLost, setCanMoveToLost] = useState(false);
+  const [lostTargetLead, setLostTargetLead] = useState(null);
+  const [lostForm, setLostForm] = useState({ lost_reason: '', lost_remarks: '', lost_proof_file: '' });
+  const [lostSubmitting, setLostSubmitting] = useState(false);
+  const [uploadingLostProof, setUploadingLostProof] = useState(false);
+
+  // Admin access control for Move-to-Lost button
+  const [lostAccessModal, setLostAccessModal] = useState(false);
+  const [lostAccessConfig, setLostAccessConfig] = useState({
+    allow_all_with_edit: true,
+    allowed_roles: ['admin', 'sales_head', 'management'],
+    allowed_users: [],
+  });
+  const [savingLostAccess, setSavingLostAccess] = useState(false);
+
   // MD 2026-09-03 (TSK-0397, "Sales Funnel ... no sales tracking"): both calls
   // used to end in `.catch(() => {})`. A swallowed failure left `dashboard`
   // null, and the Dashboard tab below renders NOTHING while it is null — so any
@@ -238,6 +279,18 @@ export default function Leads() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal]);
 
+  // Load Move-to-Lost access rights for current user
+  useEffect(() => {
+    api.get('/sales-funnel/settings/move-to-lost-access')
+      .then(r => {
+        setCanMoveToLost(!!r.data?.user_can_mark_lost);
+        if (r.data?.config) setLostAccessConfig(r.data.config);
+      })
+      .catch(() => {
+        setCanMoveToLost(user?.role === 'admin' || canEdit('leads'));
+      });
+  }, [user, canEdit]);
+
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = n => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
@@ -254,6 +307,8 @@ export default function Leads() {
       phone: l.phone || '',
       email: l.email || '',
       category: l.category || '',
+      consultancy_category: l.consultancy_category || '',
+      consultancy_remarks: l.consultancy_remarks || '',
       building_category: l.building_category || '',
       project_name: '',
       project_location: l.project_location || '',
@@ -304,6 +359,80 @@ export default function Leads() {
   };
 
   const uploadFile = async (file) => { const fd = new FormData(); fd.append('file', file); const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); return r.data.url; };
+
+  const openMoveToLost = (lead) => {
+    setLostTargetLead(lead);
+    setLostForm({ lost_reason: '', lost_remarks: '', lost_proof_file: '' });
+  };
+
+  const handleLostProofUpload = async (file) => {
+    if (!file) return;
+    setUploadingLostProof(true);
+    try {
+      const url = await uploadFile(file);
+      setLostForm(f => ({ ...f, lost_proof_file: url }));
+      toast.success('Proof file uploaded');
+    } catch {
+      toast.error('Proof file upload failed');
+    } finally {
+      setUploadingLostProof(false);
+    }
+  };
+
+  const submitMoveToLost = async (e) => {
+    e.preventDefault();
+    if (!lostTargetLead) return;
+    if (!lostForm.lost_reason) {
+      toast.error('Please select a loss reason');
+      return;
+    }
+    if (!lostForm.lost_remarks?.trim()) {
+      toast.error('Please enter detailed remarks');
+      return;
+    }
+    setLostSubmitting(true);
+    try {
+      await api.post(`/sales-funnel/${lostTargetLead.id}/move-to-lost`, lostForm);
+      toast.success(`Lead ${lostTargetLead.lead_no} moved to Lost stage`);
+      if (viewData?.id === lostTargetLead.id) {
+        setViewData(v => ({
+          ...v,
+          current_stage: 'lost',
+          lost_from_stage: v.current_stage,
+          lost_reason: lostForm.lost_reason,
+          lost_remarks: lostForm.lost_remarks,
+          lost_proof_file: lostForm.lost_proof_file,
+          lost_by_name: user?.name,
+          lost_at: new Date().toISOString()
+        }));
+      }
+      setLostTargetLead(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to move lead to lost');
+    } finally {
+      setLostSubmitting(false);
+    }
+  };
+
+  const saveLostAccess = async (e) => {
+    e.preventDefault();
+    setSavingLostAccess(true);
+    try {
+      await api.post('/sales-funnel/settings/move-to-lost-access', lostAccessConfig);
+      toast.success('Move to Lost access settings saved');
+      setLostAccessModal(false);
+      api.get('/sales-funnel/settings/move-to-lost-access')
+        .then(r => {
+          setCanMoveToLost(!!r.data?.user_can_mark_lost);
+          if (r.data?.config) setLostAccessConfig(r.data.config);
+        });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save settings');
+    } finally {
+      setSavingLostAccess(false);
+    }
+  };
   const safeParse = (str) => {
     try { return str ? JSON.parse(str) : {}; }
     catch { return {}; }
@@ -416,18 +545,41 @@ export default function Leads() {
       <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>{l.lead_no}</td>
       <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
       <td className="px-3 py-2.5 text-gray-600">{l.company_name || '-'}</td>
-      <td className="px-3 py-2.5"><span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">{l.category || '-'}</span></td>
+      <td className="px-3 py-2.5">
+        <span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">
+          {l.category === 'Consultancy' && l.consultancy_category ? `Consultancy (${l.consultancy_category})` : (l.category === 'Supply Only' && l.consultancy_category ? `Supply Only (${l.consultancy_category})` : (l.category || '-'))}
+        </span>
+      </td>
       <td className="px-3 py-2.5 text-gray-500">{l.district || l.address || '-'}</td>
       <td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{fmtRs(l.tentative_amount)}</td>
       <td className="px-3 py-2.5">{l.assigned_sc || '-'}</td>
-      <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{ backgroundColor: STAGE_COLORS[l.current_stage] || '#888' }}>{STAGE_SHORT[l.current_stage] || l.current_stage}</span></td>
+      <td className="px-3 py-2.5">
+        <span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{ backgroundColor: STAGE_COLORS[l.current_stage] || '#888' }}>
+          {STAGE_SHORT[l.current_stage] || l.current_stage}
+        </span>
+        {l.current_stage === 'lost' && (
+          <div className="text-[10px] text-red-600 font-medium mt-0.5 max-w-[130px] truncate" title={`Lost from: ${STAGE_LABELS[l.lost_from_stage] || l.lost_from_stage || 'Unknown'}\nReason: ${l.lost_reason || '-'}\nRemarks: ${l.lost_remarks || '-'}`}>
+            {l.lost_from_stage ? `From: ${STAGE_SHORT[l.lost_from_stage] || l.lost_from_stage}` : ''}
+            {l.lost_reason ? ` • ${l.lost_reason}` : ''}
+          </div>
+        )}
+      </td>
       <td className="px-3 py-2.5">{slaChipFor(l)}</td>
       <td className="px-3 py-2.5 text-[10px] text-gray-400">{fmtDateIST(l.created_at)}</td>
       <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
           {canCreate('leads') && <button onClick={() => cloneLead(l)} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded" title="New lead from this client — copies the details, gets a fresh lead no."><FiCopy size={14} /></button>}
           <button onClick={() => viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={14} /></button>
           {canEdit('leads') && <button onClick={() => { setForm(l); setModal('edit'); }} className="p-1 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={14} /></button>}
+          {canMoveToLost && l.current_stage !== 'lost' && (
+            <button
+              onClick={() => openMoveToLost(l)}
+              className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+              title="Move to Lost stage (Any stage)"
+            >
+              <FiXCircle size={14} />
+            </button>
+          )}
           {canDelete('leads') && <button onClick={async () => { if (!confirm('Delete?')) return; await api.delete(`/sales-funnel/${l.id}`); toast.success('Deleted'); load(); }} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={14} /></button>}
         </div>
       </td>
@@ -471,12 +623,44 @@ export default function Leads() {
           </h1>
           <p className="text-xs text-gray-500 mt-0.5">Owner: <span className="font-semibold text-gray-700">Sales Head — Rajat Sharma</span> · Workflow S1 to S5</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => setLostAccessModal(true)}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs text-gray-700"
+              title="Admin control: Configure who can view and execute Move to Lost"
+            >
+              <FiSettings size={14} /> Move-to-Lost Access
+            </button>
+          )}
           <button onClick={() => exportCsv('leads',
             ['Lead No', 'Client', 'Company', 'Category', 'Location', 'Phone', 'Email', 'Source', 'Stage', 'Assigned SC', 'Assigned ASM', 'Date'],
             leads.map(l => [l.lead_no, l.client_name, l.company_name, l.category, `${l.district || ''} ${l.state || ''}`.trim(), l.phone, l.email, l.source, l.current_stage, l.assigned_sc, l.assigned_asm, l.created_at]))}
             className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
-          {canCreate('leads') && <button onClick={() => { setForm({ client_name: '', company_name: '', phone: '', email: '', category: '', address: '', source: '', assigned_sc: user?.name || '', assigned_asm: '', remarks: '' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> New Lead</button>}
+          {canCreate('leads') && (
+            <button
+              onClick={() => {
+                setForm({
+                  client_name: '',
+                  company_name: '',
+                  phone: '',
+                  email: '',
+                  category: '',
+                  consultancy_category: '',
+                  consultancy_remarks: '',
+                  address: '',
+                  source: '',
+                  assigned_sc: user?.name || '',
+                  assigned_asm: '',
+                  remarks: ''
+                });
+                setModal('add');
+              }}
+              className="btn btn-primary flex items-center gap-2 text-sm"
+            >
+              <FiPlus size={15} /> New Lead
+            </button>
+          )}
         </div>
       </div>
 
@@ -748,11 +932,90 @@ export default function Leads() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-sm">
             <div><span className="text-gray-400 text-[10px]">Client</span><br /><strong>{viewData.client_name}</strong></div>
             <div><span className="text-gray-400 text-[10px]">Company</span><br />{viewData.company_name || '-'}</div>
-            <div><span className="text-gray-400 text-[10px]">Category</span><br />{viewData.category || '-'}</div>
+            <div>
+              <span className="text-gray-400 text-[10px]">Category</span><br />
+              <span className="font-semibold">{viewData.category || '-'}</span>
+              {(viewData.category === 'Consultancy' || viewData.category === 'Supply Only') && viewData.consultancy_category && (
+                <span className="text-xs text-blue-700 block font-medium">({viewData.consultancy_category})</span>
+              )}
+            </div>
             <div><span className="text-gray-400 text-[10px]">Phone</span><br />{viewData.phone || '-'}</div>
             <div><span className="text-gray-400 text-[10px]">SC</span><br />{viewData.assigned_sc || '-'}</div>
             <div><span className="text-gray-400 text-[10px]">ASM</span><br />{viewData.assigned_asm || '-'}</div>
+            {(viewData.category === 'Consultancy' || viewData.category === 'Supply Only') && viewData.consultancy_remarks && (
+              <div className="sm:col-span-2 md:col-span-3 bg-blue-50/60 p-2 rounded text-xs border border-blue-200">
+                <strong className="text-blue-900">{viewData.category === 'Supply Only' ? 'Supply Scope / Details:' : 'Consultancy Scope / Notes:'}</strong> {viewData.consultancy_remarks}
+              </div>
+            )}
           </div>
+
+          {/* Lost Lead Details Card if lead is in lost stage */}
+          {viewData.current_stage === 'lost' && (
+            <div className="border border-red-300 bg-red-50/70 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <span className="font-bold text-red-800 flex items-center gap-1.5 text-xs">
+                  <FiXCircle className="text-red-600" size={16} /> Lead Lost Information
+                </span>
+                {viewData.lost_at && (
+                  <span className="text-[10px] text-red-600 font-medium">
+                    Marked on {fmtDateIST(viewData.lost_at)}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-gray-500 text-[10px]">Lost From Stage:</span>
+                  <div className="font-semibold text-gray-800">
+                    {STAGE_LABELS[viewData.lost_from_stage] || viewData.lost_from_stage || 'Unknown stage'}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px]">Reason Category:</span>
+                  <div className="font-semibold text-red-700">
+                    {viewData.lost_reason || viewData.drop_reason || 'Unspecified'}
+                  </div>
+                </div>
+                <div className="sm:col-span-2">
+                  <span className="text-gray-500 text-[10px]">Detailed Remarks:</span>
+                  <div className="bg-white p-2 rounded border border-red-200 text-gray-800 whitespace-pre-wrap">
+                    {viewData.lost_remarks || viewData.result_remarks || '-'}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px]">Marked Lost By:</span>
+                  <div className="text-gray-700">{viewData.lost_by_name || '-'}</div>
+                </div>
+                {viewData.lost_proof_file && (
+                  <div>
+                    <span className="text-gray-500 text-[10px]">Proof Attachment:</span>
+                    <div>
+                      <a
+                        href={viewData.lost_proof_file}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-red-700 font-bold hover:underline"
+                      >
+                        <FiDownload size={12} /> View Proof File
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Move to Lost button inside modal if lead is active */}
+          {viewData.current_stage !== 'lost' && canMoveToLost && (
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => openMoveToLost(viewData)}
+                className="btn btn-outline border-red-300 text-red-600 hover:bg-red-50 text-xs py-1 px-3 flex items-center gap-1.5"
+              >
+                <FiXCircle size={14} /> Move Lead to Lost Stage
+              </button>
+            </div>
+          )}
           {viewData.qualified_remarks && <div className="bg-red-50 p-2 rounded text-xs"><strong>Qualified:</strong> {viewData.qualified_remarks}</div>}
           {viewData.meeting_date && <div className="bg-purple-50 p-2 rounded text-xs"><strong>Meeting:</strong> {viewData.meeting_date} - {viewData.meeting_location}</div>}
           {viewData.mom_notes && <div className="bg-violet-50 p-2 rounded text-xs"><strong>MOM:</strong> {viewData.mom_notes} {viewData.mom_file_link && <a href={viewData.mom_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">File</a>}</div>}
@@ -1358,7 +1621,7 @@ export default function Leads() {
                   <textarea className="input" rows="2" placeholder="Negotiation remarks..." value={stageForm.result_remarks || ''} onChange={e => setStageForm({ ...stageForm, result_remarks: e.target.value })} />
                   <div className="flex gap-2">
                     <button onClick={() => advanceStage(viewData.id, 'contract_signed', stageForm)} className="btn btn-success flex-1">WIN — Move to Contract</button>
-                    <button onClick={() => advanceStage(viewData.id, 'lost', stageForm)} className="btn btn-danger flex-1">LOST</button>
+                    <button type="button" onClick={() => openMoveToLost(viewData)} className="btn btn-danger flex-1">LOST</button>
                   </div>
                 </div>)}
                 {/* Stage 9 → Stage 10: Contract + LOI/PO (GATE) — stub */}
@@ -1507,23 +1770,79 @@ export default function Leads() {
             </div>
           </div>
 
-          {/* Category + Sub-trades */}
+          {/* Category + Sub-trades + Consultancy (TK-01487) + Supply Only (TK-01488) */}
           <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Scope</h5></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Category *</label>
-              {/* 7-option dropdown matching mam's spec (Section 3 of 7).
-                  Required — every lead must declare its trade category so
-                  the right team picks it up. */}
-              <select className="select" required value={form.category || ''} onChange={e => F('category', e.target.value)}>
+              <select
+                className="select"
+                required
+                value={form.category || ''}
+                onChange={e => {
+                  F('category', e.target.value);
+                  if (e.target.value !== 'Consultancy' && e.target.value !== 'Supply Only') {
+                    F('consultancy_category', '');
+                    F('consultancy_remarks', '');
+                  }
+                }}
+              >
                 <option value="">Select Category</option>
                 {form.category && !CATEGORIES.includes(form.category) && <option value={form.category}>{form.category} (existing value)</option>}
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            {/* Sub-trades Scope removed at mam's request — the 7-option
-                Category above already captures the trade. The sub_trades_scope
-                column stays in the schema (harmless, NULL on new rows). */}
+            {form.category === 'Consultancy' && (
+              <>
+                <div>
+                  <label className="label">Consultancy Category *</label>
+                  <select
+                    className="select"
+                    required={form.category === 'Consultancy'}
+                    value={form.consultancy_category || ''}
+                    onChange={e => F('consultancy_category', e.target.value)}
+                  >
+                    <option value="">Select Consultancy Sub-Category</option>
+                    {CONSULTANCY_CATEGORIES.map(cc => <option key={cc} value={cc}>{cc}</option>)}
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="label">Consultancy Scope / Remarks</label>
+                  <input
+                    className="input"
+                    placeholder="e.g. Detailed Project Report, NOC Liaisoning, Load Calculation, MEP drawings..."
+                    value={form.consultancy_remarks || ''}
+                    onChange={e => F('consultancy_remarks', e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+            {form.category === 'Supply Only' && (
+              <>
+                <div>
+                  <label className="label">Supplied Trade / Domain <span className="text-gray-400 font-normal">(Optional)</span></label>
+                  <select
+                    className="select"
+                    value={form.consultancy_category || ''}
+                    onChange={e => F('consultancy_category', e.target.value)}
+                  >
+                    <option value="">Select Supplied Trade (Optional)</option>
+                    {['Fire Fighting', 'Fire Alarm', 'Electrical', 'Low Voltage', 'SOLAR', 'HVAC', 'Plumbing', 'MEP', 'Other'].map(cc => (
+                      <option key={cc} value={cc}>{cc}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="label">Supply Scope / Material Description <span className="text-gray-400 font-normal">(Optional)</span></label>
+                  <input
+                    className="input"
+                    placeholder="e.g. Cables, Panels, Fire Extinguishers, Inverters, Pipes, Fasteners..."
+                    value={form.consultancy_remarks || ''}
+                    onChange={e => F('consultancy_remarks', e.target.value)}
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           {/* Government-only block */}
@@ -1611,6 +1930,199 @@ export default function Leads() {
           <div className="flex justify-end gap-3 pt-3 border-t">
             <button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary">{modal === 'edit' ? 'Update' : 'Save & Assign'}</button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Move to Lost Modal (Any Stage) */}
+      <Modal
+        isOpen={!!lostTargetLead}
+        onClose={() => { if (!lostSubmitting && !uploadingLostProof) setLostTargetLead(null); }}
+        title={`Move Lead to Lost — ${lostTargetLead?.lead_no || ''}`}
+      >
+        {lostTargetLead && (
+          <form onSubmit={submitMoveToLost} className="space-y-4">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-sm text-red-900">
+                <FiXCircle size={16} /> Mark Lead as Lost at Current Stage
+              </div>
+              <p>
+                Lead: <strong>{lostTargetLead.lead_no}</strong> ({lostTargetLead.client_name})
+              </p>
+              <p>
+                Origin Stage:{' '}
+                <span className="font-semibold px-2 py-0.5 rounded bg-white border border-red-200 text-red-700">
+                  {STAGE_LABELS[lostTargetLead.current_stage] || lostTargetLead.current_stage}
+                </span>
+              </p>
+              <p className="text-[11px] text-red-600">
+                Moving this lead will retain the stage it was lost from, the reason, detailed remarks, actor, and proof file.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Loss Reason Category *</label>
+              <select
+                className="select"
+                required
+                value={lostForm.lost_reason}
+                onChange={e => setLostForm(f => ({ ...f, lost_reason: e.target.value }))}
+              >
+                <option value="">Select loss reason…</option>
+                {LOSS_REASON_CATEGORIES.map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label">Detailed Remarks / Loss Analysis *</label>
+              <textarea
+                className="input"
+                rows={3}
+                required
+                placeholder="Explain why the deal was lost, client comments, competitor price/name, reason details..."
+                value={lostForm.lost_remarks}
+                onChange={e => setLostForm(f => ({ ...f, lost_remarks: e.target.value }))}
+              />
+            </div>
+
+            <div>
+              <label className="label">Proof / Attachment (Optional)</label>
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  accept="image/*,.pdf,.doc,.docx"
+                  disabled={uploadingLostProof}
+                  className="text-xs"
+                  onChange={e => {
+                    const f = e.target.files?.[0];
+                    if (f) handleLostProofUpload(f);
+                  }}
+                />
+                {uploadingLostProof && (
+                  <div className="text-xs text-blue-600 flex items-center gap-1">
+                    <span className="animate-spin">⏳</span> Uploading attachment…
+                  </div>
+                )}
+                {lostForm.lost_proof_file && (
+                  <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 flex items-center justify-between">
+                    <span className="truncate max-w-[280px]">
+                      ✓ Attached: <a href={lostForm.lost_proof_file} target="_blank" rel="noreferrer" className="underline font-semibold">View Proof File</a>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setLostForm(f => ({ ...f, lost_proof_file: '' }))}
+                      className="text-red-600 hover:text-red-800 text-xs font-bold px-1"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+                <p className="text-[10px] text-gray-400">
+                  Upload screenshot, email proof, chat export, or client rejection document if available.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t">
+              <button
+                type="button"
+                disabled={lostSubmitting || uploadingLostProof}
+                onClick={() => setLostTargetLead(null)}
+                className="btn btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={lostSubmitting || uploadingLostProof}
+                className="btn bg-red-600 hover:bg-red-700 text-white text-xs px-4 flex items-center gap-1.5"
+              >
+                {lostSubmitting ? 'Moving…' : 'Confirm Move to Lost'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Admin Move-to-Lost Settings Modal */}
+      <Modal
+        isOpen={lostAccessModal}
+        onClose={() => setLostAccessModal(false)}
+        title="Admin Settings: Move-to-Lost Button Access Control"
+      >
+        <form onSubmit={saveLostAccess} className="space-y-4">
+          <div className="text-xs text-gray-600">
+            Configure who can see and use the <strong>Move to Lost</strong> action button across all funnel stages.
+          </div>
+
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50/70">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="w-4 h-4 mt-0.5 rounded text-red-600"
+                checked={!!lostAccessConfig.allow_all_with_edit}
+                onChange={e => setLostAccessConfig(c => ({ ...c, allow_all_with_edit: e.target.checked }))}
+              />
+              <div>
+                <span className="text-xs font-semibold text-gray-800">
+                  Allow any user with Leads "Edit" permission
+                </span>
+                <p className="text-[11px] text-gray-500">
+                  When enabled, all users authorized to edit leads can move leads to the lost stage.
+                </p>
+              </div>
+            </label>
+
+            <div className="border-t pt-2 space-y-2">
+              <span className="text-xs font-semibold text-gray-800 block">
+                Allowed Roles
+              </span>
+              <p className="text-[11px] text-gray-500">
+                Admins always have access. You can grant access to additional specific roles below:
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                {['admin', 'sales_head', 'management', 'coordinator', 'bdm', 'sales_rep', 'engineer'].map(r => {
+                  const isChecked = (lostAccessConfig.allowed_roles || []).includes(r);
+                  return (
+                    <label key={r} className="flex items-center gap-2 text-xs cursor-pointer">
+                      <input
+                        type="checkbox"
+                        disabled={r === 'admin'}
+                        checked={r === 'admin' || isChecked}
+                        onChange={e => {
+                          const cur = new Set(lostAccessConfig.allowed_roles || []);
+                          if (e.target.checked) cur.add(r);
+                          else cur.delete(r);
+                          setLostAccessConfig(c => ({ ...c, allowed_roles: Array.from(cur) }));
+                        }}
+                        className="rounded text-red-600"
+                      />
+                      <span className="capitalize">{r.replace('_', ' ')}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t">
+            <button
+              type="button"
+              disabled={savingLostAccess}
+              onClick={() => setLostAccessModal(false)}
+              className="btn btn-secondary text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={savingLostAccess}
+              className="btn btn-primary text-xs"
+            >
+              {savingLostAccess ? 'Saving…' : 'Save Settings'}
+            </button>
           </div>
         </form>
       </Modal>
