@@ -596,6 +596,7 @@ export default function Procurement() {
       freight_amount: v.freight_amount || '',
       // GST % (mam 2026-08-12) — default 18, editable per PO.
       gst_pct: v.gst_pct ?? 18,
+      site_address: v.site_address || '',
     });
     setEditPoItems([]);
     setLinkLines([]); setLinkPick({});
@@ -2263,6 +2264,7 @@ export default function Procurement() {
       remarks: '',
       po_file: null,
       gst_pct: 18,
+      site_address: '',
     });
     setIndentItemsForPo([]);
     setPoItemSelection({});
@@ -2272,7 +2274,17 @@ export default function Procurement() {
   // When user picks an indent in the modal, load its items + seed selection
   // state with finalized rate/vendor/terms so the grid is ready to review.
   const pickIndentForPo = async (indentId) => {
-    setForm(f => ({ ...f, indent_id: indentId }));
+    const allInd = indentLookup.length ? indentLookup : indents;
+    const curInd = allInd.find(i => String(i.id) === String(indentId));
+    let defaultAddr = '';
+    if (curInd) {
+      if (curInd.site_address) defaultAddr = curInd.site_address;
+      else if (curInd.site_name) {
+        const matchedSite = sites.find(s => s.name?.toLowerCase() === curInd.site_name?.toLowerCase());
+        if (matchedSite?.address) defaultAddr = matchedSite.address;
+      }
+    }
+    setForm(f => ({ ...f, indent_id: indentId, site_address: defaultAddr || f.site_address || '' }));
     if (!indentId) { setIndentItemsForPo([]); setPoItemSelection({}); return; }
     try {
       const r = await api.get(`/procurement/indents/${indentId}/items-for-po`);
@@ -2382,6 +2394,7 @@ export default function Procurement() {
     if (form.indent_id) fd.append('indent_id', form.indent_id);
     if (form.total_amount) fd.append('total_amount', form.total_amount);
     if (form.remarks) fd.append('remarks', form.remarks);
+    if (form.site_address) fd.append('site_address', form.site_address);
     // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
     if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
     if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
@@ -7262,7 +7275,18 @@ export default function Procurement() {
                 <option value="">— No indent link —</option>
                 {(indentLookup.length ? indentLookup : indents).map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
               </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">Picking an indent auto-fills the vendor + loads its items below for selection.</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Picking an indent auto-fills the vendor, site address + loads its items below for selection.</p>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Site / Delivery Address <span className="text-gray-400 font-normal">(auto-filled as per site / optional)</span></label>
+              <textarea
+                className="input"
+                rows="2"
+                placeholder="Enter or verify delivery site address"
+                value={form.site_address || ''}
+                onChange={e => setForm({ ...form, site_address: e.target.value })}
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">Default added from selected indent site address. Appears on the Vendor PO print (Consignee block).</p>
             </div>
             <div>
               <label className="label">Vendor *</label>
@@ -7854,8 +7878,16 @@ export default function Procurement() {
             </div>
 
             <div>
+              <label className="label">Site / Delivery Address</label>
+              <textarea className="input" rows="2"
+                value={editPoForm.site_address || ''}
+                onChange={e => setEditPoForm({ ...editPoForm, site_address: e.target.value })}
+                placeholder="Site delivery address printed on the PO" />
+            </div>
+
+            <div>
               <label className="label">Remarks</label>
-              <textarea className="input" rows="3"
+              <textarea className="input" rows="2"
                 value={editPoForm.remarks || ''}
                 onChange={e => setEditPoForm({ ...editPoForm, remarks: e.target.value })}
                 placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />

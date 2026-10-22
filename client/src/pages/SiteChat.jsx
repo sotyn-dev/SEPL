@@ -45,7 +45,7 @@ const COMPOSER_EMOJIS = [
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const HEADER = '#1e3a8a';                          // header royal blue
-const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(u || ''));
+const isImg = (u, n) => /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(u || '')) || /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(n || ''));
 const isAudio = (u) => /\.(webm|ogg|mp3|m4a|wav|aac|opus)$/i.test(String(u || ''));
 const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
@@ -68,26 +68,51 @@ function Avatar({ url, name, size = 36, className = '' }) {
 // exactly the "images blank / chats black" mam reported (2026-07-04). On error
 // we swap to a clear tap-to-open link instead. Module-level so it keeps its
 // own error state and never remounts mid-scroll.
-function ChatImage({ url, name }) {
+function ChatImage({ url, name, onImageClick }) {
   const [failed, setFailed] = useState(false);
+  const handleClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onImageClick) {
+      onImageClick({ url, name });
+    } else {
+      window.open(url, '_blank');
+    }
+  };
+
   if (failed) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all">
-        <FiImage size={13} /> {name || 'Photo'} — tap to open
-      </a>
+      <button
+        type="button"
+        onClick={handleClick}
+        className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all text-left hover:text-blue-800 cursor-pointer"
+      >
+        <FiImage size={13} /> {name || 'Photo'} — tap to preview
+      </button>
     );
   }
   return (
-    <a href={url} target="_blank" rel="noreferrer">
-      <img src={url} alt={name || ''} loading="lazy" decoding="async" onError={() => setFailed(true)}
-        className="rounded mb-1 max-h-52 max-w-full object-cover bg-gray-100" />
-    </a>
+    <button
+      type="button"
+      onClick={handleClick}
+      className="block text-left cursor-pointer group/img relative overflow-hidden rounded mb-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      title="Tap to preview image"
+    >
+      <img
+        src={url}
+        alt={name || ''}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="rounded mb-1 max-h-52 max-w-full object-cover bg-gray-100 group-hover/img:opacity-90 active:opacity-75 transition"
+      />
+    </button>
   );
 }
 
 // Quoted-reply preview text — module-level (pure) so it's stable for both the
 // message list and the composer's reply bar.
-const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
+const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url, m.attachment_name) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
 
 // Pasted URLs render as real clickable links (mam 2026-08-31: "if we share
 // link … show that link" — they were plain text). WhatsApp-style: trailing
@@ -148,7 +173,7 @@ function previewOf(m) {
   return { icon: '📎', label: name || 'Attachment', text };
 }
 
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward, onReact }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward, onReact, onImageClick }) {
   const [reactMsgId, setReactMsgId] = useState(null);
 
   useEffect(() => {
@@ -300,9 +325,9 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                   })()}
                   {m.attachment_url && (
                     m.attachment_url.startsWith('/api/site-chat/share/files/')
-                      ? <ChatSharedAttachment url={m.attachment_url} name={m.attachment_name} />
-                      : isImg(m.attachment_url)
-                      ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
+                      ? <ChatSharedAttachment url={m.attachment_url} name={m.attachment_name} onImageClick={onImageClick} />
+                      : isImg(m.attachment_url, m.attachment_name)
+                      ? <ChatImage url={m.attachment_url} name={m.attachment_name} onImageClick={onImageClick} />
                       : isAudio(m.attachment_url)
                         ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
                         : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
@@ -451,6 +476,9 @@ export default function SiteChat() {
   const [threadLoading, setThreadLoading] = useState(false); // drives the initial message-load skeleton on thread open (mobile feels frozen on slow networks otherwise)
   const [showJumpDown, setShowJumpDown] = useState(false);  // floating "jump to latest" button when scrolled up
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
+  const [previewImage, setPreviewImage] = useState(null); // image preview lightbox: { url, name, downloadUrl }
+  const previewImageRef = useRef(null);
+  previewImageRef.current = previewImage;
   const [text, setText] = useState('');
   const [showComposerEmoji, setShowComposerEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
@@ -1193,6 +1221,66 @@ export default function SiteChat() {
   };
   const closeForward = () => { setFwdMsg(null); setFwdSearch(''); setFwdPicked([]); setFwdCursor(0); };
 
+  // Full-screen Image Preview / Lightbox controls with mobile hardware Back button (popstate) support
+  const openImagePreview = useCallback((img) => {
+    if (!img || !img.url) return;
+    setPreviewImage(img);
+    try {
+      window.history.pushState({ sotynChatViewer: 'image' }, '');
+    } catch (_) {}
+  }, []);
+
+  const closeImagePreview = useCallback(() => {
+    if (previewImageRef.current) {
+      setPreviewImage(null);
+      try {
+        if (window.history.state?.sotynChatViewer === 'image') {
+          window.history.back();
+        }
+      } catch (_) {}
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      // If user presses phone Back button / gesture while previewing an image,
+      // close the preview without closing or exiting SOTYN!
+      if (previewImageRef.current) {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      if (previewImageRef.current && window.history.state?.sotynChatViewer === 'image') {
+        try {
+          window.history.back();
+        } catch (_) {}
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!previewImage) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        closeImagePreview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImage, closeImagePreview]);
+
+  useEffect(() => {
+    if (previewImage) {
+      const prevOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = prevOverflow;
+      };
+    }
+  }, [previewImage]);
+
   const togglePick = (t) => setFwdPicked(prev => prev.some(x => x.targetType === t.targetType && x.targetId === t.targetId)
     ? prev.filter(x => !(x.targetType === t.targetType && x.targetId === t.targetId))
     : [...prev, t]);
@@ -1509,7 +1597,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} onImageClick={openImagePreview} />
                   </div>
 
                   <div ref={endRef} />
@@ -1913,6 +2001,85 @@ export default function SiteChat() {
         );
       })()}
       <ChatShareStatusModal isOpen={shareSetupOpen} onClose={() => setShareSetupOpen(false)} />
+
+      {/* ── Image preview Lightbox (with clear header buttons, download & mobile Back button support) ── */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] flex flex-col justify-between select-none"
+          style={{ backgroundColor: 'rgba(5, 8, 16, 0.98)', backdropFilter: 'blur(8px)' }}
+          onClick={closeImagePreview}
+        >
+          {/* Header Bar: Solid, high-contrast dark bar with crisp, colorful buttons */}
+          <div
+            className="flex items-center justify-between px-3 sm:px-6 py-2.5 z-10 shrink-0 shadow-lg"
+            style={{ backgroundColor: '#0f172a', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Left: Close Button with Back Arrow + File Title */}
+            <div className="flex items-center gap-2.5 min-w-0 pr-2">
+              <button
+                type="button"
+                onClick={closeImagePreview}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-white font-semibold text-xs sm:text-sm border border-gray-600 shadow-md transition touch-manipulation cursor-pointer"
+                title="Close image (or press phone Back)"
+                aria-label="Close image"
+              >
+                <FiArrowLeft size={18} className="text-white shrink-0" />
+                <span>Close</span>
+              </button>
+              <span className="text-white text-xs sm:text-sm font-semibold truncate max-w-[140px] sm:max-w-md">
+                {previewImage.name || 'Photo preview'}
+              </span>
+            </div>
+
+            {/* Right: Download Button + Big Red Close Button */}
+            <div className="flex items-center gap-2 shrink-0">
+              <a
+                href={previewImage.downloadUrl || previewImage.url}
+                download={previewImage.name || 'image'}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition touch-manipulation cursor-pointer"
+                title="Download image"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <FiDownload size={15} className="shrink-0" />
+                <span>Download</span>
+              </a>
+              <button
+                type="button"
+                onClick={closeImagePreview}
+                className="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-md transition touch-manipulation cursor-pointer flex items-center justify-center"
+                title="Close (✕)"
+                aria-label="Close"
+              >
+                <FiX size={18} />
+              </button>
+            </div>
+          </div>
+
+          {/* Centered Image */}
+          <div className="flex-1 flex items-center justify-center p-2 sm:p-4 min-h-0 overflow-auto">
+            <img
+              src={previewImage.url}
+              alt={previewImage.name || 'Preview'}
+              className="max-h-[82vh] max-w-[96vw] object-contain rounded-lg shadow-2xl transition-transform"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+
+          {/* Footer Bar / Mobile hint: Solid bar, high legibility */}
+          <div
+            className="px-4 py-2 text-center shrink-0"
+            style={{ backgroundColor: '#0f172a', borderTop: '1px solid rgba(255, 255, 255, 0.12)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-xs text-gray-300 font-medium">
+              Tap <span className="font-bold text-white bg-rose-600/80 px-1.5 py-0.5 rounded text-[11px]">✕ Close</span> or press the <span className="font-bold text-white underline">Back</span> button on your phone
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

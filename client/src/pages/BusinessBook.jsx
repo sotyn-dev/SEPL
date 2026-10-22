@@ -20,7 +20,7 @@ import {
 } from 'recharts';
 
 const STATUSES = ['booked', 'advance_received', 'planning', 'execution', 'completed'];
-const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Networking', 'Solar', 'Other'];
+const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Networking', 'Solar', 'Consultancy', 'Supply Only', 'Other'];
 const ORDER_TYPES = ['Supply', 'SITC', 'AMC', 'Service'];
 const LEAD_TYPES = ['Private', 'Government'];
 const SOURCES = ['Inbound Enquiry', 'Indiamart Enquiry', 'WhatsApp', 'LinkedIn', 'Reference', 'Tender', 'Other'];

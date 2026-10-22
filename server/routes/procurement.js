@@ -588,10 +588,11 @@ router.get('/sites', (req, res) => {
   // returned so the indent Sub-Item picker can scope Item Master to the project's
   // division when a BOQ line isn't linked to a master item (mam 2026-06-27).
   const rows = getDb().prepare(
-    `SELECT name, MAX(lead_no) as lead_no, MAX(category) as category
+    `SELECT name, MAX(lead_no) as lead_no, MAX(category) as category, MAX(address) as address
      FROM (
        SELECT COALESCE(s.name, bb.project_name, bb.company_name) as name,
-              bb.lead_no as lead_no, bb.category as category
+              bb.lead_no as lead_no, bb.category as category,
+              COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.site_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
        FROM business_book bb
        LEFT JOIN sites s ON s.business_book_id = bb.id
        WHERE COALESCE(s.name, bb.project_name, bb.company_name) IS NOT NULL
@@ -3923,6 +3924,7 @@ router.get('/vendor-po/:id/print', (req, res) => {
       }
     } catch (_) { /* non-fatal */ }
   }
+  po.site_address = po.site_address || po.client_address_bb || null;
 
   // Site engineer + mobile — mam (2026-06-04): the indent's site
   // engineer and HIS number should appear on the PO so the vendor can
@@ -4883,6 +4885,24 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   // 'advance' or 'old_payment_clear' → 'pending' until Mark Cleared is hit.
   const pmtStatus = (pmtType === 'advance' || pmtType === 'old_payment_clear') ? 'pending' : 'na';
 
+  // Site Address — user can provide or edit it in modal; fallback to site address from indent/business_book
+  let site_address = b.site_address ? String(b.site_address).trim() : null;
+  if (!site_address && indent_id) {
+    try {
+      const indRow = db.prepare('SELECT site_name FROM indents WHERE id=?').get(indent_id);
+      if (indRow?.site_name) {
+        const sRow = db.prepare(`
+          SELECT COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.site_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
+          FROM business_book bb
+          LEFT JOIN sites s ON s.business_book_id = bb.id
+          WHERE LOWER(TRIM(COALESCE(s.name, bb.project_name, bb.company_name, ''))) = LOWER(TRIM(?))
+          ORDER BY bb.id DESC LIMIT 1
+        `).get(indRow.site_name);
+        if (sRow?.address) site_address = sRow.address;
+      }
+    } catch (_) {}
+  }
+
   try {
     const tx = db.transaction(() => {
       const r = db.prepare(
@@ -4892,11 +4912,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, created_by, po_approval)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, created_by, po_approval, site_address)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1', ?)`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null);
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null, site_address);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -5360,6 +5380,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
   // accountability record. It lives on the gated PATCH /vendor-po/:id/delay-reason.
   if (b.remarks !== undefined)               set('remarks', b.remarks || null);
   if (b.advance_required !== undefined)      set('advance_required', +b.advance_required || 0);
+  if (b.site_address !== undefined)          set('site_address', b.site_address ? String(b.site_address).trim() : null);
 
   // Payment-before-material (internal — mam 2026-05-27). Edited via the
   // same form; if the user switches type from 'advance' → 'no_advance'

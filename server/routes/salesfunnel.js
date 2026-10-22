@@ -155,6 +155,44 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   res.json({ excludedTestCount, total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups, closingByFortnight });
 });
 
+// Admin-configurable permissions for "Move to Lost" button
+router.get('/settings/move-to-lost-access', (req, res) => {
+  const db = getDb();
+  let conf = {
+    allow_all_with_edit: true,
+    allowed_roles: ['admin', 'sales_head', 'management'],
+    allowed_users: []
+  };
+  try {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key = 'sf_move_to_lost_access'").get();
+    if (row?.value) conf = JSON.parse(row.value);
+  } catch (_) {}
+
+  let userCanMarkLost = req.user.role === 'admin';
+  if (!userCanMarkLost) {
+    if (conf.allow_all_with_edit) {
+      const p = db.prepare("SELECT rp.can_edit, rp.can_delete FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'leads'").get(req.user.id);
+      if (p?.can_edit || p?.can_delete) userCanMarkLost = true;
+    }
+    if (Array.isArray(conf.allowed_roles) && conf.allowed_roles.includes(req.user.role)) userCanMarkLost = true;
+    if (Array.isArray(conf.allowed_users) && (conf.allowed_users.includes(req.user.id) || conf.allowed_users.includes(String(req.user.id)))) userCanMarkLost = true;
+  }
+
+  res.json({ config: conf, user_can_mark_lost: userCanMarkLost, is_admin: req.user.role === 'admin' });
+});
+
+router.post('/settings/move-to-lost-access', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const db = getDb();
+  const val = JSON.stringify(req.body);
+  db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ('sf_move_to_lost_access', ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+  `).run(val);
+  res.json({ success: true, saved: req.body });
+});
+
 // GET single (with SLA info)
 router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
   const lead = getDb().prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
@@ -249,8 +287,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
      city, address, district, state, source, influencer_id, influencer_name,
      assigned_sc, assigned_asm, assigned_asm_id,
      remarks, created_by,
-     current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'lead_capture', CURRENT_TIMESTAMP)`).run(
+     current_stage, stage_entered_at,
+     consultancy_category, consultancy_remarks)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'lead_capture', CURRENT_TIMESTAMP, ?, ?)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
@@ -267,7 +306,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     b.source === 'Influencer' ? (b.influencer_name || null) : null,
     b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,
     b.remarks || null,
-    req.user.id
+    req.user.id,
+    b.consultancy_category || null,
+    b.consultancy_remarks || null
   );
   audit(db, r.lastInsertRowid, 'lead_capture', 'create', req.user, {
     notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
@@ -452,6 +493,7 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
        tender_id=?, bid_deadline=?, emd_amount=?, pbg_required=?,
        city=?, address=?, district=?, state=?, source=?,
        assigned_sc=?, assigned_asm=?, assigned_asm_id=?, remarks=?,
+       consultancy_category=?, consultancy_remarks=?,
        updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(
@@ -466,6 +508,7 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
     b.source || null,
     b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,
     b.remarks || null,
+    b.consultancy_category || null, b.consultancy_remarks || null,
     req.params.id
   );
   audit(db, req.params.id, cur.current_stage, 'edit', req.user, { notes: 'Stage 1 fields updated' });
@@ -674,13 +717,22 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       break;
 
     // ─── TERMINAL — LOST (drop with reason) ────────────────────────────
-    case 'lost':
+    case 'lost': {
+      const lostReason = b.lost_reason || b.drop_reason || 'Lost';
+      const lostRemarks = b.lost_remarks || b.result_remarks || null;
+      const lostFromStage = b.lost_from_stage || lead.current_stage || 'unknown';
+      const lostProofFile = b.lost_proof_file || null;
+      const lostBy = req.user?.id || null;
+      const lostByName = req.user?.name || null;
       sql = `UPDATE sales_funnel SET
         current_stage='lost', result='lost', result_remarks=?,
         result_date=CURRENT_TIMESTAMP,
+        lost_from_stage=?, lost_reason=?, lost_remarks=?, lost_proof_file=?,
+        lost_by=?, lost_by_name=?, lost_at=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = [b.result_remarks, req.params.id];
+      params = [lostRemarks || lostReason, lostFromStage, lostReason, lostRemarks, lostProofFile, lostBy, lostByName, req.params.id];
       break;
+    }
 
     default:
       return res.status(400).json({ error: `Invalid stage: ${b.stage}` });
@@ -775,6 +827,84 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
     notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
   });
   res.json({ message: `Stage updated to ${stage}` });
+});
+
+// POST move-to-lost — can be triggered from ANY stage with mandatory reason,
+// detailed remarks, optional proof attachment (image/screenshot/pdf), and full audit.
+// Button visibility and execution is admin-governed.
+router.post('/:id/move-to-lost', (req, res) => {
+  const db = getDb();
+  let allowed = req.user.role === 'admin';
+  try {
+    const sRow = db.prepare("SELECT value FROM app_settings WHERE key = 'sf_move_to_lost_access'").get();
+    if (sRow?.value) {
+      const conf = JSON.parse(sRow.value);
+      if (conf.allow_all_with_edit) {
+        const p = db.prepare("SELECT rp.can_edit, rp.can_delete FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'leads'").get(req.user.id);
+        if (p?.can_edit || p?.can_delete) allowed = true;
+      }
+      if (Array.isArray(conf.allowed_roles) && conf.allowed_roles.includes(req.user.role)) allowed = true;
+      if (Array.isArray(conf.allowed_users) && (conf.allowed_users.includes(req.user.id) || conf.allowed_users.includes(String(req.user.id)))) allowed = true;
+    } else {
+      const p = db.prepare("SELECT rp.can_edit, rp.can_delete FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'leads'").get(req.user.id);
+      if (p?.can_edit || p?.can_delete) allowed = true;
+    }
+  } catch (_) {}
+
+  if (!allowed) {
+    return res.status(403).json({ error: 'You do not have permission to move leads to lost' });
+  }
+
+  const lead = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const { lost_reason, lost_remarks, lost_proof_file } = req.body;
+  if (!lost_reason || !String(lost_reason).trim()) {
+    return res.status(400).json({ error: 'Loss reason category is required' });
+  }
+  if (!lost_remarks || !String(lost_remarks).trim()) {
+    return res.status(400).json({ error: 'Detailed remarks are required' });
+  }
+
+  const lostFromStage = lead.current_stage || 'lead_capture';
+  try {
+    db.prepare(`
+      UPDATE sales_funnel SET
+        current_stage = 'lost',
+        result = 'lost',
+        result_remarks = ?,
+        result_date = CURRENT_TIMESTAMP,
+        lost_from_stage = ?,
+        lost_reason = ?,
+        lost_remarks = ?,
+        lost_proof_file = ?,
+        lost_by = ?,
+        lost_by_name = ?,
+        lost_at = CURRENT_TIMESTAMP,
+        stage_entered_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      lost_remarks.trim(),
+      lostFromStage,
+      lost_reason.trim(),
+      lost_remarks.trim(),
+      lost_proof_file || null,
+      req.user?.id || null,
+      req.user?.name || null,
+      req.params.id
+    );
+
+    audit(db, req.params.id, 'lost', 'move_to_lost', req.user, {
+      notes: `Moved to Lost from ${lostFromStage}: [${lost_reason}] ${lost_remarks}`,
+      evidence_url: lost_proof_file || null
+    });
+
+    res.json({ success: true, message: 'Lead moved to lost stage', lost_from_stage: lostFromStage });
+  } catch (err) {
+    console.error('[move-to-lost] failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ===== BOQ HISTORY (mam 2026-06-12: clients re-send BOQs over time) =====

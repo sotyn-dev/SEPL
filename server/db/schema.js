@@ -4339,6 +4339,19 @@ function initializeDatabase() {
     ['hiring_requests', 'target_scorecard_template_id INTEGER REFERENCES score_templates(id)'],
     // TK-01456: Freight mentioned in PO (Pooja Kaplesh)
     ['business_book', "freight_mentioned_in_po TEXT DEFAULT 'No'"],
+    // Requirement 1: Vendor PO site address default & storage
+    ['vendor_pos', 'site_address TEXT'],
+    // Requirement 2: Sales Funnel move to lost from any stage with audit trail & proof upload
+    ['sales_funnel', 'lost_from_stage TEXT'],
+    ['sales_funnel', 'lost_reason TEXT'],
+    ['sales_funnel', 'lost_remarks TEXT'],
+    ['sales_funnel', 'lost_proof_file TEXT'],
+    ['sales_funnel', 'lost_by INTEGER'],
+    ['sales_funnel', 'lost_by_name TEXT'],
+    ['sales_funnel', 'lost_at DATETIME'],
+    // Requirement 3: TK-01487 Consultancy in Sales Funnel
+    ['sales_funnel', 'consultancy_category TEXT'],
+    ['sales_funnel', 'consultancy_remarks TEXT'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index

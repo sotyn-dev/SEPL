@@ -349,11 +349,15 @@ export default function VendorPOPrint() {
                 Lead: <span className="font-mono font-semibold">{po.sepl_lead_no}</span>
               </div>
             )}
-            {po.client_address_bb && (
+            {po.site_address ? (
+              <div className="text-[9.5px] text-gray-800 whitespace-pre-line leading-tight mt-0.5">
+                <span className="font-semibold text-gray-600">Site Address:</span> {po.site_address}
+              </div>
+            ) : po.client_address_bb ? (
               <div className="text-[9px] text-gray-600 whitespace-pre-line leading-tight mt-0.5">
                 <span className="text-gray-500">Client Address:</span> {po.client_address_bb}
               </div>
-            )}
+            ) : null}
             <div className="text-[9px] text-gray-600 italic mt-0.5">
               Ship to the site above. Coordinate exact address with the site engineer{po.site_engineer_name ? ` — ${po.site_engineer_name}` : ''}.
             </div>
