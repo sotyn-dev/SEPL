@@ -2,14 +2,14 @@ import NumberedTable from '../components/NumberedTable';
 import EmployeePtRules from '../components/EmployeePtRules';
 import StaffTypeFilter from '../components/StaffTypeFilter';
 import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar, FiMail } from 'react-icons/fi';
+import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar, FiMail, FiSearch } from 'react-icons/fi';
 import SendSalaryEmailModal from '../components/SendSalaryEmailModal';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
@@ -49,6 +49,32 @@ export function buildPayrollExport(rows, month) {
     ['Net Pay (Rs)', r => r.net_pay], ['Finalised', r => yesNo(r.locked)],
     ['Payment Status', r => r.paid ? 'Paid' : r.locked ? 'Unpaid' : 'Not finalised'],
     ['Finalised At', r => r.finalised_at], ['Finalised By', r => r.finalised_by_name],
+  ];
+  return { headers: columns.map(([label]) => label), rows: rows.map(r => columns.map(([, value]) => value(r) ?? '')) };
+}
+
+// Focused export for selected employees containing core payroll & attendance breakdown
+export function buildSelectedPayrollExport(rows, month) {
+  const columns = [
+    ['Pay Month', () => month],
+    ['Employee', r => r.employee_name],
+    ['Department', r => r.department || '-'],
+    ['Designation', r => r.designation || '-'],
+    ['Base Salary (Rs)', r => r.base_salary || 0],
+    ['Present Days', r => r.present_days || 0],
+    ['Sundays', r => r.sunday_count == null ? 0 : Math.round((Number(r.sunday_count) + Number(r.sunday_worked_pay || 0)) * 100) / 100],
+    ['Paid Leaves / CL', r => r.paid_leaves || 0],
+    ['Holidays', r => r.holiday_days || 0],
+    ['Paid Days', r => r.paid_days || 0],
+    ['Half Days', r => r.half_days || 0],
+    ['Absent Days', r => r.absent_days || 0],
+    ['Late Marks', r => r.late_marks || 0],
+    ['Late Deduction (Rs)', r => r.late_penalty || 0],
+    ['Advance Salary (Rs)', r => r.advance || 0],
+    ['Overtime (Rs)', r => r.ot_pay || 0],
+    ['Food Allowance (Rs)', r => r.food || 0],
+    ['Net Pay (Rs)', r => r.net_pay || 0],
+    ['Payment Status', r => r.paid ? 'Paid' : (r.locked ? 'Unpaid' : 'Not finalised')],
   ];
   return { headers: columns.map(([label]) => label), rows: rows.map(r => columns.map(([, value]) => value(r) ?? '')) };
 }
@@ -189,6 +215,58 @@ export default function Payroll() {
   const [allRows, setList] = useState([]);
   const [staffType, setStaffType] = useState('');
   const list = allRows.filter(r => matchesStaffType(r.staff_type, staffType));
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedEmpIds, setSelectedEmpIds] = useState(new Set());
+
+  // Filter list by search query (name, department, designation)
+  const filteredList = useMemo(() => {
+    if (!searchQuery.trim()) return list;
+    const q = searchQuery.toLowerCase().trim();
+    return list.filter(r =>
+      (r.employee_name && r.employee_name.toLowerCase().includes(q)) ||
+      (r.department && r.department.toLowerCase().includes(q)) ||
+      (r.designation && r.designation.toLowerCase().includes(q))
+    );
+  }, [list, searchQuery]);
+
+  // Reset selected employee IDs when month or staffType filter changes
+  useEffect(() => {
+    setSelectedEmpIds(new Set());
+  }, [month, staffType]);
+
+  const toggleSelectOne = (id) => {
+    setSelectedEmpIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (filteredList.length === 0) return;
+    const allSelected = filteredList.every(r => selectedEmpIds.has(r.employee_id));
+    setSelectedEmpIds(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        filteredList.forEach(r => next.delete(r.employee_id));
+      } else {
+        filteredList.forEach(r => next.add(r.employee_id));
+      }
+      return next;
+    });
+  };
+
+  const exportSelectedPayroll = () => {
+    const selectedRows = allRows.filter(r => selectedEmpIds.has(r.employee_id));
+    if (selectedRows.length === 0) {
+      toast.error('Please select at least one employee from the table');
+      return;
+    }
+    const data = buildSelectedPayrollExport(selectedRows, month);
+    exportCsv(`payroll-summary-${month}`, data.headers, data.rows);
+  };
+
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
@@ -565,13 +643,42 @@ export default function Payroll() {
               <input type="month" className="input" value={month} onChange={e => setMonth(e.target.value)} />
             </div>
             <div><label className="label">Staff Type</label><StaffTypeFilter value={staffType} onChange={setStaffType} /></div>
-            {staffType && <p className="text-xs text-gray-500">Showing {list.length} staff. Totals and export follow this filter. Finalise / unlock applies to the entire month.</p>}
+            <div className="min-w-[200px]">
+              <label className="label">Search Employee</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  className="input pl-8 py-1.5 text-sm w-full"
+                  placeholder="Name, dept..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+                <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              </div>
+            </div>
+            {(staffType || searchQuery) && (
+              <p className="text-xs text-gray-500">
+                Showing {filteredList.length} of {list.length} staff. Totals and export follow the staff filter. Finalise / unlock applies to the entire month.
+              </p>
+            )}
             <div className="flex-1" />
             <button disabled={loading || list.length === 0} onClick={() => {
               const data = buildPayrollExport(list, month);
               exportCsv(`payroll-${month}`, data.headers, data.rows);
             }}
               className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
+            <button
+              disabled={loading || selectedEmpIds.size === 0}
+              onClick={exportSelectedPayroll}
+              className={`btn text-sm flex items-center gap-1.5 transition ${
+                selectedEmpIds.size > 0 
+                  ? 'btn-primary shadow-sm' 
+                  : 'btn-secondary opacity-60 cursor-not-allowed'
+              }`}
+              title={selectedEmpIds.size > 0 ? `Export focused summary for ${selectedEmpIds.size} selected employee(s)` : 'Select employees using checkboxes to export'}
+            >
+              <FiDownload size={14} /> Export Selected ({selectedEmpIds.size})
+            </button>
             <button onClick={() => setHolidayModal(true)}
               className="btn btn-secondary text-sm flex items-center gap-1"
               title="Declare paid holidays for employees who joined on or before each holiday">
@@ -658,6 +765,16 @@ export default function Payroll() {
             <NumberedTable className="freeze-head freeze-col whitespace-nowrap dense-cols text-xs">
               <thead>
                 <tr>
+                  <th className="w-8 text-center px-1">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all displayed"
+                      checked={filteredList.length > 0 && filteredList.every(r => selectedEmpIds.has(r.employee_id))}
+                      onChange={toggleSelectAll}
+                      className="rounded border-gray-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                      title={filteredList.every(r => selectedEmpIds.has(r.employee_id)) ? 'Deselect all displayed' : 'Select all displayed'}
+                    />
+                  </th>
                   <th>Employee</th>
                   <th>Dept</th>
                   <th className="text-right">Base ₹</th>
@@ -680,10 +797,27 @@ export default function Payroll() {
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="20" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="20" className="text-center py-8 text-gray-400">{staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set. Open HR → Employees and set monthly salary.'}</td></tr>}
-                {!loading && list.map(r => (
+                {loading && <tr><td colSpan="21" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && filteredList.length === 0 && (
+                  <tr>
+                    <td colSpan="21" className="text-center py-8 text-gray-400">
+                      {searchQuery
+                        ? `No employees match "${searchQuery}".`
+                        : (staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set. Open HR → Employees and set monthly salary.')}
+                    </td>
+                  </tr>
+                )}
+                {!loading && filteredList.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
+                    <td className="text-center px-1">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${r.employee_name}`}
+                        checked={selectedEmpIds.has(r.employee_id)}
+                        onChange={() => toggleSelectOne(r.employee_id)}
+                        className="rounded border-gray-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                      />
+                    </td>
                     <td className="font-medium">
                       {r.employee_name}
                       {r.status && r.status !== 'active' && (
@@ -802,12 +936,25 @@ export default function Payroll() {
           {/* Mobile cards (mam 2026-06-02) — Payroll monthly slip list */}
           <div className="md:hidden space-y-3">
             {loading && <div className="card p-6 text-center text-gray-400 text-sm">Calculating…</div>}
-            {!loading && list.length === 0 && (
-              <div className="card p-6 text-center text-gray-400 text-sm">{staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set.'}</div>
+            {!loading && filteredList.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {searchQuery
+                  ? `No employees match "${searchQuery}".`
+                  : (staffType ? 'No payroll rows match this staff type.' : 'No active employees with salary set.')}
+              </div>
             )}
-            {!loading && list.map(r => (
+            {!loading && filteredList.map(r => (
               <div key={r.employee_id} className={`card p-3 space-y-2 ${r.locked ? 'border-emerald-300' : (r.user_linked === false ? 'border-amber-300' : '')}`}>
                 <div className="flex justify-between items-start gap-2">
+                  <div className="pt-1">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${r.employee_name}`}
+                      checked={selectedEmpIds.has(r.employee_id)}
+                      onChange={() => toggleSelectOne(r.employee_id)}
+                      className="rounded border-gray-300 text-red-600 focus:ring-red-500 cursor-pointer h-4 w-4"
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
                     <div className="text-lg font-bold text-gray-900 truncate flex items-center gap-1">

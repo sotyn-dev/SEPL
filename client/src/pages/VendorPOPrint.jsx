@@ -654,13 +654,49 @@ export default function VendorPOPrint() {
             <tbody>
               {(compData.items || []).map((it, idx) => {
                 const poRate = +it.actual_rate || 0;
-                const moglixPrice = it.marketData?.moglix?.[0]?.price;
-                const indiamartPrice = it.marketData?.indiamart?.[0]?.price;
-                const pastRate = it.pastPoRates?.[0]?.rate;
-                const targetRate = it.estimatedRate;
-                const variancePct = it.variancePct;
-                const isOverrun = targetRate && poRate > targetRate;
-                const isSaving = targetRate && poRate < targetRate;
+
+                // Moglix Price resolution:
+                const moglixPrice = it.online?.moglix?.[0]?.price 
+                  ?? (it.marketData?.moglix?.[0]?.price 
+                  ?? (it.online?.lowest_price && it.online?.moglix?.length ? it.online.lowest_price : null));
+
+                // IndiaMART Price resolution:
+                const indiamartPrice = it.online?.indiamart?.[0]?.price 
+                  ?? (it.marketData?.indiamart?.[0]?.price 
+                  ?? (it.online?.lowest_price && it.online?.indiamart?.length ? it.online.lowest_price : null));
+
+                // Online Lowest Benchmark fallback across portals:
+                const onlineLowest = it.online?.lowest_price ?? (it.online?.average_price ?? null);
+                let effectiveMoglix = moglixPrice;
+                let effectiveIndiamart = indiamartPrice;
+                if (!effectiveMoglix && !effectiveIndiamart && onlineLowest) {
+                  if (it.online?.moglix?.length > 0) {
+                    effectiveMoglix = onlineLowest;
+                  } else if (it.online?.indiamart?.length > 0) {
+                    effectiveIndiamart = onlineLowest;
+                  } else {
+                    effectiveMoglix = onlineLowest;
+                  }
+                }
+
+                // Last SEPL PO rate:
+                const pastRate = it.history?.[0]?.rate ?? (it.pastPoRates?.[0]?.rate ?? null);
+
+                // Target / Estimated rate:
+                const targetRate = it.estimated_rate != null ? it.estimated_rate : (it.estimatedRate ?? null);
+
+                // Variance % vs target or vs online:
+                let variancePct = it.variance_pct != null ? it.variance_pct : (it.variancePct != null ? it.variancePct : null);
+                if (variancePct == null && targetRate && poRate) {
+                  variancePct = Math.round(((poRate - targetRate) / targetRate) * 1000) / 10;
+                } else if (variancePct == null && onlineLowest && poRate) {
+                  variancePct = Math.round(((poRate - onlineLowest) / onlineLowest) * 1000) / 10;
+                }
+
+                // Overrun / Saving against target or online benchmark:
+                const benchmark = targetRate || onlineLowest || pastRate;
+                const isOverrun = benchmark ? poRate > benchmark : false;
+                const isSaving = benchmark ? poRate < benchmark : false;
 
                 return (
                   <tr key={idx} className={`border-b border-gray-200 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
@@ -681,16 +717,25 @@ export default function VendorPOPrint() {
                       ₹ {poRate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap bg-orange-50/20">
-                      {moglixPrice ? `₹ ${Math.round(moglixPrice).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                      {effectiveMoglix ? (
+                        <div>
+                          <span className="font-semibold text-gray-900">₹ {Math.round(effectiveMoglix).toLocaleString('en-IN')}</span>
+                          {it.online?.average_price && it.online.average_price !== effectiveMoglix && (
+                            <div className="text-[8.5px] text-gray-400">avg ₹ {Math.round(it.online.average_price).toLocaleString('en-IN')}</div>
+                          )}
+                        </div>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap bg-orange-50/20">
-                      {indiamartPrice ? `₹ ${Math.round(indiamartPrice).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                      {effectiveIndiamart ? (
+                        <span className="font-semibold text-gray-900">₹ {Math.round(effectiveIndiamart).toLocaleString('en-IN')}</span>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap">
                       {pastRate ? `₹ ${Math.round(pastRate).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="border-r border-gray-300 px-1.5 py-1.5 text-right whitespace-nowrap">
-                      {targetRate ? `₹ ${Math.round(targetRate).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                      {targetRate ? `₹ ${Math.round(targetRate).toLocaleString('en-IN')}` : (onlineLowest ? <span className="text-blue-800 font-medium">₹ {Math.round(onlineLowest).toLocaleString('en-IN')}*</span> : <span className="text-gray-300">—</span>)}
                     </td>
                     <td className="border-r border-gray-300 px-1.5 py-1.5 text-center whitespace-nowrap">
                       {variancePct != null ? (
@@ -750,7 +795,7 @@ export default function VendorPOPrint() {
               Procurement Audit Summary &amp; Market Justification:
             </div>
             <div className="text-gray-700 leading-snug">
-              {compData.summary?.savings_vs_estimated != null ? (
+              {compData.summary?.savings_vs_estimated != null && compData.summary?.total_estimated_amount > 0 ? (
                 compData.summary.savings_vs_estimated >= 0 ? (
                   <span className="text-emerald-800 font-semibold">
                     ✓ Net Procurement Savings: ₹ {Math.round(compData.summary.savings_vs_estimated).toLocaleString('en-IN')} ({compData.summary.savings_vs_estimated_pct}%) below estimated benchmark. Rates verified against online portals and vendor quotations.
@@ -760,8 +805,23 @@ export default function VendorPOPrint() {
                     ⚠️ Net Cost Overrun: ₹ {Math.round(Math.abs(compData.summary.savings_vs_estimated)).toLocaleString('en-IN')} ({Math.abs(compData.summary.savings_vs_estimated_pct)}%) above target. Rates justified by market conditions / specific technical requirements.
                   </span>
                 )
+              ) : compData.summary?.total_online_amount > 0 ? (
+                compData.summary.savings_vs_online >= 0 ? (
+                  <span className="text-emerald-800 font-semibold">
+                    ✓ Net Online Savings: ₹ {Math.round(compData.summary.savings_vs_online).toLocaleString('en-IN')} ({compData.summary.savings_vs_online_pct}%) below online market benchmarks (Moglix / IndiaMART).
+                  </span>
+                ) : (
+                  <span className="text-red-700 font-semibold">
+                    ⚠️ PO is ₹ {Math.round(Math.abs(compData.summary.savings_vs_online)).toLocaleString('en-IN')} ({Math.abs(compData.summary.savings_vs_online_pct)}%) above online market benchmarks (Moglix / IndiaMART).
+                  </span>
+                )
               ) : (
                 <span>Market rate comparison verified against Moglix, IndiaMART, and past SEPL PO history.</span>
+              )}
+              {compData.summary?.total_online_amount > 0 && compData.summary?.total_estimated_amount > 0 && (
+                <div className="mt-1 text-[10px] text-gray-600">
+                  Online Market Benchmark (Moglix / IndiaMART Total): <strong>₹ {Math.round(compData.summary.total_online_amount).toLocaleString('en-IN')}</strong> ({compData.summary.savings_vs_online >= 0 ? `₹ ${Math.round(compData.summary.savings_vs_online).toLocaleString('en-IN')} savings` : `₹ ${Math.round(Math.abs(compData.summary.savings_vs_online)).toLocaleString('en-IN')} overrun`}).
+                </div>
               )}
             </div>
           </div>
