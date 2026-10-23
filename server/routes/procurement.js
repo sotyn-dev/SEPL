@@ -592,7 +592,7 @@ router.get('/sites', (req, res) => {
      FROM (
        SELECT COALESCE(s.name, bb.project_name, bb.company_name) as name,
               bb.lead_no as lead_no, bb.category as category,
-              COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.site_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
+              COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
        FROM business_book bb
        LEFT JOIN sites s ON s.business_book_id = bb.id
        WHERE COALESCE(s.name, bb.project_name, bb.company_name) IS NOT NULL
@@ -4892,7 +4892,7 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       const indRow = db.prepare('SELECT site_name FROM indents WHERE id=?').get(indent_id);
       if (indRow?.site_name) {
         const sRow = db.prepare(`
-          SELECT COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.site_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
+          SELECT COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
           FROM business_book bb
           LEFT JOIN sites s ON s.business_book_id = bb.id
           WHERE LOWER(TRIM(COALESCE(s.name, bb.project_name, bb.company_name, ''))) = LOWER(TRIM(?))
@@ -5278,7 +5278,21 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
       },
 
       // Historical rates
-      history: pastPoRates.slice(0, 3)
+      history: pastPoRates.slice(0, 3),
+
+      // Compatibility aliases
+      marketData: {
+        query: cleanQ,
+        lowestPrice: minOnline,
+        averagePrice: marketData.summary?.averagePrice || null,
+        moglix: (marketData.moglix || []).slice(0, 3),
+        indiamart: (marketData.indiamart || []).slice(0, 3),
+        directLinks: marketData.directLinks,
+        summary: marketData.summary
+      },
+      pastPoRates: pastPoRates.slice(0, 3),
+      estimatedRate: estimatedRate,
+      variancePct: variancePct
     };
   };
 
