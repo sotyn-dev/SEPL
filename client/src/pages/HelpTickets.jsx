@@ -167,6 +167,13 @@ export default function HelpTickets() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope, statusFilter]);
   useEffect(() => {
     api.get('/auth/users').then(r => setEmployees((r.data || []).filter(u => u.active !== 0))).catch(() => setEmployees([]));
+    const sp = new URLSearchParams(window.location.search);
+    const openId = sp.get('open');
+    if (openId) {
+      api.get(`/support/${openId}`).then(res => {
+        if (res.data) openView(res.data);
+      }).catch(() => {});
+    }
   }, []);
 
   // Counts for the tab badges

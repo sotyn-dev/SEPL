@@ -339,11 +339,12 @@ export default function Scorecard() {
     };
     const mod = modMap[kpi.data_source];
     if (!mod) return;
+    const isTicket = kpi.data_source === 'auto:tickets';
     const typeLabels = {
       planned: 'Planned Tasks (Due this week)',
-      actual: 'Approved Tasks (This week)',
-      prev_pending: 'Carryover Pending Backlog (Due before this week)',
-      prev_done: 'Previous Backlog Approved This Week',
+      actual: isTicket ? 'Resolved / Closed Tasks (This week)' : 'Approved Tasks (This week)',
+      prev_pending: 'Pending Backlog (Still Pending · Due before this week)',
+      prev_done: isTicket ? 'Previous Backlog Resolved This Week' : 'Previous Backlog Approved This Week',
     };
     setDrilldown({
       open: true,
@@ -1320,12 +1321,12 @@ export default function Scorecard() {
                   exportCsv(
                     `tasks_${drilldown.module}_${drilldown.type}_${weekStart}.csv`,
                     drilldown.rows.map(r => ({
-                      'Task ID': drilldown.module === 'pms' ? `PMS-${String(r.id).padStart(4, '0')}` : `TSK-${String(r.id).padStart(4, '0')}`,
+                      'Task ID': drilldown.module === 'pms' ? `PMS-${String(r.id).padStart(4, '0')}` : drilldown.module === 'tickets' ? (r.ticket_no || `TSK-${String(r.id).padStart(4, '0')}`) : `TSK-${String(r.id).padStart(4, '0')}`,
                       'Description': r.description || r.title || r.subject || '',
                       'Project': r.project_name || '',
                       'Assigned By': r.assigned_by_name || r.raised_by_name || '',
                       'Due Date': r.due_date || r.deadline_date || '',
-                      'Approved At': r.reviewed_at ? r.reviewed_at.slice(0, 10) : '',
+                      [drilldown.module === 'tickets' ? 'Resolved At' : 'Approved At']: (r.reviewed_at || r.resolved_at) ? (r.reviewed_at || r.resolved_at).slice(0, 10) : '',
                       'Status': r.status,
                     }))
                   );
@@ -1345,7 +1346,7 @@ export default function Scorecard() {
                     {drilldown.module === 'pms' && <th className="p-2 text-left">Project</th>}
                     <th className="p-2 text-left">Assigned By</th>
                     <th className="p-2 text-center w-24">Due Date</th>
-                    <th className="p-2 text-center w-24">Approved At</th>
+                    <th className="p-2 text-center w-24">{drilldown.module === 'tickets' ? 'Resolved At' : 'Approved At'}</th>
                     <th className="p-2 text-center w-20">Status</th>
                   </tr>
                 </thead>
@@ -1354,23 +1355,29 @@ export default function Scorecard() {
                     <tr key={row.id} className="hover:bg-blue-50/40">
                       <td className="p-2 font-mono font-bold text-red-700">
                         <a
-                          href={drilldown.module === 'pms' ? `/pms-tasks?open=${row.id}` : `/delegations?open=${row.id}`}
+                          href={
+                            drilldown.module === 'pms'
+                              ? `/pms-tasks?open=${row.id}`
+                              : drilldown.module === 'tickets'
+                              ? `/help-tickets?open=${row.id}`
+                              : `/delegations?open=${row.id}`
+                          }
                           target="_blank"
                           rel="noreferrer"
                           className="hover:underline flex items-center gap-1"
                           title="Open task in new tab"
                         >
-                          {drilldown.module === 'pms' ? `PMS-${String(row.id).padStart(4, '0')}` : `TSK-${String(row.id).padStart(4, '0')}`}
+                          {drilldown.module === 'pms' ? `PMS-${String(row.id).padStart(4, '0')}` : drilldown.module === 'tickets' ? (row.ticket_no || `TSK-${String(row.id).padStart(4, '0')}`) : `TSK-${String(row.id).padStart(4, '0')}`}
                         </a>
                       </td>
                       <td className="p-2 text-gray-800 whitespace-pre-wrap max-w-sm">{row.description || row.title || row.subject || '—'}</td>
                       {drilldown.module === 'pms' && <td className="p-2 text-gray-600">{row.project_name || '—'}</td>}
                       <td className="p-2 text-gray-600">{row.assigned_by_name || row.raised_by_name || '—'}</td>
                       <td className="p-2 text-center text-gray-600">{row.due_date || row.deadline_date || '—'}</td>
-                      <td className="p-2 text-center text-gray-600">{row.reviewed_at ? row.reviewed_at.slice(0, 10) : '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{(row.reviewed_at || row.resolved_at) ? (row.reviewed_at || row.resolved_at).slice(0, 10) : '—'}</td>
                       <td className="p-2 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                          row.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                          ['approved', 'resolved', 'closed'].includes(row.status) ? 'bg-emerald-100 text-emerald-800' :
                           row.status === 'submitted' ? 'bg-blue-100 text-blue-800' :
                           row.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
                         }`}>

@@ -17,6 +17,7 @@ const STAGES = [
   { key: 'qualification', label: 'Qualified or Not', color: 'indigo', who: 'Sales Coordinator (Rajat Sharma)', sop: 'SOP-01.2', sla_hours: 5 / 60, gate: false },
   { key: 'site_survey', label: 'Site Survey + Feasibility', color: 'purple', who: 'Sales Executive (Rajat Sharma)', sop: 'SOP-01.4', sla_hours: 2, gate: false },
   { key: 'concept_design', label: 'Concept Design / Drawings', color: 'violet', who: 'Designer', sop: 'SOP-01.5', sla_hours: 168, gate: false },
+  { key: 'boq_internal_costing', label: 'BOQ + Internal Costing', color: 'yellow', who: 'Estimation / Sales Coordinator', sop: 'SOP-01.5', sla_hours: 168, gate: false },
   { key: 'boq_costing', label: 'BOQ + Vendor Costing', color: 'amber', who: 'Sales Coordinator / Estimation', sop: 'SOP-01.5', sla_hours: 168, gate: false },
   { key: 'pricing_review', label: 'Internal Pricing Review', color: 'orange', who: 'CFO', sla_hours: 24, gate: true },
   { key: 'quote_submitted', label: 'Quote / Bid Submission', color: 'cyan', who: 'Sales', sla_hours: null, gate: false },
@@ -37,6 +38,7 @@ const LEGACY_STAGE_MAP = {
   mom_uploaded: 'site_survey',
   drawing_uploaded: 'concept_design',
   boq_created: 'boq_costing',
+  boq_vendor_costing: 'boq_costing',
   quotation_sent: 'quote_submitted',
   won: 'contract_signed',
 };
@@ -640,20 +642,42 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       b.drawing_uploaded_by || req.user.name, req.params.id];
       break;
 
-    // ─── STAGE 5 — BOQ + VENDOR COSTING ────────────────────────────────
-    // Replaces 'boq_created'. Same fields; vendor-quote rule and
-    // estimation sign-off added later. (SOP-01.5 BOQ upload checklist)
-    case 'boq_costing': {
+    // ─── STAGE 5 — BOQ + INTERNAL COSTING ──────────────────────────────
+    case 'boq_internal_costing': {
       const boqChecklist = typeof b.sop_boq_checklist === 'object' ? JSON.stringify(b.sop_boq_checklist) : (b.sop_boq_checklist || null);
       sql = `UPDATE sales_funnel SET
-        current_stage='boq_costing',
-        boq_file_link=?, revised_boq_file_link=?,
-        boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP,
+        current_stage='boq_internal_costing',
+        boq_file_link=COALESCE(?, boq_file_link),
+        revised_boq_file_link=COALESCE(?, revised_boq_file_link),
+        boq_created_by=COALESCE(?, boq_created_by),
+        boq_amount=COALESCE(?, boq_amount),
+        boq_date=CURRENT_TIMESTAMP,
         sop_boq_checklist=COALESCE(?, sop_boq_checklist),
         estimation_triggered_at=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = [b.boq_file_link, b.revised_boq_file_link || null,
-      b.boq_created_by || req.user.name, b.boq_amount || 0, boqChecklist, req.params.id];
+      params = [b.boq_file_link || null, b.revised_boq_file_link || null,
+      b.boq_created_by || req.user.name, b.boq_amount != null ? +b.boq_amount : null, boqChecklist, req.params.id];
+      break;
+    }
+
+    // ─── STAGE 6 — BOQ + VENDOR COSTING ────────────────────────────────
+    // Replaces 'boq_created'. Same fields; vendor-quote rule and
+    // estimation sign-off added later. (SOP-01.5 BOQ upload checklist)
+    case 'boq_costing':
+    case 'boq_vendor_costing': {
+      const boqChecklist = typeof b.sop_boq_checklist === 'object' ? JSON.stringify(b.sop_boq_checklist) : (b.sop_boq_checklist || null);
+      sql = `UPDATE sales_funnel SET
+        current_stage='boq_costing',
+        boq_file_link=COALESCE(?, boq_file_link),
+        revised_boq_file_link=COALESCE(?, revised_boq_file_link),
+        boq_created_by=COALESCE(?, boq_created_by),
+        boq_amount=COALESCE(?, boq_amount),
+        boq_date=CURRENT_TIMESTAMP,
+        sop_boq_checklist=COALESCE(?, sop_boq_checklist),
+        estimation_triggered_at=CURRENT_TIMESTAMP,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [b.boq_file_link || null, b.revised_boq_file_link || null,
+      b.boq_created_by || req.user.name, b.boq_amount != null ? +b.boq_amount : null, boqChecklist, req.params.id];
       break;
     }
 
@@ -749,7 +773,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
   }
   // Keep every BOQ the client sends — the stage submit records one in the
   // history table too (mam 2026-06-12), alongside the "latest" columns above.
-  if (stage === 'boq_costing' && (b.boq_file_link || +b.boq_amount > 0)) {
+  if (['boq_costing', 'boq_internal_costing', 'boq_vendor_costing'].includes(stage) && (b.boq_file_link || +b.boq_amount > 0)) {
     try {
       db.prepare(`INSERT INTO sales_funnel_boqs (funnel_id, boq_file_link, boq_amount, created_by, notes)
                   VALUES (?, ?, ?, ?, ?)`)

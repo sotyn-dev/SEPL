@@ -25,6 +25,7 @@ const STAGES = [
   'qualification',
   'site_survey',
   'concept_design',
+  'boq_internal_costing',
   'boq_costing',
   'pricing_review',
   'quote_submitted',
@@ -41,13 +42,14 @@ const STAGE_LABELS = {
   qualification: 'Stage 2 — Qualified or Not',
   site_survey: 'Stage 3 — Site Survey + Feasibility',
   concept_design: 'Stage 4 — Concept Design / Drawings',
-  boq_costing: 'Stage 5 — BOQ + Vendor Costing',
-  pricing_review: 'Stage 6 — Internal Pricing Review',
-  quote_submitted: 'Stage 7 — Quote / Bid Submission',
-  technical_clarification: 'Stage 8 — Technical Clarification',
-  commercial_negotiation: 'Stage 9 — Commercial Negotiation',
-  contract_signed: 'Stage 10 — Contract + LOI / PO',
-  project_kickoff: 'Stage 11 — Project Kickoff',
+  boq_internal_costing: 'Stage 5 — BOQ + Internal Costing',
+  boq_costing: 'Stage 6 — BOQ + Vendor Costing',
+  pricing_review: 'Stage 7 — Internal Pricing Review',
+  quote_submitted: 'Stage 8 — Quote / Bid Submission',
+  technical_clarification: 'Stage 9 — Technical Clarification',
+  commercial_negotiation: 'Stage 10 — Commercial Negotiation',
+  contract_signed: 'Stage 11 — Contract + LOI / PO',
+  project_kickoff: 'Stage 12 — Project Kickoff',
   lost: 'Lost',
 };
 // Compact label used inside the funnel chart / row badges / pipeline pills
@@ -57,7 +59,8 @@ const STAGE_SHORT = {
   qualification: 'Qualified?',
   site_survey: 'Site Survey',
   concept_design: 'Design',
-  boq_costing: 'BOQ',
+  boq_internal_costing: 'Internal Costing',
+  boq_costing: 'Vendor Costing',
   pricing_review: 'Pricing (GATE)',
   quote_submitted: 'Quote Sent',
   technical_clarification: 'Tech Clarify',
@@ -71,6 +74,7 @@ const STAGE_COLORS = {
   qualification: '#6366f1',  // indigo
   site_survey: '#8b5cf6',  // purple
   concept_design: '#a855f7',  // violet
+  boq_internal_costing: '#eab308',  // yellow
   boq_costing: '#f59e0b',  // amber
   pricing_review: '#f97316',  // orange (GATE)
   quote_submitted: '#06b6d4',  // cyan
@@ -85,6 +89,7 @@ const TAB_STYLES = {
   qualification: 'bg-indigo-500',
   site_survey: 'bg-purple-500',
   concept_design: 'bg-violet-500',
+  boq_internal_costing: 'bg-yellow-500',
   boq_costing: 'bg-amber-500',
   pricing_review: 'bg-orange-500',
   quote_submitted: 'bg-cyan-500',
@@ -94,7 +99,7 @@ const TAB_STYLES = {
   project_kickoff: 'bg-lime-500',
   lost: 'bg-red-500',
 };
-// Stage 6 + Stage 10 are GATE stages — they need an explicit approval
+// Stage 7 + Stage 11 are GATE stages — they need an explicit approval
 // and are visually distinguished with a 🚦 marker on the tab.
 const GATE_STAGES = new Set(['pricing_review', 'contract_signed']);
 // Sales-funnel category list — including Consultancy (TK-01487) and Supply Only (TK-01488)
@@ -1493,29 +1498,29 @@ export default function Leads() {
                 {/* Stage 3 → Stage 4: upload drawings (concept design) */}
                 {activeStage === 'concept_design' && (<div className="space-y-2">
                   {[1, 2, 3].map(n => (<div key={n} className="flex items-center gap-2"><span className="text-xs w-16">Drawing {n}:</span><input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { const url = await uploadFile(f); setStageForm(s => ({ ...s, [`drawing_file${n}`]: url })); toast.success(`Drawing ${n}`); } catch { toast.error('Failed'); } }} className="text-xs flex-1" />{stageForm[`drawing_file${n}`] && <span className="text-emerald-600 text-xs">OK</span>}</div>))}
-                  <button onClick={() => advanceStage(viewData.id, 'concept_design', stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings &amp; Move to BOQ</button>
+                  <button onClick={() => advanceStage(viewData.id, 'boq_internal_costing', stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings &amp; Move to Internal Costing</button>
                 </div>)}
-                {/* Stage 4 → Stage 5: BOQ + vendor costing (SOP-01.5) */}
-                {activeStage === 'boq_costing' && (<div className="space-y-3">
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
+                {/* Stage 4 → Stage 5: BOQ + Internal Costing (7.5) */}
+                {activeStage === 'boq_internal_costing' && (<div className="space-y-3">
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-xs space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-amber-900 flex items-center gap-1.5">
-                        <FiFileText className="text-amber-600" /> SOP-01.5 · BOQ Upload Checklist
+                      <span className="font-bold text-yellow-900 flex items-center gap-1.5">
+                        <FiFileText className="text-yellow-600" /> SOP-01.5 · Stage 5 · BOQ &amp; Internal Costing (7.5)
                       </span>
                       <div className="flex items-center gap-1.5">
                         {(() => {
                           const checks = stageForm.sop_boq_checklist || {};
                           const verifiedCount = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !!checks[k]).length;
                           return (
-                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 3 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800'}`}>
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 3 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-yellow-100 text-yellow-800'}`}>
                               {verifiedCount}/3 Verified
                             </span>
                           );
                         })()}
-                        <span className="bg-amber-200/70 text-amber-900 text-[10px] px-2 py-0.5 rounded font-semibold">Auto-Starts Estimation</span>
+                        <span className="bg-yellow-200/70 text-yellow-900 text-[10px] px-2 py-0.5 rounded font-semibold">Internal Costing</span>
                       </div>
                     </div>
-                    <div className="bg-white border border-amber-100 rounded p-2 space-y-1 text-slate-700">
+                    <div className="bg-white border border-yellow-100 rounded p-2 space-y-1 text-slate-700">
                       {[
                         { key: 'chk_dwg', label: 'Drawings & SLD attached and verified' },
                         { key: 'chk_specs', label: 'Item specifications, makes, and UOM confirmed' },
@@ -1527,7 +1532,7 @@ export default function Leads() {
                           <label key={item.key} className="flex items-center gap-2 cursor-pointer p-0.5">
                             <input
                               type="checkbox"
-                              className="rounded text-amber-600 focus:ring-amber-500"
+                              className="rounded text-yellow-600 focus:ring-yellow-500"
                               checked={isChecked}
                               onChange={(e) => {
                                 const next = { ...checks, [item.key]: e.target.checked };
@@ -1539,23 +1544,34 @@ export default function Leads() {
                         );
                       })}
                     </div>
-                    <p className="text-[11px] text-amber-800">
-                      🚀 On submit, the system immediately notifies Estimation Head (Md. Asad Ali / Naveen) to match Rate Master and begin SOP-02.
+                    <p className="text-[11px] text-yellow-800">
+                      ⚡ <b>Proceed with Internal Costing:</b> Update with internal costing (no waiting for vendor quotes) and proceed to Vendor Costing.
                     </p>
                   </div>
 
-                  <input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { stageForm.boq_file_link = await uploadFile(f); toast.success('BOQ uploaded'); } catch { toast.error('Failed'); } }} className="text-xs" />
-                  <input className="input" type="number" placeholder="BOQ Amount (₹)" value={stageForm.boq_amount || ''} onChange={e => setStageForm({ ...stageForm, boq_amount: +e.target.value })} />
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">BOQ File Attachment</label>
+                    <input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { stageForm.boq_file_link = await uploadFile(f); toast.success('BOQ uploaded'); } catch { toast.error('Failed'); } }} className="text-xs" />
+                    {(stageForm.boq_file_link || viewData.boq_file_link) && (
+                      <div className="text-emerald-600 text-[11px] mt-0.5">
+                        ✓ BOQ attached: <a href={stageForm.boq_file_link || viewData.boq_file_link} target="_blank" rel="noreferrer" className="underline font-medium">View BOQ File</a>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">Internal Costing Amount (₹)</label>
+                    <input className="input" type="number" placeholder="Internal Costing Amount (₹)" value={stageForm.boq_amount || ''} onChange={e => setStageForm({ ...stageForm, boq_amount: +e.target.value })} />
+                  </div>
                   <button
                     onClick={() => {
                       const boqChecks = stageForm.sop_boq_checklist || {};
                       const missingBoq = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !boqChecks[k]);
                       if (missingBoq.length > 0) {
-                        toast.error(`All 3 BOQ checklist items must be confirmed before starting estimation (${3 - missingBoq.length}/3 checked).`);
+                        toast.error(`All 3 checklist items must be confirmed before proceeding (${3 - missingBoq.length}/3 checked).`);
                         return;
                       }
-                      if (!stageForm.boq_file_link && !(+stageForm.boq_amount > 0)) {
-                        toast.error('Please attach a BOQ file or enter an estimated BOQ amount.');
+                      if (!stageForm.boq_file_link && !viewData.boq_file_link && !(+stageForm.boq_amount > 0)) {
+                        toast.error('Please attach a BOQ file or enter an internal costing amount.');
                         return;
                       }
                       advanceStage(viewData.id, 'boq_costing', {
@@ -1565,12 +1581,54 @@ export default function Leads() {
                     }}
                     className="btn btn-primary w-full"
                   >
-                    Submit BOQ &amp; Start Estimation Work
+                    Submit Internal Costing &amp; Move to Vendor Costing
                   </button>
                 </div>)}
-                {/* Stage 5 → Stage 6: Internal Pricing Review (GATE) — stub.
+                {/* Stage 5 → Stage 6: BOQ + Vendor Costing (7.6) */}
+                {activeStage === 'boq_costing' && (<div className="space-y-3">
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                        <FiFileText className="text-amber-600" /> Stage 6 · BOQ + Vendor Costing (7.6)
+                      </span>
+                      <span className="bg-amber-200/70 text-amber-900 text-[10px] px-2 py-0.5 rounded font-semibold">Vendor Costing &amp; Quotes</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      🏢 Finalize vendor quotes and rates. Update with vendor costing before submitting for Internal Pricing Review.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">Revised / Vendor BOQ File</label>
+                    <input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { const url = await uploadFile(f); setStageForm(s => ({ ...s, revised_boq_file_link: url })); toast.success('Vendor BOQ uploaded'); } catch { toast.error('Failed'); } }} className="text-xs" />
+                    {(stageForm.revised_boq_file_link || viewData.revised_boq_file_link) && (
+                      <div className="text-emerald-600 text-[11px] mt-0.5">
+                        ✓ Vendor BOQ attached: <a href={stageForm.revised_boq_file_link || viewData.revised_boq_file_link} target="_blank" rel="noreferrer" className="underline font-medium">View File</a>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">Final / Vendor Costing Amount (₹)</label>
+                    <input className="input" type="number" placeholder="Vendor Costing Amount (₹)" value={stageForm.boq_amount || ''} onChange={e => setStageForm({ ...stageForm, boq_amount: +e.target.value })} />
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!stageForm.boq_file_link && !stageForm.revised_boq_file_link && !viewData.boq_file_link && !(+stageForm.boq_amount > 0)) {
+                        toast.error('Please attach a BOQ file or enter a costing amount.');
+                        return;
+                      }
+                      advanceStage(viewData.id, 'pricing_review', {
+                        ...stageForm,
+                      });
+                    }}
+                    className="btn btn-primary w-full"
+                  >
+                    Submit Vendor Costing &amp; Move to Pricing Review
+                  </button>
+                </div>)}
+                {/* Stage 6 → Stage 7: Internal Pricing Review (GATE) — stub.
                   Full margin floor / CFO sign-off / slab routing wired
-                  when mam asks for Stage 6. */}
+                  when mam asks for Stage 7. */}
                 {activeStage === 'pricing_review' && (<div className="space-y-2">
                   <div className="text-[11px] bg-orange-50 border border-orange-200 rounded p-2 text-orange-800">
                     🚦 <b>GATE — CFO + Sales Head sign-off.</b> Margin floor enforcement and slab-based approval routing will be added when mam requests Stage 6.
