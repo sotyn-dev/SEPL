@@ -2,10 +2,10 @@ const { tsMs } = require('../utils/raciModules');
 // Use the actual Sales Funnel tab, rather than inferring a stage from old stamps.
 const stages = {
   qualification:['Qualified or Not',['qualified']],site_survey:['Site Survey + Feasibility',['meeting','mom']],
-  concept_design:['Concept Design / Drawings',['drawing']],boq_costing:['BOQ + Vendor Costing',['boq']],
+  concept_design:['Concept Design / Drawings',['drawing']],boq_internal_costing:['BOQ + Internal Costing',['boq']],boq_costing:['BOQ + Vendor Costing',['boq']],
   quote_submitted:['Quote / Bid Submission',['quotation']],contract_signed:['Contract + LOI / PO',['result']],
 };
-const legacy={qualified:'qualification',meeting_assigned:'site_survey',mom_uploaded:'site_survey',drawing_uploaded:'concept_design',boq_created:'boq_costing',quotation_sent:'quote_submitted',won:'contract_signed'};
+const legacy={qualified:'qualification',meeting_assigned:'site_survey',mom_uploaded:'site_survey',drawing_uploaded:'concept_design',boq_created:'boq_costing',boq_vendor_costing:'boq_costing',quotation_sent:'quote_submitted',won:'contract_signed'};
 function dashboardSalesRecords(db,userId) {
   const configs=db.prepare("SELECT * FROM raci_assignment WHERE module='sales_funnel'").all();
   const map=new Map(configs.map(c=>[`${c.record_id}:${c.step_key}`,c]));

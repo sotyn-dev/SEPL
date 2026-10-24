@@ -2255,6 +2255,8 @@ router.get('/weekly/detail', (req, res) => {
     const type = req.query.type || 'all'; // 'all' | 'planned' | 'actual' | 'prev_pending' | 'prev_done'
     const { start, end } = weekRange(req);
     const startTs = `${start} 00:00:00`;
+    // Scoring week ends on Sunday 23:59:59 for done-timestamps (matches computeCarry shiftWeek(sinceDate, 6))
+    const weekEndTs = `${shiftWeek(start, 6)} 23:59:59`;
     const endTs = `${end} 23:59:59`;
 
     let rows = [];
@@ -2266,9 +2268,10 @@ router.get('/weekly/detail', (req, res) => {
       if (type === 'actual') {
         rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ? AND d.status = 'approved' ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, end);
       } else if (type === 'prev_pending') {
-        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND (d.status != 'approved' OR (d.reviewed_at IS NOT NULL AND datetime(d.reviewed_at) >= ?)) ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, startTs);
+        // Option A: tasks due before this week that are still pending (not approved as of this week end)
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND (d.status != 'approved' OR (d.reviewed_at IS NOT NULL AND datetime(d.reviewed_at) > ?)) ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, weekEndTs);
       } else if (type === 'prev_done') {
-        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND d.status = 'approved' AND datetime(d.reviewed_at) BETWEEN ? AND ? ORDER BY d.reviewed_at DESC, d.due_date DESC`).all(userId, start, startTs, endTs);
+        rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} < ? AND d.status = 'approved' AND datetime(d.reviewed_at) BETWEEN ? AND ? ORDER BY d.reviewed_at DESC, d.due_date DESC`).all(userId, start, startTs, weekEndTs);
       } else {
         // 'planned' or 'all'
         rows = db.prepare(`${baseSql} WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ? ORDER BY d.due_date DESC, d.created_at DESC`).all(userId, start, end);
@@ -2276,15 +2279,18 @@ router.get('/weekly/detail', (req, res) => {
     } else if (moduleName === 'pms') {
       const baseSql = `SELECT p.id, p.title, p.description, p.status, p.due_date, p.created_at,
                               p.submitted_at, p.reviewed_at, ab.name as assigned_by_name,
-                              p.project_name_snapshot as project_name
+                              COALESCE(s.name, bb.project_name, p.project_name_snapshot) as project_name
                        FROM pms_tasks p
-                       LEFT JOIN users ab ON ab.id = p.assigned_by `;
+                       LEFT JOIN users ab ON ab.id = p.assigned_by
+                       LEFT JOIN business_book bb ON bb.id = p.project_id
+                       LEFT JOIN sites s ON s.business_book_id = bb.id `;
       if (type === 'actual') {
         rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ? AND p.status = 'approved' ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, end);
       } else if (type === 'prev_pending') {
-        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND (p.status != 'approved' OR (p.reviewed_at IS NOT NULL AND datetime(p.reviewed_at) >= ?)) ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, startTs);
+        // Option A: tasks due before this week that are still pending (not approved as of this week end)
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND (p.status != 'approved' OR (p.reviewed_at IS NOT NULL AND datetime(p.reviewed_at) > ?)) ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, weekEndTs);
       } else if (type === 'prev_done') {
-        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND p.status = 'approved' AND datetime(p.reviewed_at) BETWEEN ? AND ? ORDER BY p.reviewed_at DESC, p.due_date DESC`).all(userId, start, startTs, endTs);
+        rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} < ? AND p.status = 'approved' AND datetime(p.reviewed_at) BETWEEN ? AND ? ORDER BY p.reviewed_at DESC, p.due_date DESC`).all(userId, start, startTs, weekEndTs);
       } else {
         // 'planned' or 'all'
         rows = db.prepare(`${baseSql} WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ? ORDER BY p.due_date DESC, p.created_at DESC`).all(userId, start, end);
@@ -2292,14 +2298,23 @@ router.get('/weekly/detail', (req, res) => {
     } else if (moduleName === 'checklists') {
       rows = require('../lib/checklistWeekScore').checklistWeekScore(db, userId, start).rows;
     } else if (moduleName === 'tickets') {
-      rows = db.prepare(
-        `SELECT t.id, t.ticket_no, t.subject, t.priority, t.status, t.category,
-                t.created_at, t.resolved_at, t.deadline_date, ru.name as raised_by_name
-         FROM support_tickets t
-         LEFT JOIN users ru ON ru.id = t.user_id
-         WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} BETWEEN ? AND ?
-         ORDER BY t.deadline_date DESC, t.created_at DESC`
-      ).all(userId, start, end);
+      const baseSql = `SELECT t.id, t.ticket_no, t.subject, t.description, t.priority, t.status, t.category,
+                              t.created_at, t.resolved_at, t.resolved_at as reviewed_at, t.deadline_date,
+                              ru.name as raised_by_name, au.name as assigned_to_name
+                       FROM support_tickets t
+                       LEFT JOIN users ru ON ru.id = t.user_id
+                       LEFT JOIN users au ON au.id = t.assigned_to `;
+      if (type === 'actual') {
+        rows = db.prepare(`${baseSql} WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} BETWEEN ? AND ? AND t.status IN ('resolved', 'closed') ORDER BY t.deadline_date DESC, t.created_at DESC`).all(userId, start, end);
+      } else if (type === 'prev_pending') {
+        // Option A: tickets due before this week that are still pending (not resolved/closed as of this week end)
+        rows = db.prepare(`${baseSql} WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} < ? AND (t.status NOT IN ('resolved', 'closed') OR (t.resolved_at IS NOT NULL AND datetime(t.resolved_at) > ?)) ORDER BY t.deadline_date DESC, t.created_at DESC`).all(userId, start, weekEndTs);
+      } else if (type === 'prev_done') {
+        rows = db.prepare(`${baseSql} WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} < ? AND t.status IN ('resolved', 'closed') AND datetime(t.resolved_at) BETWEEN ? AND ? ORDER BY t.resolved_at DESC, t.deadline_date DESC`).all(userId, start, startTs, weekEndTs);
+      } else {
+        // 'planned' or 'all'
+        rows = db.prepare(`${baseSql} WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} BETWEEN ? AND ? ORDER BY t.deadline_date DESC, t.created_at DESC`).all(userId, start, end);
+      }
     } else {
       return res.status(400).json({ error: 'Unknown module' });
     }

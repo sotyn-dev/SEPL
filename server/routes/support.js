@@ -153,6 +153,26 @@ router.get('/stats', (req, res) => {
   });
 });
 
+// GET single ticket by ID or ticket_no
+router.get('/:id', (req, res) => {
+  const db = getDb();
+  const ticket = db.prepare(`
+    SELECT t.*,
+      u.name as user_name,
+      r.name as resolved_by_name,
+      a.name as assigned_to_name,
+      p.name as proof_submitted_by_name
+    FROM support_tickets t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN users r ON t.resolved_by = r.id
+    LEFT JOIN users a ON t.assigned_to = a.id
+    LEFT JOIN users p ON t.proof_submitted_by = p.id
+    WHERE t.id = ? OR t.ticket_no = ?
+  `).get(req.params.id, req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  res.json(ticket);
+});
+
 // POST new ticket. `assigned_to` is optional; when set, that user sees the
 // ticket on their dashboard + can respond to it.
 router.post('/', (req, res) => {
