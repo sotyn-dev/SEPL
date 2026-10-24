@@ -907,14 +907,18 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // Full-Kitting uses active projects and checkpoints across active stages (stages disabled for a project are deducted from plan).
+      // Full-Kitting performance (Solution 1 — Weekly Progress Basis):
+      // Planned target comes from the template's weekly target (given: null) so
+      // all projects assigned to this CRM employee do not distort the weekly scorecard.
+      // Actual counts checkpoint entries filled or updated during the week.
       if (source === 'auto:crm_kitting') {
         try {
-          const { kittingAllProjects, kittingProgress } = require('../lib/crmKittingProgress');
-          const keys = kittingAllProjects(db);
-          const p = kittingProgress(db, keys);
-          return { given: p.given, done: p.done };
-        } catch (e) { return { given: null, done: null }; }
+          const { kittingProjectsForUser, kittingAllProjects, kittingWeeklyProgress } = require('../lib/crmKittingProgress');
+          const userProjects = kittingProjectsForUser(db, userId);
+          const keys = userProjects.length > 0 ? userProjects : kittingAllProjects(db);
+          const p = kittingWeeklyProgress(db, keys, userId, since, until);
+          return { given: null, done: p.done };
+        } catch (e) { return { given: null, done: 0 }; }
       }
       // Activity-log data entry — how many create/update/delete actions this
       // user recorded this week, from the live audit trail (mam 2026-07-04).

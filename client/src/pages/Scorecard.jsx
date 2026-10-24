@@ -127,7 +127,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'All active checkpoints across active stages per project (stages disabled for a project are deducted)', actual: 'Cells with a nonblank latest response across active stages (Yes, No, Partially or N/A)' },
+  'auto:crm_kitting':           { plan: 'Weekly checkpoint target (from template / target set)', actual: 'Checkpoints updated / filled this week' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -2104,6 +2104,7 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
   const prevPend = +(kpi.pending_auto ? kpi.pending_uptodate : pendingUp) || 0;
   const prevDoneN = +(kpi.pending_auto ? kpi.pending_work : pendingWork) || 0;
   const prevAch = prevPend > 0 ? (prevDoneN / prevPend) * 100 : 100;
+  const remainingPending = Math.max(0, (+kpi.pending_uptodate || 0) - (+kpi.pending_work || 0));
   const isAuto = kpi.is_auto;
   const actualAuto = kpi.actual_auto ?? isAuto;
   const plannedEditable = kpi.planned_editable ?? !isAuto;
@@ -2233,26 +2234,26 @@ function KpiRow({ serialNumber, kpi, saving, onSave, readOnly, onStepWise, stepW
           <div className="flex items-start justify-center gap-2 font-semibold leading-tight"
             title={`Previous (due before this week): ${kpi.pending_uptodate || 0} carried in — ${Math.max(0, (+kpi.pending_uptodate || 0) - (+kpi.pending_work || 0))} still pending, ${kpi.pending_work || 0} done this week`}>
             <div className="text-center">
-              {canDrill && onDrilldown && (+kpi.pending_uptodate > 0) ? (
+              {canDrill && onDrilldown && (remainingPending > 0) ? (
                 <button
                   type="button"
                   onClick={() => onDrilldown(kpi, 'prev_pending')}
                   className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
                   title="Click to view carryover pending tasks due before this week"
                 >
-                  {kpi.pending_uptodate || 0}
+                  {remainingPending}
                 </button>
-              ) : (isRaci && onStepWise && (+kpi.pending_uptodate > 0)) ? (
+              ) : (isRaci && onStepWise && (remainingPending > 0)) ? (
                 <button
                   type="button"
                   onClick={onStepWise}
                   className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
                   title="Click to view step-wise breakdown"
                 >
-                  {kpi.pending_uptodate || 0}
+                  {remainingPending}
                 </button>
               ) : (
-                <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+                <div className={remainingPending > 0 ? 'text-amber-700' : 'text-gray-400'}>{remainingPending}</div>
               )}
               <div className="text-[9px] font-normal text-gray-400">pending</div>
             </div>
@@ -2814,7 +2815,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:leads_qualified">leads qualified (by user)</option>
                     <option value="auto:quotations_sent">quotations sent (by user)</option>
                     <option value="auto:meetings_planned">meetings planned (this week)</option>
-                    <option value="auto:crm_kitting">Full kitting — all projects, filled checkpoints (all 3 stages)</option>
+                    <option value="auto:crm_kitting">Full kitting — checkpoints updated this week (all projects)</option>
                   </optgroup>
                   <optgroup label="Business Book">
                     <option value="auto:bb_entries">BB entries created (by user)</option>
