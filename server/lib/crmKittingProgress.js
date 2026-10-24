@@ -172,7 +172,53 @@ function kittingProgress(db, projectKeys) {
   return { projects: keys.length, checkpoints: totalCps, given, done };
 }
 
+// Weekly progress basis: counts distinct project checkpoints filled or updated
+// during the week (uploaded_at / observation_date within week window).
+function kittingWeeklyProgress(db, projectKeys, userId, since, until) {
+  const keys = [...new Set((projectKeys || []).filter(k => k != null).map(String))];
+  if (keys.length === 0) return { done: 0 };
+  const ph = keys.map(() => '?').join(',');
+  const sinceDate = since ? since.slice(0, 10) : '';
+  const untilDate = until ? until.slice(0, 10) : '';
+
+  const cols = db.prepare(`PRAGMA table_info(crm_kitting_entry)`).all().map(c => c.name);
+  const hasUploadedBy = cols.includes('uploaded_by');
+  const hasUploadedAt = cols.includes('uploaded_at');
+  const hasObsDate = cols.includes('observation_date');
+
+  let whereTime = '1=1';
+  const timeArgs = [];
+  if (hasUploadedAt && hasObsDate) {
+    whereTime = '((uploaded_at BETWEEN ? AND ?) OR (observation_date BETWEEN ? AND ?))';
+    timeArgs.push(since, until, sinceDate, untilDate);
+  } else if (hasUploadedAt) {
+    whereTime = '(uploaded_at BETWEEN ? AND ?)';
+    timeArgs.push(since, until);
+  } else if (hasObsDate) {
+    whereTime = '(observation_date BETWEEN ? AND ?)';
+    timeArgs.push(sinceDate, untilDate);
+  }
+
+  let whereWho = `project_key IN (${ph})`;
+  const whoArgs = [...keys];
+  if (hasUploadedBy && userId != null) {
+    whereWho = `(uploaded_by = ? OR project_key IN (${ph}))`;
+    whoArgs.unshift(userId);
+  }
+
+  const row = db.prepare(`
+    SELECT COUNT(DISTINCT project_key || ':' || checkpoint_id) as c
+      FROM crm_kitting_entry
+     WHERE ${whereWho}
+       AND COALESCE(TRIM(status), '') <> ''
+       AND ${whereTime}
+  `).get(...whoArgs, ...timeArgs);
+
+  return { done: row?.c || 0 };
+}
+
 module.exports = {
   nameMatches, resolveOwnerUserId,
-  kittingOwnerProjects, kittingProjectsForUser, kittingAllProjects, kittingProgress,
+  kittingOwnerProjects, kittingProjectsForUser, kittingAllProjects, kittingProgress, kittingWeeklyProgress,
 };
+
