@@ -195,10 +195,13 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   const poErr = validatePoNumber(po_number);
   if (poErr) return res.status(400).json({ error: poErr });
 
-  // Normalize engineer IDs: accept array (preferred) or single legacy id
-  const engIds = Array.isArray(site_engineer_ids)
+  // Normalize engineer IDs: accept array (preferred) or single legacy id; fallback to jr_site_engineer_ids if needed
+  let engIds = Array.isArray(site_engineer_ids)
     ? site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean)
     : (site_engineer_id ? [parseInt(site_engineer_id, 10)].filter(Boolean) : []);
+  if (engIds.length === 0 && Array.isArray(jr_site_engineer_ids) && jr_site_engineer_ids.length > 0) {
+    engIds = jr_site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean);
+  }
   if (engIds.length === 0) return res.status(400).json({ error: 'At least one Site Engineer is required' });
   if (!crm_name) return res.status(400).json({ error: 'CRM is required' });
 
@@ -263,9 +266,12 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
     const poErr = validatePoNumber(po_number);
     if (poErr) return res.status(400).json({ error: poErr });
   }
-  const engIds = Array.isArray(site_engineer_ids)
+  let engIds = Array.isArray(site_engineer_ids)
     ? site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean)
     : (site_engineer_id ? [parseInt(site_engineer_id, 10)].filter(Boolean) : []);
+  if (engIds.length === 0 && Array.isArray(jr_site_engineer_ids) && jr_site_engineer_ids.length > 0) {
+    engIds = jr_site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean);
+  }
   if (engIds.length === 0) return res.status(400).json({ error: 'At least one Site Engineer is required' });
   if (!crm_name) return res.status(400).json({ error: 'CRM is required' });
   const primaryEng = engIds[0];
