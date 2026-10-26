@@ -49,15 +49,33 @@ function GrowTextarea({ value, onChange, className, title, placeholder }) {
 
 // Match a PO against a free-text filter. Empty filter = all rows. Checks
 // every field mam asked about: site/project (project field), client name,
-// company name (BB), PO number, lead number, site-engineer names, CRM.
+// company name (BB), PO number, lead number, site-engineer names, Jr. site engineer, CRM.
 function poMatches(p, q) {
   if (!q || !q.trim()) return true;
   const needle = q.trim().toLowerCase();
   const hay = [
     p.po_number, p.lead_no, p.bb_client, p.company_name, p.bb_project,
-    p.site_engineer_names, p.site_engineer_name, p.crm_name, p.bb_category,
+    p.site_engineer_names, p.site_engineer_name, p.jr_site_engineer_names, p.crm_name, p.bb_category,
   ].filter(Boolean).join(' ').toLowerCase();
   return hay.includes(needle);
+}
+
+// Check if a user qualifies as a Site Engineer or Jr. Site Engineer
+function isSiteOrJrEngineer(u) {
+  const roles = String(u.role_names || '').toLowerCase();
+  const desig = String(u.hr_designation || '').toLowerCase();
+  const role = String(u.role || '').toLowerCase();
+  if (role === 'site_engineer' || role === 'site engineer') return true;
+  if (roles.includes('site eng') || desig.includes('site eng')) return true;
+  if (roles.includes('site engineer') || desig.includes('site engineer')) return true;
+  if (/\b(site\s*eng|jr\.?\s*site|junior\s*site)/i.test(roles)) return true;
+  if (/\b(site\s*eng|jr\.?\s*site|junior\s*site)/i.test(desig)) return true;
+  return false;
+}
+
+function isJuniorEngineer(u) {
+  const text = `${u.role_names || ''} ${u.hr_designation || ''}`.toLowerCase();
+  return /\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/i.test(text);
 }
 
 // Units a BOQ line can carry. A unit arriving from an imported sheet that is
@@ -103,6 +121,20 @@ export default function Orders() {
   // 4-second toast. Cleared whenever the modal opens or save retries.
   const [poError, setPoError] = useState(null);
 
+  // Both Site Engineers and Jr. Site Engineers, plus any currently assigned user
+  const displayedEngineers = useMemo(() => {
+    const selectedIds = new Set(form.site_engineer_ids || []);
+    const list = [...siteEngineers];
+    const existingIds = new Set(list.map(u => u.id));
+    for (const u of allUsers) {
+      if (selectedIds.has(u.id) && !existingIds.has(u.id)) {
+        list.push(u);
+        existingIds.add(u.id);
+      }
+    }
+    return list;
+  }, [siteEngineers, allUsers, form.site_engineer_ids]);
+
   const load = () => {
     api.get('/orders/po').then(r => setPos(r.data));
     api.get('/orders/planning').then(r => setPlanning(r.data));
@@ -114,7 +146,7 @@ export default function Orders() {
     api.get('/item-master/dropdown?type=PO').then(r => setMasterItems(r.data)).catch(() => {});
     api.get('/auth/users').then(r => {
       const active = (r.data || []).filter(u => u.active !== 0);
-      setSiteEngineers(active.filter(u => (u.role_names || '').split(',').includes('Site Engineer')));
+      setSiteEngineers(active.filter(isSiteOrJrEngineer));
       setAllUsers(active);
     }).catch(() => {});
   }, []);
@@ -181,14 +213,18 @@ export default function Orders() {
   const savePo = async (e) => {
     e.preventDefault();
     setPoError(null);
-    const engIds = form.site_engineer_ids || [];
+    let engIds = form.site_engineer_ids || [];
+    if (!engIds.length && (form.jr_site_engineer_ids || []).length > 0) {
+      engIds = form.jr_site_engineer_ids;
+    }
     if (!engIds.length) { setPoError('At least one Site Engineer is required'); toast.error('At least one Site Engineer is required'); return; }
     if (!form.crm_name) { setPoError('CRM is required'); toast.error('CRM is required'); return; }
+    const poPayload = { ...form, site_engineer_ids: engIds };
     let stage = 'start';
     try {
       if (editingPO) {
         stage = 'PUT /orders/po/:id (metadata)';
-        await api.put(`/orders/po/${editingPO.id}`, { ...form });
+        await api.put(`/orders/po/${editingPO.id}`, poPayload);
         // Only re-save the line items when mam actually edited them.
         // Skipping this when only CRM / status / dates changed avoids
         // the destructive DELETE-then-INSERT path entirely and protects
@@ -201,7 +237,7 @@ export default function Orders() {
         toast.success(poItemsDirty ? 'PO + line items updated' : 'PO updated (line items unchanged)');
       } else {
         stage = 'POST /orders/po (create)';
-        await api.post('/orders/po', { ...form, items: poItems.filter(item => item.description && item.description.trim()) });
+        await api.post('/orders/po', { ...poPayload, items: poItems.filter(item => item.description && item.description.trim()) });
         toast.success('PO created');
       }
       setModal(false); setEditingPO(null);
@@ -364,7 +400,20 @@ export default function Orders() {
       <td>{p.bb_category || '-'}</td>
       <td>{p.po_date}</td>
       <td className="font-semibold">Rs {p.total_amount?.toLocaleString()}</td>
-      <td className="text-xs">{p.site_engineer_names || p.site_engineer_name || <span className="text-gray-400">-</span>}</td>
+      <td className="text-xs">
+        {p.site_engineer_names || p.site_engineer_name ? (
+          <div>
+            <div>{p.site_engineer_names || p.site_engineer_name}</div>
+            {p.jr_site_engineer_names && (
+              <div className="text-[10px] text-gray-500 font-normal">Jr: {p.jr_site_engineer_names}</div>
+            )}
+          </div>
+        ) : (
+          p.jr_site_engineer_names ? (
+            <div className="text-[10px] text-gray-600 font-normal"><span className="text-gray-400">Jr: </span>{p.jr_site_engineer_names}</div>
+          ) : <span className="text-gray-400">-</span>
+        )}
+      </td>
       <td className="text-xs">{p.crm_name || <span className="text-gray-400">-</span>}</td>
       <td>{p.po_copy_link ? <a href={p.po_copy_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
       <td>{p.boq_file_link ? <a href={p.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
@@ -416,8 +465,8 @@ export default function Orders() {
               <FiGrid size={14} /> {groupPo ? 'Grouped by Project' : 'Group by Project'}
             </button>
             <button onClick={() => exportCsv('purchase-orders',
-              ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','CRM'],
-              pos.filter(p => poMatches(p, poFilter)).map(p => [p.po_number, p.lead_no, p.bb_client || p.company_name, p.bb_project, p.bb_category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_names || p.site_engineer_name, p.crm_name]))}
+              ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','Jr. Site Engineer','CRM'],
+              pos.filter(p => poMatches(p, poFilter)).map(p => [p.po_number, p.lead_no, p.bb_client || p.company_name, p.bb_project, p.bb_category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_names || p.site_engineer_name, p.jr_site_engineer_names || '', p.crm_name]))}
               className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
             <button onClick={() => {
               setEditingPO(null);
@@ -557,8 +606,9 @@ export default function Orders() {
               <div className="col-span-1 sm:col-span-2">
                 <label className="label">Site Engineer(s) * <span className="text-gray-400 font-normal">(select one or more)</span></label>
                 <div className="border rounded-lg p-2 bg-white flex flex-wrap gap-1.5 min-h-[42px]">
-                  {siteEngineers.map(u => {
+                  {displayedEngineers.map(u => {
                     const selected = (form.site_engineer_ids || []).includes(u.id);
+                    const isJr = isJuniorEngineer(u);
                     return (
                       <button key={u.id} type="button"
                         onClick={() => {
@@ -567,11 +617,13 @@ export default function Orders() {
                           setForm({ ...form, site_engineer_ids: next });
                         }}
                         className={`px-2 py-1 rounded-full text-xs font-medium border transition ${selected ? 'bg-red-600 text-white border-red-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}>
-                        {selected && <span className="mr-1">✓</span>}{u.name}
+                        {selected && <span className="mr-1">✓</span>}
+                        {u.name}
+                        {isJr && <span className={`ml-1 text-[10px] font-normal ${selected ? 'text-red-100' : 'text-amber-700'}`}>(Jr.)</span>}
                       </button>
                     );
                   })}
-                  {siteEngineers.length === 0 && <p className="text-[10px] text-amber-600">No users with role "Site Engineer" yet</p>}
+                  {displayedEngineers.length === 0 && <p className="text-[10px] text-amber-600">No users with role "Site Engineer" or "Jr. Site Engineer" yet</p>}
                 </div>
                 {(form.site_engineer_ids || []).length > 0 && (
                   <p className="text-[10px] text-red-600 mt-0.5">{(form.site_engineer_ids || []).length} selected</p>

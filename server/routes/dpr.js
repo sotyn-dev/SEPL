@@ -2722,6 +2722,7 @@ router.get('/engineer-compliance', (req, res) => {
            AND (
              po.site_engineer_id = e.id
              OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
+             OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
            )
       )
     )
@@ -3557,6 +3558,7 @@ function progressHandler(req, res) {
            AND (
              po.site_engineer_id = e.id
              OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
+             OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
            )
       )
     )

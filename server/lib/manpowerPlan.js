@@ -86,7 +86,7 @@ function computeManpowerPlan(db) {
   // project's POs, classified by assigned ROLE, active users only.
   try {
     const pos = db.prepare(
-      `SELECT business_book_id, site_engineer_id, site_engineer_ids FROM purchase_orders`
+      `SELECT business_book_id, site_engineer_id, site_engineer_ids, jr_site_engineer_ids FROM purchase_orders`
     ).all();
     for (const po of pos) {
       const g = groups.get(groupByBB.get(po.business_book_id));
@@ -94,6 +94,10 @@ function computeManpowerPlan(db) {
       if (po.site_engineer_id) g.engUserIds.add(po.site_engineer_id);
       if (po.site_engineer_ids) {
         String(po.site_engineer_ids).split(',').map(s => parseInt(s, 10))
+          .filter(Boolean).forEach(i => g.engUserIds.add(i));
+      }
+      if (po.jr_site_engineer_ids) {
+        String(po.jr_site_engineer_ids).split(',').map(s => parseInt(s, 10))
           .filter(Boolean).forEach(i => g.engUserIds.add(i));
       }
     }
