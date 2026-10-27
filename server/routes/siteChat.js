@@ -116,7 +116,18 @@ function enrichGroups(db, uid, groups, { withMembers = true } = {}) {
   }
   return groups.map(g => ({ ...g, name: g.is_dm ? (dmTitle[g.id] || g.name) : g.name, dm_uid: g.is_dm ? (dmUid[g.id] || null) : null, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
 }
-const sortGroups = (groups) => groups.sort((a, b) => { const ta = a.last?.created_at || '', tb = b.last?.created_at || ''; if (ta && tb) return tb.localeCompare(ta); if (ta) return -1; if (tb) return 1; return String(a.name).localeCompare(String(b.name)); });
+const sortGroups = (groups, q = '') => groups.sort((a, b) => {
+  if (q) {
+    const dmA = a.is_dm ? 1 : 0;
+    const dmB = b.is_dm ? 1 : 0;
+    if (dmA !== dmB) return dmB - dmA; // Prioritize single user (1-on-1 direct message) first
+  }
+  const ta = a.last?.created_at || '', tb = b.last?.created_at || '';
+  if (ta && tb) return tb.localeCompare(ta);
+  if (ta) return -1;
+  if (tb) return 1;
+  return String(a.name).localeCompare(String(b.name));
+});
 
 // Default group-list page size + the max a single request may pull. The cap is
 // the ceiling for a RESET refetch too: a scrolled-deep admin's poll/socket
@@ -137,25 +148,40 @@ const GROUP_MAX = 100;
 // `last_id < ?` is safe. Phase 2's key (name) is NOT unique — group names can
 // collide — so it uses a COMPOUND (name, id) keyset; a bare `name > ?` would
 // skip the rest of a run of identically-named groups straddling a page edge.
-function pageOfGroups(db, { uid, admin, limit, q, cursor, archived }) {
+function pageOfGroups(db, { uid, admin, limit, q, cursor, archived, filter }) {
   const accessWhere = accessWhereFor(admin);
   const qWhere = q ? ' AND (g.name LIKE ? OR EXISTS (SELECT 1 FROM chat_group_members m2 WHERE m2.group_id=g.id AND m2.user_id<>? AND m2.user_name LIKE ?))' : '';
   const qParams = q ? [`%${q}%`, uid, `%${q}%`] : [];
-  const candidateSql = `SELECT g.id, g.name, g.is_dm, g.archived_at, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere}) AND ${archiveWhere(archived)}${qWhere}`;
+  const filterWhere = filter === 'people' ? ' AND g.is_dm=1' : filter === 'groups' ? ' AND g.is_dm=0' : '';
+  const candidateSql = `SELECT g.id, g.name, g.is_dm, g.archived_at, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere}) AND ${archiveWhere(archived)}${filterWhere}${qWhere}`;
   const phase = cursor?.phase === 2 ? 2 : 1;
+
+  if (q) {
+    // When searching, prioritize 1-on-1 personal DMs (is_dm = 1) over groups (is_dm = 0).
+    // Within each tier: chats with messages first (most recent message), then alphabetical.
+    const offset = cursor?.offset || 0;
+    let rows = db.prepare(`
+      SELECT * FROM (${candidateSql}) c
+       ORDER BY c.is_dm DESC, (c.last_id IS NOT NULL) DESC, c.last_id DESC, c.name ASC, c.id ASC
+       LIMIT ? OFFSET ?
+    `).all(uid, ...qParams, limit + 1, offset);
+    const hasMore = rows.length > limit;
+    if (hasMore) rows = rows.slice(0, limit);
+    return { rows, hasMore, nextCursor: hasMore ? { phase: 1, offset: offset + limit } : null };
+  }
 
   if (phase === 1) {
     const cursorWhere = cursor?.after_last_id != null ? ' AND last_id < ?' : '';
     const cursorParams = cursor?.after_last_id != null ? [cursor.after_last_id] : [];
     let rows = db.prepare(`SELECT * FROM (${candidateSql}) c WHERE last_id IS NOT NULL${cursorWhere} ORDER BY last_id DESC LIMIT ?`)
-      .all(uid, ...qParams, ...cursorParams, limit + 1);
+      .all(uid, ...cursorParams, limit + 1);
     if (rows.length > limit) {
       rows = rows.slice(0, limit);
       return { rows, hasMore: true, nextCursor: { phase: 1, after_last_id: rows[rows.length - 1].last_id } };
     }
     // Phase 1 exhausted this call — fall through into phase 2 from the start.
     const remaining = limit - rows.length;
-    const rows2 = db.prepare(`SELECT * FROM (${candidateSql}) c WHERE last_id IS NULL ORDER BY name ASC, id ASC LIMIT ?`).all(uid, ...qParams, remaining + 1);
+    const rows2 = db.prepare(`SELECT * FROM (${candidateSql}) c WHERE last_id IS NULL ORDER BY name ASC, id ASC LIMIT ?`).all(uid, remaining + 1);
     const hasMore = rows2.length > remaining;
     const appended = rows2.slice(0, remaining);
     rows = rows.concat(appended);
@@ -165,7 +191,7 @@ function pageOfGroups(db, { uid, admin, limit, q, cursor, archived }) {
   // Compound (name, id) keyset — a bare `name > ?` would drop same-named groups.
   const keyWhere = cursor?.after_name != null ? ' AND (name > ? OR (name = ? AND id > ?))' : '';
   const keyParams = cursor?.after_name != null ? [cursor.after_name, cursor.after_name, cursor.after_id ?? 0] : [];
-  const rows2 = db.prepare(`SELECT * FROM (${candidateSql}) c WHERE last_id IS NULL${keyWhere} ORDER BY name ASC, id ASC LIMIT ?`).all(uid, ...qParams, ...keyParams, limit + 1);
+  const rows2 = db.prepare(`SELECT * FROM (${candidateSql}) c WHERE last_id IS NULL${keyWhere} ORDER BY name ASC, id ASC LIMIT ?`).all(uid, ...keyParams, limit + 1);
   const hasMore = rows2.length > limit;
   const rows = rows2.slice(0, limit);
   const tail = rows[rows.length - 1];
@@ -203,21 +229,23 @@ router.get('/groups', (req, res) => {
   // ?archived=1 → the Archived view (same access rules; an admin still never
   // sees someone else's DM, because accessWhereFor already excludes them).
   const archived = req.query.archived === '1';
+  const filter = String(req.query.filter || 'all').toLowerCase();
+  const q = String(req.query.q || '').trim();
   // No ?limit → legacy full-list behaviour, unchanged (kept for any other
   // caller that still wants everything at once). Admin here IS every non-DM
   // group + own DMs, same rule as before this perf pass; only the paginated
   // branch below avoids materialising + enriching all of them on every load.
   if (req.query.limit == null) {
-    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm, g.archived_at FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(archived)} ORDER BY g.name`).all(uid);
-    return res.json(sortGroups(enrichGroups(db, uid, groups)));
+    const filterWhere = filter === 'people' ? ' AND g.is_dm=1' : filter === 'groups' ? ' AND g.is_dm=0' : '';
+    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm, g.archived_at FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(archived)}${filterWhere} ORDER BY g.name`).all(uid);
+    return res.json(sortGroups(enrichGroups(db, uid, groups), q));
   }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || GROUP_PAGE, 1), GROUP_MAX);
-  const q = String(req.query.q || '').trim();
   const cursor = req.query.phase
-    ? { phase: parseInt(req.query.phase, 10), after_last_id: req.query.after_last_id != null ? parseInt(req.query.after_last_id, 10) : null, after_name: req.query.after_name != null ? String(req.query.after_name) : null, after_id: req.query.after_id != null ? parseInt(req.query.after_id, 10) : null }
+    ? { phase: parseInt(req.query.phase, 10), after_last_id: req.query.after_last_id != null ? parseInt(req.query.after_last_id, 10) : null, after_name: req.query.after_name != null ? String(req.query.after_name) : null, after_id: req.query.after_id != null ? parseInt(req.query.after_id, 10) : null, offset: req.query.offset != null ? parseInt(req.query.offset, 10) : 0 }
     : null;
-  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor, archived });
-  const groups = sortGroups(enrichGroups(db, uid, rows)).map(({ last_id, ...g }) => g);
+  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor, archived, filter });
+  const groups = sortGroups(enrichGroups(db, uid, rows), q).map(({ last_id, ...g }) => g);
   res.json({ groups, hasMore, nextCursor });
 });
 
@@ -303,13 +331,14 @@ router.post('/dm', (req, res) => {
 // 'group' row (the existing DM) rather than twice.
 router.get('/forward-targets', (req, res) => {
   const db = getChatDb(), erp = getDb(), me = req.user.id;
+  const admin = isAdmin(req);
 
   const groups = db.prepare(`
     SELECT g.id, g.name, g.is_dm,
            (SELECT MAX(created_at) FROM chat_messages m WHERE m.group_id=g.id) AS last_at,
            (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)   AS members
       FROM chat_groups g
-     WHERE EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)`).all(me);
+     WHERE (${accessWhereFor(admin)}) AND g.archived_at IS NULL`).all(me);
 
   // The other participant of each DM, so a DM row can be de-duped against the
   // person row and can show their department/phone.

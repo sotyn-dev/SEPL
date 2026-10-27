@@ -1,7 +1,7 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, Fragment } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import ChatSharedAttachment from '../components/ChatSharedAttachment';
@@ -411,33 +411,66 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
 // Search is now server-driven (perf pass — admin-slowness fix): `groups` is
 // already the filtered/paginated page from the server, not the full list, so
 // there's no client-side .filter() left here — just render + scroll-to-load-more.
-const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, archived, hasMore, loadingMore, onLoadMore, onSelect }) {
+const GroupList = memo(function GroupList({ groups, chatFilter = 'all', q, selId, userAvatars, canCreate, archived, hasMore, loadingMore, onLoadMore, onSelect }) {
   const onScroll = (e) => {
     const el = e.currentTarget;
     if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
   };
+
+  const displayed = useMemo(() => {
+    if (chatFilter === 'people') return groups.filter(g => g.is_dm);
+    if (chatFilter === 'groups') return groups.filter(g => !g.is_dm);
+    return groups;
+  }, [groups, chatFilter]);
+
   return (
     <div className="overflow-y-auto flex-1" onScroll={onScroll}>
-      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : archived ? 'No archived groups.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
-      {/* is_dm / archived_at ride along in onSelect: the thread needs them BEFORE
-          its first fetch resolves, to hide Archive on a DM and to render an
-          archived group read-only instead of briefly offering a composer that 409s. */}
-      {groups.map(g => (
-        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name, is_dm: g.is_dm, archived_at: g.archived_at || null })}
-          className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-blue-50' : ''}`}>
-          <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
-          <div className="min-w-0 flex-1">
-            <div className="flex justify-between items-baseline gap-2">
-              <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
-              {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
-              {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
-            </div>
-          </div>
-        </button>
-      ))}
+      {displayed.length === 0 && (
+        <div className="text-center text-gray-400 text-sm py-8">
+          {q
+            ? 'No chats or people match your search.'
+            : chatFilter === 'people'
+            ? 'No personal chats found.'
+            : chatFilter === 'groups'
+            ? 'No group chats found.'
+            : archived
+            ? 'No archived groups.'
+            : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}
+        </div>
+      )}
+      {displayed.map((g, idx) => {
+        const prev = displayed[idx - 1];
+        const isFirstDm = Boolean(q && g.is_dm && (!prev || !prev.is_dm));
+        const isFirstGroup = Boolean(q && !g.is_dm && (!prev || Boolean(prev.is_dm)));
+        return (
+          <Fragment key={g.id}>
+            {isFirstDm ? (
+              <div className="bg-slate-100 text-slate-600 text-[11px] font-bold px-3 py-1 uppercase tracking-wider flex items-center gap-1.5 border-b border-t border-slate-200 sticky top-0 z-10">
+                <span>👤</span> <span>People / Direct Chats</span>
+              </div>
+            ) : null}
+            {isFirstGroup ? (
+              <div className="bg-slate-100 text-slate-600 text-[11px] font-bold px-3 py-1 uppercase tracking-wider flex items-center gap-1.5 border-b border-t border-slate-200 sticky top-0 z-10">
+                <span>👥</span> <span>Groups</span>
+              </div>
+            ) : null}
+            <button onClick={() => onSelect({ id: g.id, name: g.name, is_dm: g.is_dm, archived_at: g.archived_at || null })}
+              className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 transition-colors ${selId === g.id ? 'bg-blue-50' : ''}`}>
+              <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
+              <div className="min-w-0 flex-1">
+                <div className="flex justify-between items-baseline gap-2">
+                  <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
+                  {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.is_dm ? 'Direct message' : `${g.members} member${g.members === 1 ? '' : 's'}`}</span>}</div>
+                  {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
+                </div>
+              </div>
+            </button>
+          </Fragment>
+        );
+      })}
       {loadingMore && (
         <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-gray-400 select-none">
           <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-blue-600 animate-spin" /> Loading more…
@@ -460,6 +493,7 @@ export default function SiteChat() {
   const { startCall } = useCall();
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
+  const [chatFilter, setChatFilter] = useState('all'); // 'all' | 'people' | 'groups'
   const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
   const [showArchived, setShowArchived] = useState(false);  // Archived view — same list, archived_at IS NOT NULL
   const [sel, setSel] = useState(() => {
@@ -539,11 +573,13 @@ export default function SiteChat() {
   const groupsLenRef = useRef(0);               // loaded group count (sizes the reset window, same trick as msgsLenRef)
   const groupsCursorRef = useRef(null);         // server's nextCursor for "load the next page"
   const qRef = useRef('');                      // current search text, read inside loadGroups without a stale closure
+  const chatFilterRef = useRef('all');
   const searchTimerRef = useRef(null);          // debounce timer for server-side group search
   const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
   const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
   const archivedRef = useRef(false);            // current Archived-view toggle, same stale-closure reason
   const archivedMountedRef = useRef(false);
+  const filterMountedRef = useRef(false);
   const loadGroupsRef = useRef(null);           // holds loadGroups so it can re-run itself after a scope change
   const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
@@ -560,19 +596,22 @@ export default function SiteChat() {
     const requestQ = qRef.current;
     const requestMine = mineOnlyRef.current;
     const requestArchived = archivedRef.current;
+    const requestFilter = chatFilterRef.current;
     const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
     if (requestQ) params.q = requestQ;
     if (requestMine) params.mine = 1;
     if (requestArchived) params.archived = 1;
+    if (requestFilter && requestFilter !== 'all') params.filter = requestFilter;
     if (more && groupsCursorRef.current) {
       params.phase = groupsCursorRef.current.phase;
       if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
       if (groupsCursorRef.current.after_name != null) params.after_name = groupsCursorRef.current.after_name;
       if (groupsCursorRef.current.after_id != null) params.after_id = groupsCursorRef.current.after_id;
+      if (groupsCursorRef.current.offset != null) params.offset = groupsCursorRef.current.offset;
     }
     groupsLoadingRef.current = true; setLoadingGroups(true);
     return api.get('/site-chat/groups', { params }).then(r => {
-      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current || requestArchived !== archivedRef.current) return;   // a newer search/toggle superseded this response — drop it
+      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current || requestArchived !== archivedRef.current || requestFilter !== chatFilterRef.current) return;   // a newer search/toggle superseded this response — drop it
       const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
       if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
       else setGroups(incoming);
@@ -589,7 +628,8 @@ export default function SiteChat() {
       // re-reads the refs, so a burst of toggling converges instead of looping.
       const stale = qRef.current !== requestQ
         || mineOnlyRef.current !== requestMine
-        || archivedRef.current !== requestArchived;
+        || archivedRef.current !== requestArchived
+        || chatFilterRef.current !== requestFilter;
       if (stale) { groupsCursorRef.current = null; loadGroupsRef.current?.(); }
     });
   }, []);
@@ -761,6 +801,12 @@ export default function SiteChat() {
     if (!mineMountedRef.current) { mineMountedRef.current = true; return; }
     groupsCursorRef.current = null; loadGroups();
   }, [mineOnly, loadGroups]);
+  // Filter change: reset to a fresh page in the new scope.
+  useEffect(() => {
+    chatFilterRef.current = chatFilter;
+    if (!filterMountedRef.current) { filterMountedRef.current = true; return; }
+    groupsCursorRef.current = null; loadGroups();
+  }, [chatFilter, loadGroups]);
   // Archived view toggle — same shape as mineOnly: reset the cursor, refetch the
   // first page in the new scope, and drop any open thread (it belongs to the
   // other scope). Skips its own mount run so it never double-fetches.
@@ -1341,7 +1387,13 @@ export default function SiteChat() {
     const byName = (a, b) => String(a.name).localeCompare(String(b.name));
     const out = [];
     const push = (title, list) => { if (list.length) out.push({ title, rows: list }); };
-    if (fwdFilter === 'all') {
+    if (q) {
+      // When searching to forward, prioritize single users first, then groups!
+      const people = rows.filter(t => t.isDm).sort(byName);
+      const grps = rows.filter(t => !t.isDm).sort(byName);
+      push('👤 People / Direct Contacts', people);
+      push('👥 Groups', grps);
+    } else if (fwdFilter === 'all') {
       const fav = rows.filter(t => t.favorite).sort(byName);
       const rest = rows.filter(t => !t.favorite);
       const freq = rest.filter(t => t.forwardCount > 0).sort((a, b) => b.forwardCount - a.forwardCount).slice(0, 5);
@@ -1482,15 +1534,68 @@ export default function SiteChat() {
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
-          <div className="p-2 border-b">
+          <div className="p-2 border-b space-y-2">
             <div className="relative">
-              <FiSearch className="absolute left-2.5 top-3.5 text-gray-400" size={14} />
-              <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
+              <FiSearch className="absolute left-2.5 top-3 text-gray-400" size={14} />
+              <input
+                className="input pl-8 pr-7 text-xs sm:text-sm"
+                placeholder="Search chats or people…"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+              />
+              {q && (
+                <button
+                  type="button"
+                  onClick={() => setQ('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm font-bold"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
             </div>
+
+            {/* Quick Filter Tabs: All, Personal, Groups */}
+            <div className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setChatFilter('all')}
+                className={`px-2.5 py-1 rounded-full font-medium transition-colors ${
+                  chatFilter === 'all'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatFilter('people')}
+                className={`px-2.5 py-1 rounded-full font-medium transition-colors flex items-center gap-1 ${
+                  chatFilter === 'people'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span>👤 People</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatFilter('groups')}
+                className={`px-2.5 py-1 rounded-full font-medium transition-colors flex items-center gap-1 ${
+                  chatFilter === 'groups'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span>👥 Groups</span>
+              </button>
+            </div>
+
             {/* Admin-only: narrow the list (which shows ALL groups for admins) to
                 just the chats the admin is actually a member of. */}
             {isAdmin() && (
-              <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
+              <label className="flex w-fit ml-auto items-center gap-2 pt-0.5 px-1 text-xs text-gray-500 cursor-pointer select-none">
                 <span>Only chats I'm in</span>
                 <button type="button" role="switch" aria-checked={mineOnly} onClick={() => setMineOnly(v => !v)}
                   className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${mineOnly ? 'bg-[#2563eb]' : 'bg-gray-300'}`}>
@@ -1499,7 +1604,7 @@ export default function SiteChat() {
               </label>
             )}
           </div>
-          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} archived={showArchived}
+          <GroupList groups={groups} chatFilter={chatFilter} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} archived={showArchived}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
           {/* Archived switch — pinned to the FOOT of the list column, not up beside
               the search box where it read as a filter on the search and was easy to

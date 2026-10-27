@@ -7,6 +7,7 @@ function date(value) {
   return value;
 }
 function ensure(db) {
+  if (db._ra_workflow_ensured) return;
   db.exec(`CREATE TABLE IF NOT EXISTS ra_billing_rules (
     project_id INTEGER PRIMARY KEY REFERENCES business_book(id), mode TEXT NOT NULL DEFAULT 'rolling',
     amount_limit REAL, payment_days INTEGER, owner_id INTEGER REFERENCES users(id), pm_id INTEGER REFERENCES users(id), head_id INTEGER REFERENCES users(id),
@@ -22,6 +23,7 @@ function ensure(db) {
     CREATE TABLE IF NOT EXISTS ra_bill_reminders (
     bill_id INTEGER REFERENCES sales_bills(id) ON DELETE CASCADE, stage INTEGER, user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(bill_id,stage));`);
+  db._ra_workflow_ensured = true;
 }
 function rule(db,id) { ensure(db); return db.prepare('SELECT * FROM ra_billing_rules WHERE project_id=?').get(id) || {project_id:id,mode:'rolling',amount_limit:null,payment_days:null}; }
 function saveRule(db,id,b,user) {
