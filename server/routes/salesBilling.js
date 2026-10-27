@@ -92,7 +92,7 @@ function getDprSitcWorkItems(db, { salesBillId = null, dprIds = null, businessBo
       description: match?.description || x.description || '',
       qty_ordered: qty,
       qty_delivered: qty,
-      unit: (x.po_item_id && poUnitById.get(x.po_item_id)?.unit) || match?.unit || x.unit || 'nos',
+      unit: match?.unit || (x.po_item_id && poUnitById.get(x.po_item_id)?.unit) || x.unit || 'nos',
       hsn_code: match?.hsn_code || '',
       rate: fullRate,
       amount,
