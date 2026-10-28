@@ -19,6 +19,7 @@ const { logAuditEvent } = require('../middleware/audit');
 const { rosterCutoffs } = require('../lib/roster');
 const { sendEmail, isConfigured } = require('../lib/email');
 const { rupeesInWords } = require('../lib/numberToWords');
+const { isSiteEngineer } = require('../db/siteEngineerAttendanceSchema');
 
 router.use(authMiddleware);
 
@@ -678,7 +679,8 @@ function calculateForEmployee(db, settings, employee, month) {
   const startDate = `${month}-01`;
   const endDate = `${month}-${pad(totalDays)}`;
   const attRows = userId
-    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status, admin_marked, regularized_at
+    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status, admin_marked, regularized_at,
+                         ot_status, ot_rejection_reason, dpr_id, dpr_profit_loss
                   FROM attendance WHERE user_id = ? AND date BETWEEN ? AND ?`).all(userId, startDate, endDate)
     : [];
   const attByDate = {};
@@ -1014,9 +1016,18 @@ function calculateForEmployee(db, settings, employee, month) {
           dayPay = 1;
           dayLabel = 'sunday_worked';
           note = 'Sunday full day worked';
+          const isSiteEng = isSiteEngineer(db, employee.user_id);
+          const otApproved = !isSiteEng || !att || att.ot_status === 'approved' || (att.ot_status == null && !att.ot_rejection_reason);
           if (employee.ot_eligible && hours > otThreshold) {
-            dayOtHours = round2(hours - otThreshold);
-            otHours += dayOtHours;
+            if (otApproved) {
+              dayOtHours = round2(hours - otThreshold);
+              otHours += dayOtHours;
+            } else {
+              dayOtHours = 0;
+              if (att && att.ot_rejection_reason) {
+                note = (note ? note + ' | ' : '') + att.ot_rejection_reason;
+              }
+            }
           }
         } else if (hours >= minHalfHours) {
           dayPay = 0.5;
@@ -1064,9 +1075,18 @@ function calculateForEmployee(db, settings, employee, month) {
         } else {
           // 6h+ or saved by short leave
           const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
+          const isSiteEng = isSiteEngineer(db, employee.user_id);
+          const otApproved = !isSiteEng || !att || att.ot_status === 'approved' || (att.ot_status == null && !att.ot_rejection_reason);
           if (employee.ot_eligible && hours > otThreshold) {
-            dayOtHours = round2(hours - otThreshold);
-            otHours += dayOtHours;
+            if (otApproved) {
+              dayOtHours = round2(hours - otThreshold);
+              otHours += dayOtHours;
+            } else {
+              dayOtHours = 0;
+              if (att && att.ot_rejection_reason) {
+                note = (note ? note + ' | ' : '') + att.ot_rejection_reason;
+              }
+            }
           }
 
           if (veryLate && !shortLeaveSavesIt) {
@@ -1103,6 +1123,9 @@ function calculateForEmployee(db, settings, employee, month) {
         punch_out: att.punch_out_time || null,
         hours,
         ot_hours: dayOtHours,
+        ot_status: att.ot_status || undefined,
+        ot_rejection_reason: att.ot_rejection_reason || undefined,
+        dpr_id: att.dpr_id || undefined,
         note: note || undefined,
         short_leave_applied: isShortLeave,
         ...(leaveType ? { applied_leave: leaveType } : {}),
@@ -1197,6 +1220,23 @@ function calculateForEmployee(db, settings, employee, month) {
   ]);
   for (const b of breakdown) {
     if (b.day !== 'Sun' || !SUN_WORK_LABELS.has(b.label) || !(b.pay > 0)) continue;
+    const attRow = attByDate[b.date];
+    const isSiteEng = isSiteEngineer(db, employee.user_id);
+    const sundayBonusAllowed = !isSiteEng || !attRow || attRow.ot_status === 'approved' || (attRow.ot_status == null && !attRow.ot_rejection_reason);
+
+    if (!sundayBonusAllowed) {
+      // Misuse of Sunday double attendance disallowed (TSK-1020)
+      b.sunday_worked = false;
+      b.sunday_bonus = 0;
+      b.label = attRow?.ot_status === 'pending_pm' ? 'sunday_pending_pm' : 'sunday_bonus_disallowed';
+      if (attRow && attRow.ot_rejection_reason) {
+        b.note = attRow.ot_rejection_reason;
+      } else {
+        b.note = 'Sunday double attendance disallowed: Mandatory profitable DPR not filed';
+      }
+      continue;
+    }
+
     sundayWorked += 1;
     sundayWorkedPay += b.pay;
     b.sunday_worked = true;

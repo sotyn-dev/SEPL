@@ -3106,6 +3106,20 @@ function initializeDatabase() {
     console.warn('[collection_engine] migrations skipped (non-fatal):', e.message);
   }
 
+  try {
+    const { runFinalAccountRetentionMigrations } = require('./finalAccountRetentionSchema');
+    runFinalAccountRetentionMigrations(db);
+  } catch (e) {
+    console.warn('[final_account_retention] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runSiteEngineerAttendanceMigrations } = require('./siteEngineerAttendanceSchema');
+    runSiteEngineerAttendanceMigrations(db);
+  } catch (e) {
+    console.warn('[site_engineer_attendance] migrations skipped (non-fatal):', e.message);
+  }
+
   require('../lib/scoreTemplateAssignments').initialize(db);
 
   // Safe schema migrations for columns added after initial release

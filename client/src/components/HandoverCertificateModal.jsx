@@ -7,10 +7,12 @@ import toast from 'react-hot-toast';
 import Modal from './Modal';
 import { FiCheckCircle, FiPrinter, FiShield, FiCalendar, FiClock, FiDollarSign } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
+import FinalAccountRetentionModal from './FinalAccountRetentionModal';
 
 export default function HandoverCertificateModal({ cert, onClose, onSigned }) {
   const [signing, setSigning] = useState(false);
   const [signedDate, setSignedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [showSop17Modal, setShowSop17Modal] = useState(false);
 
   if (!cert) return null;
 
@@ -189,12 +191,32 @@ export default function HandoverCertificateModal({ cert, onClose, onSigned }) {
                 <FiCheckCircle size={14} /> {signing ? 'Signing…' : 'Sign & Complete Handover (S6)'}
               </button>
             )}
+            {cert.site_id && (
+              <button
+                type="button"
+                onClick={() => setShowSop17Modal(true)}
+                className="btn btn-primary text-sm flex items-center gap-1.5 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0"
+              >
+                <FiDollarSign size={14} /> SOP-17 Final Account &amp; Retention
+              </button>
+            )}
             <button type="button" onClick={onClose} className="btn btn-secondary text-sm">
               Close
             </button>
           </div>
         </div>
       </div>
+
+      {showSop17Modal && cert.site_id && (
+        <FinalAccountRetentionModal
+          siteId={cert.site_id}
+          certId={cert.id}
+          onClose={() => setShowSop17Modal(false)}
+          onUpdated={() => {
+            if (onSigned) onSigned();
+          }}
+        />
+      )}
     </Modal>
   );
 }

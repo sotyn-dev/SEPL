@@ -448,10 +448,31 @@ export default function Attendance() {
     try {
       const loc = await getLocation();
       const res = await api.post('/attendance/punch-out', { ...loc, address, photo });
-      toast.success(res.data.message);
+      if (res.data.ot_status === 'clamped_no_dpr' || res.data.ot_status === 'rejected_loss' || res.data.ot_status === 'rejected_no_dpr') {
+        toast.error(res.data.message, { duration: 6000 });
+      } else if (res.data.ot_status === 'pending_pm') {
+        toast(res.data.message, { icon: '⏳', duration: 5000 });
+      } else {
+        toast.success(res.data.message);
+      }
       setPhoto(null); load();
     } catch (err) { toast.error(typeof err === 'string' ? err : err.response?.data?.error || 'Failed'); }
     setLoading(false);
+  };
+
+  const handleApproveOtException = async (attendanceId, approved) => {
+    try {
+      const res = await api.post('/attendance/approve-ot-exception', {
+        attendance_id: attendanceId,
+        approved,
+        remarks: approved ? 'PM Approved Exception' : 'Rejected by PM'
+      });
+      toast.success(res.data.message);
+      load();
+      if (seeAll && selectedUserId) loadUserMuster();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update OT exception');
+    }
   };
 
   const now = new Date();
@@ -1627,6 +1648,11 @@ export default function Attendance() {
                                   {r.leave ? `Leave: ${r.leave.leave_type}${r.leave.reason ? ` (${r.leave.reason})` : ''}` : isHol ? `Holiday: ${r.holiday_name || 'Declared'}` : isSun ? 'Weekly Off' : isAbs ? 'Unmarked Absence' : '—'}
                                 </div>
                               )}
+                              {r.ot_rejection_reason && (
+                                <div className="text-[11px] text-amber-800 bg-amber-50/80 p-1 rounded border border-amber-200 mt-1">
+                                  <b>Note:</b> {r.ot_rejection_reason}
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-2 py-2 text-center">
@@ -1639,6 +1665,24 @@ export default function Attendance() {
                               {r.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={r.holiday_name}>Holiday ({r.holiday_name || 'Declared'})</span>}
                               {r.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
                               {r.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                              {r.ot_status === 'approved' && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      title={r.dpr_profit_loss != null ? `DPR #${r.dpr_id || ''} Profit ₹${r.dpr_profit_loss}` : 'Overtime Approved'}>
+                                  ✓ OT/Sun Approved
+                                </span>
+                              )}
+                              {r.ot_status === 'pending_pm' && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-300"
+                                      title={r.ot_rejection_reason || 'Pending PM Exception Approval'}>
+                                  ⏳ Pending PM Approval
+                                </span>
+                              )}
+                              {(r.ot_status === 'rejected_loss' || r.ot_status === 'rejected_no_dpr' || r.ot_status === 'clamped_no_dpr') && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
+                                      title={r.ot_rejection_reason || 'OT / Sunday Double Pay Disallowed'}>
+                                  ✕ {r.ot_status === 'clamped_no_dpr' ? 'Clamped (No DPR)' : 'OT/Sun Disallowed'}
+                                </span>
+                              )}
                               {(r.short_leave || r.leave?.leave_type === 'short_leave') && (
                                 <span
                                   className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 shadow-xs"
@@ -1978,29 +2022,54 @@ export default function Attendance() {
                                 {d.total_hours != null ? `${d.total_hours}h` : '—'}
                               </td>
                               <td className="px-2 py-2 text-xs text-gray-700">
-                                {d.site_name || (d.leave ? `Leave: ${d.leave.leave_type}` : d.holiday_name ? `Holiday: ${d.holiday_name}` : isSun ? 'Weekly Off' : '—')}
+                                <div>{d.site_name || (d.leave ? `Leave: ${d.leave.leave_type}` : d.holiday_name ? `Holiday: ${d.holiday_name}` : isSun ? 'Weekly Off' : '—')}</div>
+                                {d.ot_rejection_reason && (
+                                  <div className="text-[10px] text-amber-800 bg-amber-50 p-1 rounded border border-amber-200 mt-1">
+                                    <b>Note:</b> {d.ot_rejection_reason}
+                                  </div>
+                                )}
                               </td>
                               <td className="px-2 py-2 text-center">
-                                {d.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
-                                {d.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({d.late_minutes}m)</span>}
-                                {d.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
-                                {d.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({d.leave?.leave_type || 'Approved'})</span>}
-                                {d.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
-                                {d.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={d.holiday_name}>Holiday ({d.holiday_name || 'Declared'})</span>}
-                                {d.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
-                                {d.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
-                                {d.regularized_at && (
-                                  <span
-                                    className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 cursor-help"
-                                    title={
-                                      d.regularized_by_name
-                                        ? `Regularized by ${d.regularized_by_name}${d.remarks ? ` — ${d.remarks}` : ''}`
-                                        : (d.remarks ? `Regularized: ${d.remarks}` : 'Regularized with admin approval')
-                                    }
-                                  >
-                                    REG
-                                  </span>
-                                )}
+                                <div className="flex flex-col items-center gap-1">
+                                  {d.status === 'present' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Present</span>}
+                                  {d.status === 'late' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Late ({d.late_minutes}m)</span>}
+                                  {d.status === 'half_day' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800">Half Day</span>}
+                                  {d.status === 'on_leave' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-800">Leave ({d.leave?.leave_type || 'Approved'})</span>}
+                                  {d.status === 'weekend' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700">Week-Off</span>}
+                                  {d.status === 'holiday' && <span className="px-2 py-0.5 rounded text-xs font-semibold bg-cyan-100 text-cyan-800" title={d.holiday_name}>Holiday ({d.holiday_name || 'Declared'})</span>}
+                                  {d.status === 'absent' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 border border-red-200">Absent</span>}
+                                  {d.status === 'future' && <span className="px-2 py-0.5 rounded text-xs text-gray-400 bg-gray-100">Upcoming</span>}
+                                  {d.ot_status === 'approved' && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                          title={d.dpr_profit_loss != null ? `DPR #${d.dpr_id || ''} Profit ₹${d.dpr_profit_loss}` : 'Overtime Approved'}>
+                                      ✓ OT/Sun Approved
+                                    </span>
+                                  )}
+                                  {d.ot_status === 'pending_pm' && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-300"
+                                          title={d.ot_rejection_reason || 'Pending PM Exception Approval'}>
+                                      ⏳ Pending PM Approval
+                                    </span>
+                                  )}
+                                  {(d.ot_status === 'rejected_loss' || d.ot_status === 'rejected_no_dpr' || d.ot_status === 'clamped_no_dpr') && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
+                                          title={d.ot_rejection_reason || 'OT / Sunday Double Pay Disallowed'}>
+                                      ✕ {d.ot_status === 'clamped_no_dpr' ? 'Clamped (No DPR)' : 'OT/Sun Disallowed'}
+                                    </span>
+                                  )}
+                                  {d.regularized_at && (
+                                    <span
+                                      className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 cursor-help"
+                                      title={
+                                        d.regularized_by_name
+                                          ? `Regularized by ${d.regularized_by_name}${d.remarks ? ` — ${d.remarks}` : ''}`
+                                          : (d.remarks ? `Regularized: ${d.remarks}` : 'Regularized with admin approval')
+                                      }
+                                    >
+                                      REG
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-2 py-2">
                                 <div className="flex gap-1 justify-center items-center">
@@ -2081,6 +2150,26 @@ export default function Attendance() {
                                     Edit
                                   </button>
                                 ) : null}
+                                {d.ot_status === 'pending_pm' && (
+                                  <div className="flex gap-1 justify-end mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApproveOtException(d.attendance_id, true)}
+                                      className="btn btn-secondary text-[10px] py-0.5 px-1.5 text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                                      title="Approve PM Exception for OT / Sunday Double Pay"
+                                    >
+                                      ✓ Approve OT
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApproveOtException(d.attendance_id, false)}
+                                      className="btn btn-secondary text-[10px] py-0.5 px-1.5 text-rose-700 border-rose-300 hover:bg-rose-50"
+                                      title="Reject PM Exception"
+                                    >
+                                      ✕ Reject
+                                    </button>
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           );
