@@ -3284,6 +3284,8 @@ function initializeDatabase() {
     ['purchase_orders', 'welder_ids TEXT'],
     ['purchase_orders', 'helper_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
+    ['purchase_orders', 'overheads_amount REAL DEFAULT 0'],
+    ['purchase_orders', 'overheads_pct REAL DEFAULT 5'],
     // EA's manual followup note for the MD on a delegation (mam 2026-06-17) —
     // informational only, does not affect task status.
     ['delegations', 'followup_remarks TEXT'],

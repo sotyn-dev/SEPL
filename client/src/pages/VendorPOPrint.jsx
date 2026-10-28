@@ -7,7 +7,7 @@
 // the PDF generation, no server-side library needed.
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import api from '../api';
 import { FiPrinter, FiArrowLeft, FiMessageCircle } from 'react-icons/fi';
 
@@ -87,13 +87,15 @@ const TERMS = [
 
 export default function VendorPOPrint() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
-  // TSK-0378 / TSK-0943: Attached Rate Comparison Statement with Moglix/IndiaMart data for MD physical signature
+  // TSK-0378 / TSK-0943 / TK-01500: Clean PO for vendor by default (Moglix comparison NOT attached).
+  // Only included when explicitly checked or requested via ?comparison=1 for MD physical signature.
   const [compData, setCompData] = useState(null);
-  const [includeComparison, setIncludeComparison] = useState(true);
-  const [onlyComparison, setOnlyComparison] = useState(false);
+  const [includeComparison, setIncludeComparison] = useState(() => searchParams.get('comparison') === '1' || searchParams.get('audit') === '1');
+  const [onlyComparison, setOnlyComparison] = useState(() => searchParams.get('only_comparison') === '1');
 
   useEffect(() => {
     api.get(`/procurement/vendor-po/${id}/print`)
@@ -206,37 +208,39 @@ export default function VendorPOPrint() {
           <div className="flex items-center gap-2 flex-wrap">
             {compData && (
               <>
-                <label className="flex items-center gap-1.5 text-xs text-gray-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded border border-amber-300 cursor-pointer select-none">
+                <label className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border cursor-pointer select-none transition-colors ${includeComparison ? 'bg-amber-100 border-amber-400 text-amber-900 font-bold' : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'}`}>
                   <input
                     type="checkbox"
                     checked={includeComparison}
                     onChange={e => {
                       setIncludeComparison(e.target.checked);
-                      if (onlyComparison) setOnlyComparison(false);
+                      if (onlyComparison && !e.target.checked) setOnlyComparison(false);
                     }}
                     className="rounded text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="font-semibold text-gray-900">Attach Comparison Sheet (for Signature)</span>
+                  <span>Attach Moglix Comparison Sheet (Internal Audit Only)</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !onlyComparison;
-                    setOnlyComparison(next);
-                    if (next) setIncludeComparison(true);
-                  }}
-                  className={`btn text-xs flex items-center gap-1.5 ${onlyComparison ? 'btn-primary font-bold' : 'btn-secondary'}`}
-                  title="Toggle view to print only the Comparison Sheet"
-                >
-                  {onlyComparison ? 'Show Full PO + Sheet' : 'Comparison Sheet Only'}
-                </button>
+                {includeComparison && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !onlyComparison;
+                      setOnlyComparison(next);
+                      if (next) setIncludeComparison(true);
+                    }}
+                    className={`btn text-xs flex items-center gap-1.5 ${onlyComparison ? 'btn-primary font-bold' : 'btn-secondary'}`}
+                    title="Toggle view to print only the Comparison Sheet"
+                  >
+                    {onlyComparison ? 'Show Full PO + Sheet' : 'Comparison Sheet Only'}
+                  </button>
+                )}
               </>
             )}
             <button onClick={sharePO} className="btn btn-success flex items-center gap-2" title="Share via WhatsApp">
               <FiMessageCircle size={14} /> WhatsApp
             </button>
             <button onClick={() => window.print()} className="btn btn-primary flex items-center gap-2 font-bold shadow">
-              <FiPrinter size={14} /> Print / Save as PDF
+              <FiPrinter size={14} /> {includeComparison ? 'Print PO + Comparison' : 'Print Clean PO (for Vendor)'}
             </button>
           </div>
         </div>

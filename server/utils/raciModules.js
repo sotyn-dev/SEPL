@@ -288,8 +288,8 @@ const MODULE_DEFS = {
     // separate Vendor-PO approval — unrelated to the indent's L2.
     steps: [
       { key: 'raised', label: 'Indent Raised' },
-      { key: 'l1', label: 'Approval' },
       { key: 'crm', label: 'CRM Approval (billable)' },
+      { key: 'l1', label: 'Approval' },
       { key: 'approved', label: 'Indent Final Approval' },
       { key: 'rates', label: 'All Item Rates Finalized' },
       { key: 'po_l1', label: 'PO L1 Approval' },
@@ -317,6 +317,7 @@ const MODULE_DEFS = {
       return safeAll(db, `
         SELECT i.id, i.indent_number, i.site_name, i.created_at, i.created_by,
                i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status, i.l1_status,
+               i.approval_policy, i.crm_status, i.crm_by,
                (SELECT MIN(vp.po_l1_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l1_at,
                (SELECT MIN(vp.po_l2_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l2_at,
                (SELECT MIN(COALESCE(vp.payment_cleared_at,
@@ -354,6 +355,10 @@ const MODULE_DEFS = {
           lines.filter(l => ids.has(l.vendor_po_id)), rates.filter(v => itemIds.has(v.indent_item_id)),
           notes.filter(n => ids.has(n.vendor_po_id) || n.indent_id === r.id), bills.filter(b => ids.has(b.vendor_po_id))));
         const exempt = ownItems.some(i => i.source !== 'store' && +i.quantity > 0) ? [] : ['rates', 'po_l1', 'po_l2', 'payment', 'purchase_bill'];
+        // TK-01498: Indents not requiring CRM approval must exempt 'crm' so standard indents never sit as pending on CRM
+        if ((r.crm_status === 'n/a' && !r.crm_at) || (r.approval_policy && r.approval_policy !== 'crm_two_level' && !r.crm_at)) {
+          exempt.push('crm');
+        }
         // A rejected/cancelled indent is TERMINAL — nothing is waiting on
         // anyone (audit 2026-08-17: rejected indents sat "pending" at their
         // next step forever, inflating RACI Planned; tally_bills already
@@ -362,11 +367,13 @@ const MODULE_DEFS = {
         return {
           id: r.id, title: r.indent_number || ('IND #' + r.id), subtitle: r.site_name || '—',
           created_at: r.created_at, owner_id: r.created_by || null, stamps,
+          crm_by: r.crm_by || null, crm_status: r.crm_status || 'n/a', approval_policy: r.approval_policy || null,
           // Partial work at a later purchase stage must not hide an earlier gap.
           current_key: dead ? null : (() => {
             const purchaseSteps = activeSteps(db, 'indent_to_dispatch').filter(s => !exempt.includes(s.key) && ['rates', 'po_l1', 'po_l2', 'payment', 'dispatch', 'received', 'purchase_bill'].includes(s.key));
             if (stamps.approved) return purchaseSteps.find(s => !stamps[s.key])?.key || null;
-            return firstOpen(steps.filter(s => !purchaseSteps.includes(s)), stamps);
+            const approvalSteps = steps.filter(s => !purchaseSteps.includes(s) && !exempt.includes(s.key));
+            return firstOpen(approvalSteps, stamps);
           })(),
           native_completion: ['rates', 'po_l1', 'po_l2', 'payment', 'dispatch', 'received', 'purchase_bill'],
           exempt_steps: exempt,
@@ -748,11 +755,18 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
     // native doer (mam 2026-06-27: "show only where her name … from raci").
     // Both RESPONSIBLE and ACCOUNTABLE count (mam 2026-08-28: "if i used
     // accountable then show here") — roleOf returns 'R' / 'A' / null.
-    const roleOf = (cfg, m, userId) => {
+    const crmApproverIds = key === 'indent_to_dispatch'
+      ? new Set(safeAll(db, `SELECT user_id FROM indent_to_dispatch_setting_users WHERE key='approval.crm.users'`).map(u => u.user_id))
+      : null;
+    const roleOf = (cfg, m, userId, sKey, rec) => {
       const rId = (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
       if (rId === userId) return 'R';
       const aId = (cfg && cfg.accountable_id) || (m && m.accountable_id) || null;
       if (aId === userId) return 'A';
+      if (key === 'indent_to_dispatch' && sKey === 'crm') {
+        if (rec && rec.crm_by && rec.crm_by === userId) return 'R';
+        if (!rId && crmApproverIds && crmApproverIds.has(userId)) return 'R';
+      }
       return null;
     };
     const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
@@ -770,7 +784,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         if (rec.exempt_steps?.includes(s.key)) continue;
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
-        const userRole = roleOf(cfg, m, userId);
+        const userRole = roleOf(cfg, m, userId, s.key, rec);
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (rec.native_completion?.includes(s.key) ? rec.stamps?.[s.key] : ((cfg && cfg.done_at) || rec.stamps?.[s.key])) || null;
         if (!stampRaw) {
@@ -863,13 +877,20 @@ function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null 
     // creator or the step's native doer (the board keeps those defaults; the
     // scorecard must not), so opening any person's card shows only the steps
     // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
+    const crmApproverIds = key === 'indent_to_dispatch'
+      ? new Set(safeAll(db, `SELECT user_id FROM indent_to_dispatch_setting_users WHERE key='approval.crm.users'`).map(u => u.user_id))
+      : null;
     // R and A both count (mam 2026-08-28) — kept in LOCKSTEP with raciUserWeek.
-    const roleOf = (cfg, m) => {
+    const roleOf = (cfg, m, sKey, rec) => {
       if (moduleKey) return 'Module';
       const rId = (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
       if (rId === userId) return 'R';
       const aId = (cfg && cfg.accountable_id) || (m && m.accountable_id) || null;
       if (aId === userId) return 'A';
+      if (key === 'indent_to_dispatch' && sKey === 'crm') {
+        if (rec && rec.crm_by && rec.crm_by === userId) return 'R';
+        if (!rId && crmApproverIds && crmApproverIds.has(userId)) return 'R';
+      }
       return null;
     };
     const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
@@ -882,7 +903,7 @@ function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null 
         if (rec.exempt_steps?.includes(s.key)) continue;
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
-        const userRole = roleOf(cfg, m);
+        const userRole = roleOf(cfg, m, s.key, rec);
         const markRole = (t) => { if (userRole && !(t.role || '').includes(userRole)) t.role = t.role ? `${t.role}+${userRole}` : userRole; };
         const stampRaw = (rec.native_completion?.includes(s.key) ? rec.stamps?.[s.key] : ((cfg && cfg.done_at) || rec.stamps?.[s.key])) || null;
         // For a historical module week, a later completion was still pending
