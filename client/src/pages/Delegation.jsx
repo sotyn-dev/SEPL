@@ -8,10 +8,29 @@ import StatusMultiSelect from '../components/StatusMultiSelect';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar, FiDownload, FiImage, FiFileText, FiPaperclip } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
+
+// Helper to parse single or multiple proof URLs from delegations
+export function parseProofUrls(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  if (typeof raw !== 'string') return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    } catch (_) {}
+  }
+  if (trimmed.includes('\n')) {
+    return trimmed.split('\n').map(s => s.trim()).filter(Boolean);
+  }
+  return [trimmed];
+}
 
 // Proof remarks are capped by WORD count (not characters) so the approver
 // gets a readable note, not an essay. Enforced again server-side.
@@ -82,10 +101,12 @@ export default function Delegation() {
   // A's upload finishes — A's photo silently lands as B's "ready to submit"
   // proof (mam 2026-08-24, reported as "sometimes wrong upload").
   const submitModalIdRef = useRef(null);
+  const proofFileInputRef = useRef(null);
+  const [isDraggingProof, setIsDraggingProof] = useState(false);
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
-  const [submitForm, setSubmitForm] = useState({ proof_url: '', proof_remarks: '', uploading: false });
+  const [submitForm, setSubmitForm] = useState({ proof_url: '', proof_urls: [], proof_remarks: '', uploading: false, uploadProgressText: '' });
   // Mam's MD (2026-05-21): "SOTYN.AI is hang" when raising task with photo.
   // Root cause was a silent 30-60s photo upload with no progress.  Track
   // a saving flag + percentage so the Save button reflects what's
@@ -321,55 +342,197 @@ export default function Delegation() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  // Upload proof file then submit
-  const uploadProof = async (file) => {
-    // The task this upload was started for. Uploads take a few seconds
-    // (compress + send) — if the user closes this modal or opens a
-    // DIFFERENT task's proof modal before it finishes, submitModalIdRef
-    // will have moved on by the time we get here, and we must NOT let this
-    // stale result land in whatever's open now.
+  const openSubmitModal = (t) => {
+    setSubmitModal(t);
+    submitModalIdRef.current = t.id;
+    const urls = parseProofUrls(t.proof_url);
+    const existingProofObjects = urls.map((url, i) => {
+      const fileName = url.split('/').pop().split(/[?#]/)[0] || `Proof ${i + 1}`;
+      const ext = fileName.split('.').pop().toLowerCase();
+      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp'].includes(ext);
+      return {
+        url,
+        name: decodeURIComponent(fileName),
+        type: isImg ? 'image/jpeg' : 'application/octet-stream',
+      };
+    });
+    setSubmitForm({
+      proof_url: urls[0] || '',
+      proof_urls: existingProofObjects,
+      proof_remarks: t.proof_remarks || '',
+      uploading: false,
+      uploadProgressText: '',
+    });
+  };
+
+  // Upload multiple proof files / photos / screenshots
+  const uploadProofs = async (filesList) => {
+    if (!filesList || !filesList.length) return;
+    const files = Array.from(filesList);
     const forId = submitModalIdRef.current;
-    setSubmitForm(s => ({ ...s, proof_url: '', proof_name: '', proof_type: '', uploading: true }));
+
+    setSubmitForm(s => ({
+      ...s,
+      uploading: true,
+      uploadProgressText: files.length > 1 ? `Uploading 1 of ${files.length}...` : 'Uploading proof...',
+    }));
     setProofPct(0);
-    try {
-      // Compress phone photos before sending — same fix as the
-      // task-create flow.  Keeps the proof upload responsive even
-      // on a 4G connection.
-      const compressed = await compressImage(file);
-      const fd = new FormData(); fd.append('file', compressed);
-      const res = await api.post('/upload', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (ev) => {
-          if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
-        },
-      });
+
+    const newlyUploaded = [];
+    let successCount = 0;
+
+    for (let i = 0; i < files.length; i++) {
       if (submitModalIdRef.current !== forId) {
-        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        toast('Upload cancelled: modal changed', { icon: '⚠️' });
         return;
       }
-      setSubmitForm(s => ({ ...s, proof_url: res.data.url, proof_name: file.name, proof_type: compressed.type, uploading: false }));
-      setProofPct(100);
-      toast.success('File uploaded — click Submit');
-    } catch {
-      if (submitModalIdRef.current !== forId) return;
-      toast.error('Upload failed');
-      setSubmitForm(s => ({ ...s, uploading: false }));
-    } finally {
-      setProofPct(0);
+      const file = files[i];
+      setSubmitForm(s => ({
+        ...s,
+        uploadProgressText: files.length > 1
+          ? `Uploading ${i + 1} of ${files.length}: ${file.name || 'file'}...`
+          : `Uploading ${file.name || 'file'}...`,
+      }));
+
+      try {
+        const compressed = await compressImage(file);
+        const fd = new FormData();
+        fd.append('file', compressed, file.name || 'proof.jpg');
+        const res = await api.post('/upload', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (ev) => {
+            if (ev.total) {
+              const filePct = ev.loaded / ev.total;
+              const overallPct = Math.round(((i + filePct) / files.length) * 100);
+              setProofPct(overallPct);
+            }
+          },
+        });
+
+        if (res.data?.url) {
+          const item = {
+            url: res.data.url,
+            name: file.name || `Proof ${i + 1}`,
+            type: compressed.type || file.type || 'image/jpeg',
+            size: file.size,
+          };
+          newlyUploaded.push(item);
+          successCount++;
+        }
+      } catch (err) {
+        console.error('Upload error for file', file.name, err);
+        toast.error(`Failed to upload ${file.name || 'file'}`);
+      }
+    }
+
+    if (submitModalIdRef.current !== forId) return;
+
+    setSubmitForm(s => {
+      const combined = [...(s.proof_urls || []), ...newlyUploaded];
+      return {
+        ...s,
+        proof_urls: combined,
+        proof_url: combined.length ? combined[0].url : '',
+        uploading: false,
+        uploadProgressText: '',
+      };
+    });
+    setProofPct(100);
+    setTimeout(() => setProofPct(0), 800);
+
+    if (successCount > 0) {
+      toast.success(successCount === 1 ? 'Proof uploaded — click Submit' : `${successCount} proofs uploaded — click Submit`);
     }
   };
+  const uploadProof = uploadProofs; // alias for backward-compatibility
+
+  const removeProof = (indexToRemove) => {
+    setSubmitForm(s => {
+      const updated = (s.proof_urls || []).filter((_, idx) => idx !== indexToRemove);
+      return {
+        ...s,
+        proof_urls: updated,
+        proof_url: updated.length ? updated[0].url : '',
+      };
+    });
+  };
+
+  // Support Ctrl+V paste of screenshots directly when Submit Proof modal is open
+  useEffect(() => {
+    if (!submitModal) return;
+
+    const handlePaste = (e) => {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (!clipboardData) return;
+
+      const items = clipboardData.items;
+      if (!items || !items.length) return;
+
+      const imageFiles = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) {
+            const ext = (item.type.split('/')[1] || 'png').replace('+xml', '');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
+            const pastedFile = new File([blob], `pasted-proof-${timestamp}.${ext}`, { type: item.type });
+            imageFiles.push(pastedFile);
+          }
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        toast.success(`Pasting ${imageFiles.length} screenshot${imageFiles.length > 1 ? 's' : ''}...`);
+        uploadProofs(imageFiles);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [submitModal]);
+
+  const handleProofDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingProof(true);
+  };
+  const handleProofDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingProof(false);
+  };
+  const handleProofDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingProof(false);
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      uploadProofs(e.dataTransfer.files);
+    }
+  };
+
   const remarkWords = countWords(submitForm.proof_remarks);
   const submitProof = async (e) => {
     e.preventDefault();
-    if (!submitForm.proof_url) return toast.error('Please upload proof first');
+    const urls = (submitForm.proof_urls || []).map(p => p.url).filter(Boolean);
+    if (!urls.length && !submitForm.proof_url) {
+      return toast.error('Please upload at least one proof file or paste a screenshot');
+    }
     if (remarkWords > REMARKS_WORD_LIMIT) return toast.error(`Remarks cannot exceed ${REMARKS_WORD_LIMIT} words`);
+
+    const finalUrls = urls.length ? urls : [submitForm.proof_url];
     try {
       await api.post(`/delegations/${submitModal.id}/submit`, {
-        proof_url: submitForm.proof_url,
+        proof_url: finalUrls.length === 1 ? finalUrls[0] : JSON.stringify(finalUrls),
+        proof_urls: finalUrls,
         proof_remarks: submitForm.proof_remarks,
       });
-      toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
+      toast.success(finalUrls.length > 1 ? `${finalUrls.length} proofs submitted — awaiting approval` : 'Proof submitted — awaiting approval');
+      setSubmitModal(null);
+      submitModalIdRef.current = null;
+      setSubmitForm({ proof_url: '', proof_urls: [], proof_remarks: '', uploading: false, uploadProgressText: '' });
+      load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -529,7 +692,7 @@ export default function Delegation() {
                 +t.extension_count || 0,
                 t.requested_due_date || '',
                 t.extension_reason || '',
-                t.proof_url || '',
+                parseProofUrls(t.proof_url).join(' ; ') || '',
                 t.followup_remarks || '',
               ]));
           }}
@@ -783,9 +946,33 @@ export default function Delegation() {
                   <td>{statusBadge(t.status)}</td>
                   <td className="max-w-[200px] align-top">
                     <div className="flex flex-col items-start gap-1">
-                      {t.proof_url && (
-                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={11} className="shrink-0" /> View</a>
-                      )}
+                      {(() => {
+                        const proofList = parseProofUrls(t.proof_url);
+                        if (!proofList.length) return null;
+                        if (proofList.length === 1) {
+                          return (
+                            <a href={proofList[0]} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap">
+                              <FiExternalLink size={11} className="shrink-0" /> View
+                            </a>
+                          );
+                        }
+                        return (
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {proofList.map((url, idx) => (
+                              <a
+                                key={idx}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-red-600 text-[11px] bg-red-50 hover:bg-red-100 border border-red-200 px-1.5 py-0.5 rounded flex items-center gap-1 whitespace-nowrap"
+                                title={`View proof ${idx + 1}`}
+                              >
+                                <FiExternalLink size={10} className="shrink-0" /> Proof {idx + 1}
+                              </a>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       {t.proof_remarks && (
                         <span
                           onClick={() => setRemarksOpen(p => ({ ...p, [t.id]: !p[t.id] }))}
@@ -794,7 +981,7 @@ export default function Delegation() {
                         >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                        <button onClick={() => openSubmitModal(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
                           <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -975,9 +1162,24 @@ export default function Delegation() {
                 <div className="text-[11px] text-gray-600 italic mb-2">{t.proof_remarks}</div>
               )}
               <div className="flex flex-wrap gap-1.5">
-                {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
+                {(() => {
+                  const proofList = parseProofUrls(t.proof_url);
+                  if (!proofList.length) return null;
+                  if (proofList.length === 1) {
+                    return (
+                      <a href={proofList[0]} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1">
+                        <FiExternalLink size={11} /> Proof
+                      </a>
+                    );
+                  }
+                  return proofList.map((url, idx) => (
+                    <a key={idx} href={url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1">
+                      <FiExternalLink size={11} /> Proof {idx + 1}
+                    </a>
+                  ));
+                })()}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => openSubmitModal(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1200,42 +1402,124 @@ export default function Delegation() {
           )}
           <div>
             <label className="label">Upload proof</label>
-            {/* MD's request (mam, 2026-05-21): "Give option of click
-                photo in attachment".  Camera-first button on the left,
-                file-picker fallback on the right. */}
-            <div className="grid grid-cols-2 gap-2 mb-1">
+            <div className="grid grid-cols-2 gap-2 mb-2">
               <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-blue-200 hover:border-blue-400 bg-blue-50/60'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
                 <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
-                <input type="file" accept="image/*" capture="environment" disabled={submitForm.uploading}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  disabled={submitForm.uploading}
                   className="hidden"
-                  onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f) uploadProof(f); }} />
+                  onChange={e => {
+                    const files = e.target.files;
+                    e.target.value = '';
+                    if (files && files.length) uploadProofs(files);
+                  }}
+                />
               </label>
               <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-gray-200 hover:border-gray-400 bg-gray-50'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
-                <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
-                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
+                <span className="text-gray-700 font-semibold text-sm">📂 Choose File(s)</span>
+                <input
+                  ref={proofFileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.doc,.docx,.xls,.xlsx"
+                  disabled={submitForm.uploading}
                   className="hidden"
-                  onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f) uploadProof(f); }} />
+                  onChange={e => {
+                    const files = e.target.files;
+                    e.target.value = '';
+                    if (files && files.length) uploadProofs(files);
+                  }}
+                />
               </label>
             </div>
-            {/* Upload progress bar — replaces the silent "Uploading…"
-                line with a visible %.  Mam's MD reported phantom
-                hangs because there was no feedback on a 30-60s upload
-                of an uncompressed phone photo. */}
+
+            {/* Paste & Drop Zone */}
+            <div
+              onDragOver={handleProofDragOver}
+              onDragLeave={handleProofDragLeave}
+              onDrop={handleProofDrop}
+              onClick={() => proofFileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-lg p-3 text-center transition cursor-pointer select-none ${
+                isDraggingProof
+                  ? 'border-blue-500 bg-blue-50 scale-[1.01]'
+                  : 'border-gray-300 hover:border-blue-400 bg-gray-50/70 hover:bg-blue-50/30'
+              }`}
+            >
+              <div className="flex flex-col items-center justify-center gap-1 text-xs text-gray-600">
+                <div className="flex items-center gap-1.5 font-medium text-gray-700">
+                  <FiPaperclip className="text-blue-600 shrink-0" size={15} />
+                  <span>Click to choose multiple files, or drag & drop files here</span>
+                </div>
+                <div className="text-[11px] text-gray-500 flex items-center justify-center gap-1.5 flex-wrap mt-0.5">
+                  <span className="inline-flex items-center gap-1 text-blue-700 font-medium">
+                    📋 Paste screenshot:
+                  </span>
+                  <span>press</span>
+                  <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-white border border-gray-300 rounded shadow-2xs font-semibold text-gray-800">Ctrl + V</kbd>
+                  <span>anywhere</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Upload progress bar */}
             {submitForm.uploading && (
-              <div className="mt-1.5">
-                <div className="flex justify-between text-[10px] text-blue-700 mb-0.5">
-                  <span>Uploading proof…</span>
+              <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex justify-between text-xs text-blue-700 font-medium mb-1">
+                  <span>{submitForm.uploadProgressText || 'Uploading proof…'}</span>
                   <span className="font-mono">{proofPct}%</span>
                 </div>
                 <div className="h-1.5 bg-blue-100 rounded overflow-hidden">
-                  <div className="h-full bg-blue-600 transition-all" style={{ width: `${proofPct}%` }} />
+                  <div className="h-full bg-blue-600 transition-all duration-200" style={{ width: `${proofPct}%` }} />
                 </div>
               </div>
             )}
-            <ProofPreview key={submitForm.proof_url} url={submitForm.uploading ? null : submitForm.proof_url} name={submitForm.proof_name} type={submitForm.proof_type} />
+
+            {/* Attached proofs gallery */}
+            {submitForm.proof_urls && submitForm.proof_urls.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold text-gray-700">
+                  <span>Attached Proofs ({submitForm.proof_urls.length})</span>
+                  <span className="text-[10px] font-normal text-gray-500">Click × to remove</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto p-1 bg-gray-50/80 rounded-lg border border-gray-200">
+                  {submitForm.proof_urls.map((p, idx) => {
+                    const ext = (p.name || p.url).split(/[?#]/)[0].split('.').pop().toLowerCase();
+                    const isImg = p.type?.startsWith('image/') || ['jpg','jpeg','png','gif','webp','avif','bmp'].includes(ext);
+                    return (
+                      <div key={p.url + idx} className="flex items-center gap-2 p-2 bg-white rounded border border-gray-200 shadow-2xs relative">
+                        <div className="w-11 h-11 shrink-0 rounded overflow-hidden bg-gray-100 flex items-center justify-center border border-gray-200">
+                          {isImg ? (
+                            <img src={p.url} alt={p.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <FiFileText size={20} className="text-blue-500" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0 pr-5">
+                          <p className="text-xs font-medium text-gray-800 truncate" title={p.name}>{p.name || `Proof ${idx + 1}`}</p>
+                          <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
+                            View <FiExternalLink size={10} />
+                          </a>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeProof(idx)}
+                          disabled={submitForm.uploading}
+                          className="absolute top-1.5 right-1.5 p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
+                          title="Remove proof"
+                        >
+                          <FiX size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          {/* Remarks travel with the proof so the approver reads what was
-              actually done instead of guessing from the file alone. */}
+          {/* Remarks */}
           <div>
             <label className="label">Remarks <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
             <textarea
@@ -1251,7 +1535,13 @@ export default function Delegation() {
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
+            <button
+              type="submit"
+              disabled={(!submitForm.proof_urls?.length && !submitForm.proof_url) || submitForm.uploading}
+              className="btn btn-primary disabled:opacity-50"
+            >
+              {submitForm.proof_urls?.length > 1 ? `Submit for Approval (${submitForm.proof_urls.length})` : 'Submit for Approval'}
+            </button>
           </div>
         </form>
       </Modal>

@@ -514,7 +514,7 @@ router.post('/:id/reject-extension', (req, res) => {
 // behalf of the assignee too — mam asked for this so her EA can upload
 // proof for team members who send photos/PDFs over WhatsApp.
 router.post('/:id/submit', (req, res) => {
-  const { proof_url, proof_remarks } = req.body;
+  const { proof_url, proof_remarks, proof_urls } = req.body;
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -522,7 +522,13 @@ router.post('/:id/submit', (req, res) => {
   if (!canSubmit) {
     return res.status(403).json({ error: 'Only the assignee, admin or EA can submit proof' });
   }
-  if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
+  let finalProofUrl = proof_url;
+  if (Array.isArray(proof_urls) && proof_urls.length > 0) {
+    finalProofUrl = proof_urls.length === 1 ? proof_urls[0] : JSON.stringify(proof_urls);
+  } else if (Array.isArray(proof_url)) {
+    finalProofUrl = proof_url.length === 1 ? proof_url[0] : JSON.stringify(proof_url);
+  }
+  if (!finalProofUrl) return res.status(400).json({ error: 'Proof file is required' });
   // Remarks are optional — blank stays NULL so the list doesn't show an
   // empty note. Re-submitting after a rejection overwrites the old remark.
   // The 300-WORD cap is enforced here as well as in the UI, so a stale tab
@@ -533,7 +539,7 @@ router.post('/:id/submit', (req, res) => {
   }
   db.prepare(
     `UPDATE delegations SET status='submitted', proof_url=?, proof_remarks=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
-  ).run(proof_url, remarks, req.params.id);
+  ).run(finalProofUrl, remarks, req.params.id);
   res.json({ message: 'Proof submitted, awaiting approval' });
 });
 
