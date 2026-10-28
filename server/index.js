@@ -582,6 +582,7 @@ app.use('/api/tools', require('./routes/tools'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/snags', require('./routes/snags'));
 app.use('/api/client-snag', require('./routes/clientSnag'));
+app.use('/api/final-account', require('./routes/finalAccountRetention').router);
 // Mam (2026-05-30): labour payment indents — sits in the Projects
 // sidebar group, raised against a site + sub-contractor.
 app.use('/api/labour-payment', require('./routes/labourPayment'));

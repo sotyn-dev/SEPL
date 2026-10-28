@@ -2132,6 +2132,12 @@ router.post('/', (req, res) => {
       .run(Math.round(sums.a * 100) / 100, Math.round(sums.b * 100) / 100, dayPl, dprId);
   } catch (e) { console.warn('[dpr] shift-sum recompute failed:', e.message); }
 
+  // Sync today's attendance for the site engineer if punched out before DPR submission (TK-01466, TSK-1020)
+  try {
+    const { syncAttendanceWithDpr } = require('../db/siteEngineerAttendanceSchema');
+    syncAttendanceWithDpr(db, dprId);
+  } catch (e) { console.warn('[dpr] syncAttendanceWithDpr failed:', e.message); }
+
   // Fire-and-forget: if this DPR is a loss, check whether the site now
   // has 3+ consecutive loss days and email director@securedengineers.com
   // (mam's spec). Email failures must not break the DPR save itself.

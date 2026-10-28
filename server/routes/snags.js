@@ -28,6 +28,9 @@ router.use(authMiddleware);
 // SOP-15 Handover & Snags Pipeline (Owner: Project Manager — Adarsh Kumar)
 router.use('/sop15', require('./handoverSnags'));
 
+// SOP-17 Final Account & Retention (Owner: Finance Head — Parul Goyal)
+router.use('/sop17', require('./finalAccountRetention').router);
+
 function isApprover(db, user) {
   if (user.role === 'admin') return true;
   const r = db.prepare(`

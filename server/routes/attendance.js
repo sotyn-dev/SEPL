@@ -10,6 +10,9 @@ const { getEmailConfig } = require('../lib/email');
 const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
 const { rosterCutoffs, ROSTERS } = require('../lib/roster');
 const { validCoordinates } = require('../lib/locationAvailability');
+const { isSiteEngineer, evaluateSiteEngineerDpr } = require('../db/siteEngineerAttendanceSchema');
+const { processLatePunchNotification } = require('../lib/lateAttendanceNotifier');
+const { scanAndNotifyAbsentEmployees } = require('../lib/dailyAbsenteeismNotifier');
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
@@ -302,6 +305,7 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
     SELECT a.id, a.user_id, a.date, a.status, a.punch_in_time, a.punch_out_time, a.punch_in_photo, a.punch_out_photo,
            a.total_hours, a.site_name, a.auto_punched_in, a.auto_punched_out, a.admin_marked, a.marked_by, a.remarks,
            a.proof_url, a.regularized_at, a.regularized_by, a.original_punch_in, a.original_punch_out, a.original_status,
+           a.ot_status, a.ot_rejection_reason, a.dpr_id, a.dpr_profit_loss, a.pm_approved_at,
            u_reg.name AS regularized_by_name,
            u_mark.name AS marked_by_name
       FROM attendance a
@@ -479,6 +483,11 @@ function computeUserMuster(db, userId, dateFrom, dateTo) {
       proof_url: att?.proof_url || null,
       remarks: att?.remarks || null,
       attendance_id: att?.id || null,
+      ot_status: att?.ot_status || null,
+      ot_rejection_reason: att?.ot_rejection_reason || null,
+      dpr_id: att?.dpr_id || null,
+      dpr_profit_loss: att?.dpr_profit_loss != null ? +att.dpr_profit_loss : null,
+      pm_approved_at: att?.pm_approved_at || null,
       is_holiday: isHoliday,
       short_leave: shortLeave ? {
         id: shortLeave.id,
@@ -1349,6 +1358,20 @@ router.post('/punch-in', (req, res) => {
   const r = db.prepare(`INSERT INTO attendance (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, punch_in_photo, site_name, status, punch_in_accuracy, location_verified)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(req.user.id, today, now, latitude, longitude, address, photo, matchedSite, isLate ? 'late' : 'present', accuracy || null, geo.verified);
 
+  // TK-01401: Asynchronously evaluate and dispatch late deduction notifications (WhatsApp + Email)
+  const attendanceId = r.lastInsertRowid;
+  const punchUserId = req.user.id;
+  setImmediate(() => {
+    processLatePunchNotification(db, {
+      attendanceId,
+      userId: punchUserId,
+      punchInTime: now,
+      date: today
+    }).catch(err => {
+      console.warn('[lateAttendanceNotifier] background dispatch error:', err.message);
+    });
+  });
+
   res.status(201).json({
     id: r.lastInsertRowid,
     message: isLate ? 'Punched In (Late)' : 'Punched In',
@@ -1412,12 +1435,100 @@ router.post('/punch-out', (req, res) => {
   // a real shift. Clamp so one bad row can't poison monthly/weekly sums.
   if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
   if (totalHours > 24) totalHours = 24;
+
+  // Site Engineer DPR & Overtime / Sunday Verification (TK-01466, TK-01401, TSK-1020)
+  const isSiteEng = isSiteEngineer(db, req.user.id);
+  const isSun = new Date(today + 'T12:00:00Z').getUTCDay() === 0;
+  let finalPunchOutTime = now;
+  const originalPunchOut = now;
+  let otStatus = null;
+  let dprId = null;
+  let dprProfitLoss = null;
+  let otRejectionReason = null;
+  let otMessage = null;
+
+  if (isSiteEng) {
+    const evalRes = evaluateSiteEngineerDpr(db, req.user.id, today, isSun, totalHours);
+    otStatus = evalRes.ot_status;
+    dprId = evalRes.dpr_id;
+    dprProfitLoss = evalRes.dpr_profit_loss;
+    otRejectionReason = evalRes.ot_rejection_reason;
+    otMessage = evalRes.message;
+
+    if (evalRes.shouldClampToShiftEnd) {
+      // Early shift for site engineer ends at 18:00 (6:00 PM)
+      const shiftEndIso = new Date(`${today}T18:00:00+05:30`).toISOString();
+      if (new Date(now) > new Date(shiftEndIso)) {
+        finalPunchOutTime = shiftEndIso;
+        totalHours = Math.round((new Date(shiftEndIso) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+        if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+        if (totalHours > 24) totalHours = 24;
+      }
+    }
+  }
+
   const status = totalHours < 4 ? 'half_day' : record.status;
 
-  db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=?, punch_out_accuracy=? WHERE id=?`)
-    .run(now, latitude, longitude, address, photo, totalHours, status, accuracy || null, record.id);
+  db.prepare(`UPDATE attendance SET 
+      punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, 
+      total_hours=?, status=?, punch_out_accuracy=?,
+      ot_status=?, dpr_id=?, dpr_profit_loss=?, ot_rejection_reason=?,
+      original_punch_out=COALESCE(original_punch_out, ?)
+    WHERE id=?`)
+    .run(finalPunchOutTime, latitude, longitude, address, photo, totalHours, status, accuracy || null,
+         otStatus, dprId, dprProfitLoss, otRejectionReason, originalPunchOut, record.id);
 
-  res.json({ message: `Punched Out. Total: ${totalHours} hours`, totalHours });
+  const displayMsg = otMessage 
+    ? `${otMessage} Total: ${totalHours} hours`
+    : `Punched Out. Total: ${totalHours} hours`;
+
+  res.json({ message: displayMsg, totalHours, ot_status: otStatus, ot_rejection_reason: otRejectionReason });
+});
+
+// Approve or reject PM exception for OT / Sunday double attendance (TSK-1020, TK-01466)
+router.post('/approve-ot-exception', (req, res) => {
+  const { attendance_id, approved, remarks } = req.body;
+  if (!attendance_id) return res.status(400).json({ error: 'attendance_id required' });
+
+  const uRole = String(req.user?.role || '').toLowerCase();
+  const uDept = String(req.user?.department || '').toLowerCase();
+  if (uRole !== 'admin' && !uDept.includes('management') && !uDept.includes('project') && !uDept.includes('operations')) {
+    return res.status(403).json({ error: 'Only Project Managers or Admins can approve OT exceptions' });
+  }
+
+  const db = getDb();
+  const att = db.prepare('SELECT * FROM attendance WHERE id = ?').get(attendance_id);
+  if (!att) return res.status(404).json({ error: 'Attendance record not found' });
+
+  const newStatus = approved ? 'approved' : 'rejected_by_pm';
+  const reason = approved 
+    ? `Exception Approved by ${req.user.name || 'PM'}: ${remarks || 'Approved'}`
+    : `Exception Rejected by ${req.user.name || 'PM'}: ${remarks || 'Unjustified'}`;
+
+  // If approved and was clamped, restore original punch-out if recorded
+  let restoredPunchOut = att.punch_out_time;
+  let restoredHours = att.total_hours;
+  if (approved && att.original_punch_out && att.punch_in_time) {
+    restoredPunchOut = att.original_punch_out;
+    restoredHours = Math.round((new Date(att.original_punch_out) - new Date(att.punch_in_time)) / (1000 * 60 * 60) * 100) / 100;
+  }
+
+  db.prepare(`
+    UPDATE attendance 
+    SET ot_status = ?, 
+        ot_rejection_reason = ?,
+        punch_out_time = ?,
+        total_hours = ?,
+        pm_approved_at = CURRENT_TIMESTAMP,
+        pm_approved_by = ?
+    WHERE id = ?
+  `).run(newStatus, reason, restoredPunchOut, restoredHours, req.user.id, attendance_id);
+
+  res.json({ 
+    message: approved ? 'OT / Sunday exception approved successfully' : 'OT / Sunday exception rejected', 
+    ot_status: newStatus,
+    ot_rejection_reason: reason,
+  });
 });
 
 // Live location tracking — site engineer sends location periodically.
@@ -1839,13 +1950,24 @@ function runAutoPunchCheck() {
       // Same IST-aware late check as manual punch-in.
       const isLate = isPunchLate(db, now);
       try {
-        db.prepare(`INSERT INTO attendance
+        const autoRes = db.prepare(`INSERT INTO attendance
           (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, site_name, status, auto_punched_in)
           VALUES (?,?,?,?,?,?,?,?,1)`).run(
           user_id, today, now, latest.latitude, latest.longitude, latest.address || '',
           latest.site_name, isLate ? 'late' : 'present'
         );
         console.log(`[auto-punch] IN user=${user_id} site=${latest.site_name} late=${isLate}`);
+        const autoAttId = autoRes.lastInsertRowid;
+        setImmediate(() => {
+          processLatePunchNotification(db, {
+            attendanceId: autoAttId,
+            userId: user_id,
+            punchInTime: now,
+            date: today
+          }).catch(err => {
+            console.warn('[lateAttendanceNotifier] auto-punch background dispatch error:', err.message);
+          });
+        });
       } catch (e) { console.error('[auto-punch] IN failed:', e.message); }
     } else if (attendance && attendance.punch_in_time && !attendance.punch_out_time && allOutside) {
       const punchIn = new Date(attendance.punch_in_time);
@@ -1873,10 +1995,19 @@ function runAutoPunchCheck() {
 // function above is kept as a reference in case the behaviour is ever wanted
 // back; simply re-enable the setInterval below to bring it back.
 //
-// if (process.env.NODE_ENV !== 'test') {
-//   setInterval(() => {
-//     try { runAutoPunchCheck(); } catch (e) { console.error('[auto-punch] tick error:', e.message); }
-//   }, 60 * 1000);
-// }
+// Admin manual trigger or test for 6:30 PM Absenteeism Notification
+router.post('/trigger-absent-check', requirePermission('attendance', 'can_edit'), async (req, res) => {
+  try {
+    const db = getDb();
+    const date = req.body?.date;
+    const result = await scanAndNotifyAbsentEmployees(db, {
+      targetDate: date,
+      forceTimeCheck: true, // admin manual trigger ignores 18:30 time window
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;

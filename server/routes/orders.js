@@ -146,8 +146,51 @@ router.get('/po', (req, res) => {
     LEFT JOIN leads l ON po.lead_id=l.id LEFT JOIN quotations q ON po.quotation_id=q.id
     LEFT JOIN users se ON po.site_engineer_id=se.id
     ORDER BY po.created_at DESC`).all();
+
+  // TK-01375: Target prices breakdown (Material, Manpower/Labour, Overheads) for whole project
+  const itemTotals = db.prepare(`
+    SELECT
+      po_id,
+      business_book_id,
+      SUM(COALESCE(quantity, 0) * COALESCE(part_price, 0)) AS target_material,
+      SUM(COALESCE(labour_amount, COALESCE(quantity, 0) * COALESCE(labour_rate, 0), 0)) AS target_labour,
+      COUNT(*) AS item_count
+    FROM po_items
+    GROUP BY po_id, business_book_id
+  `).all();
+  const byPoId = new Map();
+  const byBbId = new Map();
+  for (const it of itemTotals) {
+    if (it.po_id) byPoId.set(it.po_id, it);
+    if (it.business_book_id && !byBbId.has(it.business_book_id)) byBbId.set(it.business_book_id, it);
+  }
+
   // Resolve multi-engineer names from site_engineer_ids CSV
   for (const r of rows) {
+    const it = byPoId.get(r.id) || (r.business_book_id ? byBbId.get(r.business_book_id) : null) || {};
+    const targetMaterial = Math.round((it.target_material || 0) * 100) / 100;
+    const targetLabour = Math.round((it.target_labour || 0) * 100) / 100;
+    const poTotal = +r.total_amount || 0;
+    let targetOverheads = 0;
+    if (+r.overheads_amount > 0) {
+      targetOverheads = +r.overheads_amount;
+    } else if (r.overheads_pct != null && +r.overheads_pct > 0) {
+      targetOverheads = Math.round((poTotal * +r.overheads_pct / 100) * 100) / 100;
+    } else {
+      targetOverheads = Math.round((poTotal * 0.05) * 100) / 100;
+    }
+    const targetTotal = Math.round((targetMaterial + targetLabour + targetOverheads) * 100) / 100;
+    const projectedMargin = Math.round((poTotal - targetTotal) * 100) / 100;
+    const marginPct = poTotal > 0 ? Math.round((projectedMargin / poTotal * 100) * 10) / 10 : 0;
+
+    r.target_material = targetMaterial;
+    r.target_labour = targetLabour;
+    r.target_overheads = targetOverheads;
+    r.target_total = targetTotal;
+    r.projected_margin = projectedMargin;
+    r.margin_pct = marginPct;
+    r.item_count = it.item_count || 0;
+
     const csv = r.site_engineer_ids;
     if (csv) {
       const ids = String(csv).split(',').map(x => parseInt(x, 10)).filter(Boolean);
@@ -183,7 +226,7 @@ router.get('/po', (req, res) => {
 });
 
 router.post('/po', requirePermission('orders', 'create'), (req, res) => {
-  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
+  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, overheads_amount, overheads_pct } = req.body;
   const db = getDb();
   // Extra-role CSVs (jr site eng / supervisor / welder / helper). Accept an
   // array of user ids (preferred) or a CSV string; store as a clean CSV.
@@ -209,8 +252,8 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   const engCsv = engIds.join(',');
 
   const r = db.prepare(
-    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, crm_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, jrCsv, supCsv, weldCsv, helpCsv, crm_name, req.user.id);
+    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, crm_name, overheads_amount, overheads_pct, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, jrCsv, supCsv, weldCsv, helpCsv, crm_name, +overheads_amount || 0, overheads_pct !== undefined ? (+overheads_pct || 0) : 5, req.user.id);
   const poId = r.lastInsertRowid;
 
   // Insert PO items — scoped to THIS PO (po_id = poId) so a later edit
@@ -256,7 +299,7 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
 });
 
 router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
-  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
+  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, overheads_amount, overheads_pct } = req.body;
   // Extra-role CSVs — null when the field is absent so COALESCE keeps the
   // existing value; an explicit [] clears it (csvIds → '').
   const csvIds = (v) => v === undefined ? null : (Array.isArray(v) ? v.map(x => parseInt(x, 10)).filter(Boolean).join(',') : (v == null ? '' : String(v)));
@@ -334,6 +377,8 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
       welder_ids=COALESCE(?,welder_ids),
       helper_ids=COALESCE(?,helper_ids),
       crm_name=?,
+      overheads_amount=COALESCE(?,overheads_amount),
+      overheads_pct=COALESCE(?,overheads_pct),
       status=COALESCE(?,status) WHERE id=?`)
       .run(
         bbIdSafe,
@@ -344,6 +389,8 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
         primaryEngSafe, engCsvSafe,
         jrCsv, supCsv, weldCsv, helpCsv,
         crm_name,
+        overheads_amount !== undefined ? num(overheads_amount, 0) : null,
+        overheads_pct !== undefined ? num(overheads_pct, 5) : null,
         safeStatus, req.params.id
       );
 

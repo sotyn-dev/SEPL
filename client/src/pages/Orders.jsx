@@ -195,6 +195,8 @@ export default function Orders() {
       pt_installation: po.pt_installation || '', pt_commissioning: po.pt_commissioning || '',
       pt_retention: po.pt_retention || '', status: po.status || 'received',
       site_engineer_ids: engIds, crm_name: po.crm_name || '',
+      overheads_amount: po.overheads_amount || 0,
+      overheads_pct: po.overheads_pct !== undefined ? po.overheads_pct : 5,
       jr_site_engineer_ids: po.jr_site_engineer_ids_list || [],
       supervisor_ids: po.supervisor_ids_list || [],
       welder_ids: po.welder_ids_list || [],
@@ -376,10 +378,18 @@ export default function Orders() {
     for (const p of pos.filter(x => poMatches(x, poFilter))) {
       const proj = poProjectOf(p);
       const key = proj ? proj.toLowerCase() : `__none__:${p.id}`;
-      if (!map.has(key)) map.set(key, { key, label: proj || '(no project)', pos: [], amount: 0, clients: new Set(), statuses: new Set() });
+      if (!map.has(key)) map.set(key, {
+        key, label: proj || '(no project)', pos: [], amount: 0,
+        target_material: 0, target_labour: 0, target_overheads: 0, target_total: 0,
+        clients: new Set(), statuses: new Set()
+      });
       const g = map.get(key);
       g.pos.push(p);
       g.amount += (+p.total_amount || 0);
+      g.target_material += (+p.target_material || 0);
+      g.target_labour += (+p.target_labour || 0);
+      g.target_overheads += (+p.target_overheads || 0);
+      g.target_total += (+p.target_total || 0);
       if (p.bb_client || p.company_name) g.clients.add(cleanTxt(p.bb_client || p.company_name));
       if (p.status) g.statuses.add(p.status);
     }
@@ -399,7 +409,27 @@ export default function Orders() {
       <td>{p.bb_project || '-'}</td>
       <td>{p.bb_category || '-'}</td>
       <td>{p.po_date}</td>
-      <td className="font-semibold">Rs {p.total_amount?.toLocaleString()}</td>
+      <td className="min-w-[190px]">
+        <div className="font-semibold text-gray-900">Rs {p.total_amount?.toLocaleString('en-IN')}</div>
+        {/* TK-01375: Target prices of labour, material, and overheads visible to all */}
+        <div className="mt-1 p-1.5 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 rounded-md text-[11px] space-y-0.5 shadow-xs" title="Target Cost Breakdown (TK-01375)">
+          <div className="flex items-center justify-between font-bold text-blue-900">
+            <span>🎯 Target Cost:</span>
+            <span>Rs {(p.target_total || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="text-[10px] text-gray-600 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-blue-200/50 pt-0.5">
+            <span>Mat: <b className="text-gray-800">Rs {(p.target_material || 0).toLocaleString('en-IN')}</b></span>
+            <span>Labour: <b className="text-amber-800">Rs {(p.target_labour || 0).toLocaleString('en-IN')}</b></span>
+            <span>OH: <b className="text-purple-800">Rs {(p.target_overheads || 0).toLocaleString('en-IN')}</b></span>
+          </div>
+          {p.total_amount > 0 && (
+            <div className="text-[9.5px] font-semibold flex items-center justify-between pt-0.5 text-emerald-700">
+              <span>Proj. Margin:</span>
+              <span>Rs {(p.projected_margin || 0).toLocaleString('en-IN')} ({p.margin_pct || 0}%)</span>
+            </div>
+          )}
+        </div>
+      </td>
       <td className="text-xs">
         {p.site_engineer_names || p.site_engineer_name ? (
           <div>
@@ -465,12 +495,16 @@ export default function Orders() {
               <FiGrid size={14} /> {groupPo ? 'Grouped by Project' : 'Group by Project'}
             </button>
             <button onClick={() => exportCsv('purchase-orders',
-              ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','Jr. Site Engineer','CRM'],
-              pos.filter(p => poMatches(p, poFilter)).map(p => [p.po_number, p.lead_no, p.bb_client || p.company_name, p.bb_project, p.bb_category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_names || p.site_engineer_name, p.jr_site_engineer_names || '', p.crm_name]))}
+              ['PO Number','Lead No','Client','Project','Category','Date','PO Amount','Target Cost Total','Material Target','Labour Target','Overheads Target','Advance','Status','Site Engineer','Jr. Site Engineer','CRM'],
+              pos.filter(p => poMatches(p, poFilter)).map(p => [
+                p.po_number, p.lead_no, p.bb_client || p.company_name, p.bb_project, p.bb_category, p.po_date,
+                p.total_amount, p.target_total || 0, p.target_material || 0, p.target_labour || 0, p.target_overheads || 0,
+                p.advance_amount, p.status, p.site_engineer_names || p.site_engineer_name, p.jr_site_engineer_names || '', p.crm_name
+              ]))}
               className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
             <button onClick={() => {
               setEditingPO(null);
-              setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '', jr_site_engineer_ids: [], supervisor_ids: [], welder_ids: [], helper_ids: [] });
+              setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '', overheads_amount: 0, overheads_pct: 5, jr_site_engineer_ids: [], supervisor_ids: [], welder_ids: [], helper_ids: [] });
               setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
@@ -493,7 +527,7 @@ export default function Orders() {
             </div>
           )}
           <div className="card p-0"><NumberedTable className="freeze-head">
-            <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount & Targets</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {/* Flat list, or merged-by-project when grouping is on. */}
               {!groupPo && pos.filter(p => poMatches(p, poFilter)).map(p => renderPoRow(p))}
@@ -517,7 +551,22 @@ export default function Orders() {
                       </td>
                       <td></td>
                       <td></td>
-                      <td className="font-bold">Rs {g.amount.toLocaleString('en-IN')}<div className="text-[9px] text-gray-400 font-normal uppercase">total</div></td>
+                      <td className="font-bold min-w-[190px]">
+                        <div>Rs {g.amount.toLocaleString('en-IN')}<span className="text-[9px] text-gray-400 font-normal uppercase ml-1">total</span></div>
+                        <div className="mt-1 p-1.5 bg-white/90 rounded border border-blue-200 text-[11px] shadow-xs space-y-0.5">
+                          <div className="flex justify-between font-bold text-blue-900">
+                            <span>🎯 Target:</span>
+                            <span>Rs {g.target_total.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="text-[9px] text-gray-500 font-normal flex flex-wrap gap-x-1.5 border-t border-blue-100 pt-0.5">
+                            <span>Mat: Rs {g.target_material.toLocaleString('en-IN')}</span>
+                            <span>·</span>
+                            <span>Lab: Rs {g.target_labour.toLocaleString('en-IN')}</span>
+                            <span>·</span>
+                            <span>OH: Rs {g.target_overheads.toLocaleString('en-IN')}</span>
+                          </div>
+                        </div>
+                      </td>
                       <td colSpan={6}></td>
                     </tr>
                     {open && g.pos.map(p => renderPoRow(p, true))}
@@ -603,6 +652,16 @@ export default function Orders() {
               <div><label className="label">PO Number *</label><input className="input" value={form.po_number || ''} onChange={e => setForm({ ...form, po_number: e.target.value })} required /></div>
               <div><label className="label">PO Date *</label><input className="input" type="date" value={form.po_date || ''} onChange={e => setForm({ ...form, po_date: e.target.value })} required /></div>
               <div><label className="label">Total Amount (Rs)</label><input className="input" type="number" value={form.total_amount || 0} onChange={e => setForm({ ...form, total_amount: +e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="label" title="Percentage of PO value allocated for overheads">Overheads %</label>
+                  <input className="input" type="number" placeholder="5" value={form.overheads_pct ?? 5} onChange={e => setForm({ ...form, overheads_pct: +e.target.value, overheads_amount: 0 })} />
+                </div>
+                <div>
+                  <label className="label" title="Fixed overheads budget in Rs (overrides %)">Overheads (Rs)</label>
+                  <input className="input" type="number" placeholder="Auto (5%)" value={form.overheads_amount || ''} onChange={e => setForm({ ...form, overheads_amount: +e.target.value })} />
+                </div>
+              </div>
               <div className="col-span-1 sm:col-span-2">
                 <label className="label">Site Engineer(s) * <span className="text-gray-400 font-normal">(select one or more)</span></label>
                 <div className="border rounded-lg p-2 bg-white flex flex-wrap gap-1.5 min-h-[42px]">
@@ -880,6 +939,53 @@ export default function Orders() {
               <span className="text-red-600 font-medium">{poItems.filter(i => i.description).length} items</span>
               <span className="font-bold text-red-800">Items Total: Rs {itemsTotal.toLocaleString('en-IN')}</span>
             </div>
+
+            {/* TK-01375: Target Cost Breakdown (Material, Labour, Overheads) for whole project */}
+            {(() => {
+              const matTotal = poItems.reduce((s, i) => s + ((+i.quantity || 0) * (+i.part_price || 0)), 0);
+              const labTotal = poItems.reduce((s, i) => s + ((+i.labour_amount) || ((+i.quantity || 0) * (+i.labour_rate || 0))), 0);
+              const poVal = +form.total_amount || itemsTotal || 0;
+              const ohAmount = +form.overheads_amount > 0 ? +form.overheads_amount : Math.round(poVal * (+form.overheads_pct || 5) / 100);
+              const targetCost = matTotal + labTotal + ohAmount;
+              const margin = poVal - targetCost;
+              const marginPct = poVal > 0 ? Math.round((margin / poVal * 100) * 10) / 10 : 0;
+              return (
+                <div className="mt-3 p-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 rounded-lg border border-blue-200 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-1 mb-2 pb-1 border-b border-blue-200/60">
+                    <span className="text-xs font-bold text-blue-950 uppercase tracking-wide flex items-center gap-1.5">
+                      <span>🎯</span> Target Cost & Budget of Whole Project (TK-01375)
+                    </span>
+                    <span className="text-[11px] font-medium text-blue-700 bg-white/70 px-2 py-0.5 rounded border border-blue-200/50">
+                      Visible to Site Engineers, CRM & Planners
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div className="bg-white/90 p-2 rounded-md border border-blue-100 shadow-2xs">
+                      <div className="text-[10px] text-gray-500 uppercase font-semibold">📦 Material Target (PP)</div>
+                      <div className="text-sm font-bold text-gray-800 mt-0.5">Rs {matTotal.toLocaleString('en-IN')}</div>
+                      <div className="text-[9.5px] text-gray-400 mt-0.5">Sum of (Qty × Part Price)</div>
+                    </div>
+                    <div className="bg-white/90 p-2 rounded-md border border-blue-100 shadow-2xs">
+                      <div className="text-[10px] text-gray-500 uppercase font-semibold">👷 Manpower / Labour Target</div>
+                      <div className="text-sm font-bold text-amber-700 mt-0.5">Rs {labTotal.toLocaleString('en-IN')}</div>
+                      <div className="text-[9.5px] text-gray-400 mt-0.5">Sum of (Qty × Labour Rate)</div>
+                    </div>
+                    <div className="bg-white/90 p-2 rounded-md border border-blue-100 shadow-2xs">
+                      <div className="text-[10px] text-gray-500 uppercase font-semibold">🏢 Overheads ({form.overheads_amount > 0 ? 'Fixed' : `${form.overheads_pct ?? 5}%`})</div>
+                      <div className="text-sm font-bold text-purple-700 mt-0.5">Rs {ohAmount.toLocaleString('en-IN')}</div>
+                      <div className="text-[9.5px] text-gray-400 mt-0.5">{form.overheads_amount > 0 ? 'Fixed amount entered' : `${form.overheads_pct ?? 5}% of PO value`}</div>
+                    </div>
+                    <div className="bg-blue-600 text-white p-2 rounded-md shadow-xs">
+                      <div className="text-[10px] text-blue-100 uppercase font-semibold">🎯 Total Project Target Cost</div>
+                      <div className="text-sm font-extrabold mt-0.5">Rs {targetCost.toLocaleString('en-IN')}</div>
+                      <div className="text-[10px] text-blue-100 font-medium mt-0.5">
+                        Margin: Rs {margin.toLocaleString('en-IN')} ({marginPct}%)
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">

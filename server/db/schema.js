@@ -3106,6 +3106,20 @@ function initializeDatabase() {
     console.warn('[collection_engine] migrations skipped (non-fatal):', e.message);
   }
 
+  try {
+    const { runFinalAccountRetentionMigrations } = require('./finalAccountRetentionSchema');
+    runFinalAccountRetentionMigrations(db);
+  } catch (e) {
+    console.warn('[final_account_retention] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runSiteEngineerAttendanceMigrations } = require('./siteEngineerAttendanceSchema');
+    runSiteEngineerAttendanceMigrations(db);
+  } catch (e) {
+    console.warn('[site_engineer_attendance] migrations skipped (non-fatal):', e.message);
+  }
+
   require('../lib/scoreTemplateAssignments').initialize(db);
 
   // Safe schema migrations for columns added after initial release
@@ -3270,6 +3284,8 @@ function initializeDatabase() {
     ['purchase_orders', 'welder_ids TEXT'],
     ['purchase_orders', 'helper_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
+    ['purchase_orders', 'overheads_amount REAL DEFAULT 0'],
+    ['purchase_orders', 'overheads_pct REAL DEFAULT 5'],
     // EA's manual followup note for the MD on a delegation (mam 2026-06-17) —
     // informational only, does not affect task status.
     ['delegations', 'followup_remarks TEXT'],

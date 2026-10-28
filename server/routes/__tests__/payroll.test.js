@@ -19,6 +19,7 @@ const context = { module: { exports: {} }, console, require(name) {
   if (name === '../lib/roster') return require('../../lib/roster');
   if (name === '../lib/email') return { sendEmail: async (opts) => { sentEmails.push(opts); return { success: true }; }, isConfigured: () => true };
   if (name === '../lib/numberToWords') return { rupeesInWords: () => 'Zero Rupees' };
+  if (name === '../db/siteEngineerAttendanceSchema') return require('../../db/siteEngineerAttendanceSchema');
   throw new Error(name);
 } };
 vm.runInNewContext(source + '\nmodule.exports = { calculateForEmployee, generateSalarySlipEmailContent, getEligiblePayrollEmployees };', context);
@@ -100,7 +101,7 @@ test('payroll export includes displayed totals and adjustments without recalcula
   const start = jsx.indexOf('export function buildPayrollExport');
   const end = jsx.indexOf('const monthNow', start);
   const exportContext = { staffTypeLabel: (t) => t || 'Staff' };
-  vm.runInNewContext(jsx.slice(start, end).replace('export function', 'function'), exportContext);
+  vm.runInNewContext(jsx.slice(start, end).replace(/export function/g, 'function'), exportContext);
   const { headers, rows } = exportContext.buildPayrollExport([
     { employee_name: 'Gagan', present_days: 20.5, sunday_count: 0, sunday_worked_pay: 3, half_days: 9,
       paid_leaves: 1, holiday_days: 2, paid_days: 26.5, base_salary: 45000,

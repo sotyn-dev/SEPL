@@ -640,6 +640,14 @@ router.post('/sign-handover', (req, res) => {
                status = 'completed'
          WHERE id = ?
       `).run(cert.site_id);
+
+      // SOP-17 Integration: Auto-initialize Retention Schedule & Final Account Snapshot
+      try {
+        const { ensureRetentionSchedule } = require('./finalAccountRetention');
+        ensureRetentionSchedule(db, cert.site_id, cert_id, req.user?.id);
+      } catch (faErr) {
+        console.warn('[sop17] Auto retention sync warning:', faErr.message);
+      }
     }
 
     logAuditEvent({

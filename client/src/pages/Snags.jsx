@@ -23,10 +23,12 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2,
   FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers, FiUsers, FiLock, FiUnlock,
-  FiPrinter, FiClock, FiShield, FiFileText, FiCheck, FiChevronRight, FiChevronDown, FiChevronUp, FiCalendar
+  FiPrinter, FiClock, FiShield, FiFileText, FiCheck, FiChevronRight, FiChevronDown, FiChevronUp, FiCalendar,
+  FiDollarSign
 } from 'react-icons/fi';
 import HandoverRaciModal from '../components/HandoverRaciModal';
 import HandoverCertificateModal from '../components/HandoverCertificateModal';
+import FinalAccountRetentionModal from '../components/FinalAccountRetentionModal';
 import { StartHandoverModal, ClientWalkModal, GenerateCertificateModal } from '../components/HandoverWorkflowModals';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
@@ -127,6 +129,7 @@ export default function Snags() {
   const [clientWalkOpen, setClientWalkOpen] = useState(false);
   const [generateCertOpen, setGenerateCertOpen] = useState(false);
   const [viewCert, setViewCert] = useState(null);
+  const [finalAccountModalOpen, setFinalAccountModalOpen] = useState(false);
   const [escalationsModalOpen, setEscalationsModalOpen] = useState(false);
   const [escalationsList, setEscalationsList] = useState([]);
   const [sop15Expanded, setSop15Expanded] = useState(true);
@@ -645,6 +648,16 @@ export default function Snags() {
                       className="btn btn-success text-xs font-bold px-3 py-1.5 flex items-center gap-1.5 shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white border-0"
                     >
                       <FiPrinter size={13} /> View / Sign Handover Certificate (S5 &amp; S6)
+                    </button>
+                  )}
+
+                  {/* SOP-17 Action: Final Account & Retention */}
+                  {handoverSiteId && (
+                    <button
+                      onClick={() => setFinalAccountModalOpen(true)}
+                      className="btn text-xs font-bold px-3 py-1.5 flex items-center gap-1.5 shadow-sm bg-blue-600 hover:bg-blue-700 text-white border-0"
+                    >
+                      <FiDollarSign size={13} /> SOP-17 Final Account &amp; Retention
                     </button>
                   )}
                 </div>
@@ -1446,6 +1459,18 @@ export default function Snags() {
           cert={viewCert}
           onClose={() => setViewCert(null)}
           onSigned={() => {
+            loadHandoverStatus(handoverSiteId);
+            load();
+          }}
+        />
+      )}
+
+      {finalAccountModalOpen && handoverSiteId && (
+        <FinalAccountRetentionModal
+          siteId={handoverSiteId}
+          certId={handoverData?.certificate?.id}
+          onClose={() => setFinalAccountModalOpen(false)}
+          onUpdated={() => {
             loadHandoverStatus(handoverSiteId);
             load();
           }}

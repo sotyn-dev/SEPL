@@ -25,6 +25,8 @@ try { sendEmailFn = require('../lib/email').sendEmail; } catch (_) {}
 // Resolve the Email Triggers recipient list (fixed + roles) for a reminder event.
 let resolveRecipients = null;
 try { resolveRecipients = require('../lib/emailRules').resolveRecipients; } catch (_) {}
+let scanAndNotifyAbsentEmployees = null;
+try { scanAndNotifyAbsentEmployees = require('../lib/dailyAbsenteeismNotifier').scanAndNotifyAbsentEmployees; } catch (_) {}
 
 const INTERVAL_MS = 30 * 60 * 1000;     // 30 min
 const OFFER_EXPIRY_DAYS = 7;
@@ -220,6 +222,13 @@ function runOnce() {
     const c = scanPendingApprovals(db);
     if (a + b + c > 0) {
       console.log(`[hr-cron] notifications created · interview=${a} offer_expiry=${b} approval_pending=${c}`);
+    }
+    if (scanAndNotifyAbsentEmployees) {
+      scanAndNotifyAbsentEmployees(db).then(r => {
+        if (r && r.absentNotifiedCount > 0) {
+          console.log(`[hr-cron] 6:30 PM absent notices dispatched: ${r.absentNotifiedCount} employees`);
+        }
+      }).catch(e => console.warn('[hr-cron] absent scan error:', e.message));
     }
   } catch (e) {
     console.warn('[hr-cron] scan failed:', e.message);
