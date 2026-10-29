@@ -172,8 +172,58 @@ function request(reqUrl, options, postData) {
   });
 }
 
+// Query open companies from Tally
+function getOpenCompanies() {
+  var xml = [
+    '<ENVELOPE>',
+    '  <HEADER>',
+    '    <VERSION>1</VERSION>',
+    '    <TALLYREQUEST>Export</TALLYREQUEST>',
+    '    <TYPE>Collection</TYPE>',
+    '    <ID>ListofCompanies</ID>',
+    '  </HEADER>',
+    '  <BODY>',
+    '    <DESC>',
+    '      <STATICVARIABLES>',
+    '        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>',
+    '      </STATICVARIABLES>',
+    '      <TDL>',
+    '        <TDLMESSAGE>',
+    '          <COLLECTION NAME="ListofCompanies" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No">',
+    '            <TYPE>Company</TYPE>',
+    '            <FETCH>Name</FETCH>',
+    '          </COLLECTION>',
+    '        </TDLMESSAGE>',
+    '      </TDL>',
+    '    </DESC>',
+    '  </BODY>',
+    '</ENVELOPE>'
+  ].join('\r\n');
+
+  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, xml)
+    .then(function (res) {
+      var raw = res.data || '';
+      var names = [];
+      var regex = /<COMPANY\b[^>]*\bNAME="([^"]+)"/gi;
+      var m;
+      while ((m = regex.exec(raw)) !== null) {
+        if (m[1]) names.push(m[1].trim());
+      }
+      var regex2 = /<NAME\b[^>]*>([\s\S]*?)<\/NAME>/gi;
+      while ((m = regex2.exec(raw)) !== null) {
+        var clean = m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').trim();
+        if (clean && names.indexOf(clean) === -1) names.push(clean);
+      }
+      return names;
+    })
+    .catch(function () {
+      return [];
+    });
+}
+
 // Primary Tally Export Query: Standard Daybook Data Export
-function buildDaybookExport(withDates) {
+function buildDaybookExport(withDates, companyName) {
+  var comp = companyName !== undefined ? companyName : config.companyName;
   var xml = [
     '<ENVELOPE>',
     '  <HEADER>',
@@ -187,6 +237,10 @@ function buildDaybookExport(withDates) {
     '      <STATICVARIABLES>',
     '        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
   ];
+
+  if (comp) {
+    xml.push('        <SVCURRENTCOMPANY>' + comp + '</SVCURRENTCOMPANY>');
+  }
 
   if (withDates) {
     xml.push('        <SVFROMDATE TYPE="Date">' + config.fromDate + '</SVFROMDATE>');
@@ -202,7 +256,8 @@ function buildDaybookExport(withDates) {
 }
 
 // Traditional Export Data with REPORTNAME Day Book
-function buildDayBookReportExport(withDates) {
+function buildDayBookReportExport(withDates, companyName) {
+  var comp = companyName !== undefined ? companyName : config.companyName;
   var xml = [
     '<ENVELOPE>',
     '  <HEADER>',
@@ -215,6 +270,9 @@ function buildDayBookReportExport(withDates) {
     '        <STATICVARIABLES>',
     '          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
   ];
+  if (comp) {
+    xml.push('          <SVCURRENTCOMPANY>' + comp + '</SVCURRENTCOMPANY>');
+  }
   if (withDates) {
     xml.push('          <SVFROMDATE TYPE="Date">' + config.fromDate + '</SVFROMDATE>');
     xml.push('          <SVTODATE TYPE="Date">' + config.toDate + '</SVTODATE>');
@@ -544,26 +602,52 @@ function isBankType(v) {
 
 // Query Tally trying multiple methods
 function queryTally() {
-  var q1 = buildDaybookExport(true);
-  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q1)
-    .then(function (res1) {
-      var list1 = parseVouchersFromXml(res1.data || '');
-      if (list1.length > 0) return { list: list1, raw: res1.data };
+  return getOpenCompanies().then(function (openCompanies) {
+    var comp = config.companyName;
+    if (openCompanies.length > 0) {
+      var found = null;
+      for (var i = 0; i < openCompanies.length; i++) {
+        if (openCompanies[i].toLowerCase().indexOf('secured') !== -1) {
+          found = openCompanies[i];
+          break;
+        }
+      }
+      comp = found || openCompanies[0];
+      config.companyName = comp;
+    }
 
-      var q2 = buildDayBookReportExport(true);
-      return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q2)
-        .then(function (res2) {
-          var list2 = parseVouchersFromXml(res2.data || '');
-          if (list2.length > 0) return { list: list2, raw: res2.data };
+    // Attempt 1: Daybook with detected company name + date range
+    var q1 = buildDaybookExport(true, comp);
+    return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q1)
+      .then(function (res1) {
+        var list1 = parseVouchersFromXml(res1.data || '');
+        if (list1.length > 0) return { list: list1, raw: res1.data };
 
-          var q4 = buildDaybookExport(false);
-          return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q4)
-            .then(function (res4) {
-              var list4 = parseVouchersFromXml(res4.data || '');
-              return { list: list4, raw: res4.data || res1.data };
-            });
-        });
-    });
+        // Attempt 2: Daybook with company name without dates
+        var q2 = buildDaybookExport(false, comp);
+        return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q2)
+          .then(function (res2) {
+            var list2 = parseVouchersFromXml(res2.data || '');
+            if (list2.length > 0) return { list: list2, raw: res2.data };
+
+            // Attempt 3: Day Book Report with company name
+            var q3 = buildDayBookReportExport(true, comp);
+            return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q3)
+              .then(function (res3) {
+                var list3 = parseVouchersFromXml(res3.data || '');
+                if (list3.length > 0) return { list: list3, raw: res3.data };
+
+                // Attempt 4: Fallback without company name (current active screen)
+                var q4 = buildDaybookExport(true, '');
+                return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q4)
+                  .then(function (res4) {
+                    var list4 = parseVouchersFromXml(res4.data || '');
+                    return { list: list4, raw: res4.data || res1.data };
+                  });
+              });
+          });
+      });
+  });
 }
 
 // Master sync cycle

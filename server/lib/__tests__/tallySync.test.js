@@ -214,7 +214,7 @@ test('Tally Sync: Voucher ingestion, deduplication, and payment reconciliation',
 
     await t.test('ingests line items, quantities, rates, and tax breakdown for purchases', async () => {
       const testGuid = 'TEST-ITEMS-' + Date.now();
-      const testBillNo = '26-27/MES-923-TEST';
+      const testBillNo = 'MES-' + Date.now();
       const payload = {
         company_name: 'SECURED ENGINEERS PVT. LTD. - 24-25',
         vouchers: [{
