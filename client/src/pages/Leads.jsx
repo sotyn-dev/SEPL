@@ -1,5 +1,5 @@
 import NumberedTable from '../components/NumberedTable';
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -41,6 +41,7 @@ const STAGE_LABELS = {
   lead_capture: 'Stage 1 — Lead/Tender Capture',
   qualification: 'Stage 2 — Qualified or Not',
   site_survey: 'Stage 3 — Site Survey + Feasibility',
+  mom_uploaded: 'Stage 4 — Concept Design / Drawings',
   concept_design: 'Stage 4 — Concept Design / Drawings',
   boq_internal_costing: 'Stage 5 — BOQ + Internal Costing',
   boq_costing: 'Stage 6 — BOQ + Vendor Costing',
@@ -202,6 +203,7 @@ export default function Leads() {
   const [boqList, setBoqList] = useState([]);
   const [boqForm, setBoqForm] = useState({ boq_file_link: '', boq_amount: '', notes: '' });
   const [boqAdding, setBoqAdding] = useState(false);
+  const boqFileInputRef = useRef(null);
   // Employees list for the "Assign Meeting" dropdown — only active staff
   // are shown so dropped/inactive employees don't clutter the list.
   // Each option carries user_id so the lead row stores both the display
@@ -359,7 +361,14 @@ export default function Leads() {
   };
 
   const advanceStage = async (id, stage, data) => {
-    try { await api.post(`/sales-funnel/${id}/stage`, { stage, ...data }); toast.success(`${STAGE_LABELS[stage] || stage}`); setModal(null); setViewData(null); load(); }
+    try {
+      const res = await api.post(`/sales-funnel/${id}/stage`, { stage, ...data });
+      const targetStage = res.data?.current_stage || (stage === 'mom_uploaded' ? 'concept_design' : stage);
+      toast.success(`${STAGE_LABELS[targetStage] || STAGE_LABELS[stage] || targetStage}`);
+      setModal(null);
+      setViewData(null);
+      load();
+    }
     catch (err) { toast.error(err.response?.data?.error || 'Error'); }
   };
 
@@ -473,6 +482,35 @@ export default function Leads() {
       setEmailingMom(false);
     }
   };
+  const loadBoqs = async (id) => {
+    if (!id) {
+      setBoqList([]);
+      return;
+    }
+    try {
+      const res = await api.get(`/sales-funnel/${id}/boqs`);
+      setBoqList(res.data || []);
+    } catch {
+      setBoqList([]);
+    }
+  };
+
+  const deleteBoq = async (boqId) => {
+    if (!viewData?.id || !confirm('Are you sure you want to delete this BOQ?')) return;
+    try {
+      await api.delete(`/sales-funnel/${viewData.id}/boqs/${boqId}`);
+      toast.success('BOQ deleted');
+      await loadBoqs(viewData.id);
+      load();
+      try {
+        const res = await api.get(`/sales-funnel/${viewData.id}`);
+        if (res.data) setViewData(res.data);
+      } catch (_) { }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete BOQ');
+    }
+  };
+
   const addBoq = async () => {
     if (!boqForm.boq_file_link && !(+boqForm.boq_amount > 0)) return toast.error('Attach a BOQ file or enter an amount');
     setBoqAdding(true);
@@ -480,9 +518,26 @@ export default function Leads() {
       await api.post(`/sales-funnel/${viewData.id}/boq`, boqForm);
       toast.success('BOQ added');
       setBoqForm({ boq_file_link: '', boq_amount: '', notes: '' });
-      loadBoqs(viewData.id);
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to add BOQ'); }
-    finally { setBoqAdding(false); }
+      if (boqFileInputRef.current) boqFileInputRef.current.value = '';
+      await loadBoqs(viewData.id);
+      load();
+      if (viewData) {
+        setViewData(v => ({
+          ...v,
+          boq_file_link: boqForm.boq_file_link || v.boq_file_link,
+          boq_amount: (+boqForm.boq_amount > 0) ? +boqForm.boq_amount : v.boq_amount,
+        }));
+        setStageForm(s => ({
+          ...s,
+          boq_file_link: boqForm.boq_file_link || s.boq_file_link,
+          boq_amount: (+boqForm.boq_amount > 0) ? +boqForm.boq_amount : s.boq_amount,
+        }));
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add BOQ');
+    } finally {
+      setBoqAdding(false);
+    }
   };
 
   const addFollowup = async () => {
@@ -1035,17 +1090,44 @@ export default function Leads() {
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-[10px] font-mono text-orange-400">#{boqList.length - i}</span>
                       <span className="font-semibold whitespace-nowrap">Rs {(+b.boq_amount || 0).toLocaleString('en-IN')}</span>
-                      {b.boq_file_link && <a href={b.boq_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">View</a>}
+                      {b.boq_file_link && <a href={b.boq_file_link} className="text-red-600 underline font-medium" target="_blank" rel="noreferrer">View</a>}
                       {b.notes && <span className="text-gray-500 truncate">· {b.notes}</span>}
                     </div>
-                    <span className="text-[10px] text-gray-400 whitespace-nowrap">{(b.created_at || '').slice(0, 10)}{b.created_by ? ` · ${b.created_by}` : ''}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-gray-400 whitespace-nowrap">{(b.created_at || '').slice(0, 10)}{b.created_by ? ` · ${b.created_by}` : ''}</span>
+                      {canEdit('leads') && (
+                        <button
+                          type="button"
+                          onClick={() => deleteBoq(b.id)}
+                          className="text-gray-400 hover:text-red-600 font-bold px-1 transition-colors"
+                          title="Delete BOQ"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             ) : <div className="text-[11px] text-gray-400">No BOQ added yet.</div>}
             {canEdit('leads') && (
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-orange-100">
-                <input type="file" className="text-[11px]" onChange={async e => { const f = e.target.files[0]; if (!f) return; try { const url = await uploadFile(f); setBoqForm(s => ({ ...s, boq_file_link: url })); toast.success('BOQ uploaded'); } catch { toast.error('Upload failed'); } }} />
+                <input
+                  ref={boqFileInputRef}
+                  type="file"
+                  className="text-[11px]"
+                  onChange={async e => {
+                    const f = e.target.files[0];
+                    if (!f) return;
+                    try {
+                      const url = await uploadFile(f);
+                      setBoqForm(s => ({ ...s, boq_file_link: url }));
+                      toast.success('BOQ uploaded');
+                    } catch {
+                      toast.error('Upload failed');
+                    }
+                  }}
+                />
                 <input className="input text-xs" style={{ width: '130px' }} type="number" placeholder="Amount (₹)" value={boqForm.boq_amount} onChange={e => setBoqForm(s => ({ ...s, boq_amount: e.target.value }))} />
                 <input className="input text-xs flex-1 min-w-[120px]" placeholder="Note (optional)" value={boqForm.notes} onChange={e => setBoqForm(s => ({ ...s, notes: e.target.value }))} />
                 <button type="button" disabled={boqAdding} onClick={addBoq} className="btn btn-primary text-xs py-1 px-3 disabled:opacity-40">{boqAdding ? 'Adding…' : '+ Add BOQ'}</button>

@@ -31,11 +31,12 @@ const STAGES = [
 // Backward-compat: old single-letter / legacy stage keys map to new ones.
 // Anything still hitting the API with old keys gets translated transparently
 // so the UI doesn't break during the 11-stage rollout.
+// NOTE: mom_uploaded is an active stage transition action that advances from
+// site_survey to concept_design (S3 -> S4) — it must NEVER be mapped to site_survey.
 const LEGACY_STAGE_MAP = {
   new_lead: 'lead_capture',
   qualified: 'qualification',
   meeting_assigned: 'site_survey',
-  mom_uploaded: 'site_survey',
   drawing_uploaded: 'concept_design',
   boq_created: 'boq_costing',
   boq_vendor_costing: 'boq_costing',
@@ -633,13 +634,35 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
     // Replaces 'drawing_uploaded'. Same 3 drawing slots; spec fields
     // (versioning, SLD, load list, structural calc) added later.
     case 'concept_design':
-      sql = `UPDATE sales_funnel SET
-        current_stage='concept_design',
-        drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?,
-        drawing_date=CURRENT_TIMESTAMP, stage_entered_at=CURRENT_TIMESTAMP,
-        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = [b.drawing_file1, b.drawing_file2, b.drawing_file3,
-      b.drawing_uploaded_by || req.user.name, req.params.id];
+      if (b.mom_notes) {
+        // If client submitted MOM to advance to concept_design:
+        sql = `UPDATE sales_funnel SET
+          current_stage='concept_design',
+          mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP,
+          meeting_status='completed',
+          category=COALESCE(?, category),
+          lead_type=COALESCE(?, lead_type),
+          meeting_location=COALESCE(?, meeting_location),
+          meeting_purpose=?, meeting_timestamp_photo_url=?, pain_points=?, requirements=?,
+          action_planned=?, meeting_format=?, meeting_scheduled_by=?, meeting_time_spent_min=?,
+          stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+        params = [b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
+        b.category || null, b.lead_type || null, b.meeting_location || null,
+        b.meeting_purpose || null, b.meeting_timestamp_photo_url || null,
+        b.pain_points || null, b.requirements || null,
+        b.action_planned || null, b.meeting_format || null,
+        b.meeting_scheduled_by || null,
+        b.meeting_time_spent_min ? +b.meeting_time_spent_min : null,
+        req.params.id];
+      } else {
+        sql = `UPDATE sales_funnel SET
+          current_stage='concept_design',
+          drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?,
+          drawing_date=CURRENT_TIMESTAMP, stage_entered_at=CURRENT_TIMESTAMP,
+          updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+        params = [b.drawing_file1, b.drawing_file2, b.drawing_file3,
+        b.drawing_uploaded_by || req.user.name, req.params.id];
+      }
       break;
 
     // ─── STAGE 5 — BOQ + INTERNAL COSTING ──────────────────────────────
@@ -847,10 +870,11 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       }
     } catch (_) {}
   }
-  audit(db, req.params.id, stage, 'enter_stage', req.user, {
+  const recordedStage = (stage === 'mom_uploaded') ? 'concept_design' : stage;
+  audit(db, req.params.id, recordedStage, 'enter_stage', req.user, {
     notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
   });
-  res.json({ message: `Stage updated to ${stage}` });
+  res.json({ message: `Stage updated to ${recordedStage}`, current_stage: recordedStage });
 });
 
 // POST move-to-lost — can be triggered from ANY stage with mandatory reason,
@@ -951,12 +975,34 @@ router.post('/:id/boq', requirePermission('leads', 'edit'), (req, res) => {
     return res.status(400).json({ error: 'Attach a BOQ file or enter an amount' });
   }
   try {
+    const noteText = b.notes || b.boq_notes || null;
     db.prepare(`INSERT INTO sales_funnel_boqs (funnel_id, boq_file_link, boq_amount, created_by, notes)
                 VALUES (?, ?, ?, ?, ?)`)
-      .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, req.user.name, b.boq_notes || null);
+      .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, req.user.name, noteText);
     db.prepare(`UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
       .run(b.boq_file_link || null, +b.boq_amount || 0, req.params.id);
-    try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: b.boq_notes || null }); } catch (_) { }
+    try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: noteText }); } catch (_) { }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE a BOQ entry from lead history
+router.delete('/:id/boqs/:boqId', requirePermission('leads', 'edit'), (req, res) => {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM sales_funnel_boqs WHERE id=? AND funnel_id=?')
+    .get(req.params.boqId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'BOQ not found' });
+  try {
+    db.prepare('DELETE FROM sales_funnel_boqs WHERE id=?').run(req.params.boqId);
+    const next = db.prepare(
+      `SELECT boq_file_link, boq_amount FROM sales_funnel_boqs
+        WHERE funnel_id=? ORDER BY created_at DESC, id DESC LIMIT 1`
+    ).get(req.params.id);
+    db.prepare('UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(next ? next.boq_file_link : null, next ? (next.boq_amount || 0) : 0, req.params.id);
+    try { audit(db, req.params.id, 'boq_costing', 'delete_boq', req.user, { boq_id: req.params.boqId }); } catch (_) { }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
