@@ -180,7 +180,7 @@ function getOpenCompanies() {
     '    <VERSION>1</VERSION>',
     '    <TALLYREQUEST>Export</TALLYREQUEST>',
     '    <TYPE>Collection</TYPE>',
-    '    <ID>ListofCompanies</ID>',
+    '    <ID>List of Companies</ID>',
     '  </HEADER>',
     '  <BODY>',
     '    <DESC>',
@@ -189,7 +189,7 @@ function getOpenCompanies() {
     '      </STATICVARIABLES>',
     '      <TDL>',
     '        <TDLMESSAGE>',
-    '          <COLLECTION NAME="ListofCompanies" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No">',
+    '          <COLLECTION NAME="List of Companies" ISINITIALIZE="Yes">',
     '            <TYPE>Company</TYPE>',
     '            <FETCH>Name</FETCH>',
     '          </COLLECTION>',
@@ -221,9 +221,8 @@ function getOpenCompanies() {
     });
 }
 
-// Primary Tally Export Query: Standard Daybook Data Export
+// 1. Primary Tally Export Query: Standard Daybook Data Export
 function buildDaybookExport(withDates, companyName) {
-  var comp = companyName !== undefined ? companyName : config.companyName;
   var xml = [
     '<ENVELOPE>',
     '  <HEADER>',
@@ -235,11 +234,12 @@ function buildDaybookExport(withDates, companyName) {
     '  <BODY>',
     '    <DESC>',
     '      <STATICVARIABLES>',
-    '        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
+    '        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>',
+    '        <EXPLODEFLAG>Yes</EXPLODEFLAG>'
   ];
 
-  if (comp) {
-    xml.push('        <SVCURRENTCOMPANY>' + comp + '</SVCURRENTCOMPANY>');
+  if (companyName) {
+    xml.push('        <SVCURRENTCOMPANY>' + companyName + '</SVCURRENTCOMPANY>');
   }
 
   if (withDates) {
@@ -255,9 +255,8 @@ function buildDaybookExport(withDates, companyName) {
   return xml.join('\r\n');
 }
 
-// Traditional Export Data with REPORTNAME Day Book
+// 2. Day Book Report Export (with space in ID)
 function buildDayBookReportExport(withDates, companyName) {
-  var comp = companyName !== undefined ? companyName : config.companyName;
   var xml = [
     '<ENVELOPE>',
     '  <HEADER>',
@@ -268,10 +267,11 @@ function buildDayBookReportExport(withDates, companyName) {
     '      <REQUESTDESC>',
     '        <REPORTNAME>Day Book</REPORTNAME>',
     '        <STATICVARIABLES>',
-    '          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
+    '          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>',
+    '          <EXPLODEFLAG>Yes</EXPLODEFLAG>'
   ];
-  if (comp) {
-    xml.push('          <SVCURRENTCOMPANY>' + comp + '</SVCURRENTCOMPANY>');
+  if (companyName) {
+    xml.push('          <SVCURRENTCOMPANY>' + companyName + '</SVCURRENTCOMPANY>');
   }
   if (withDates) {
     xml.push('          <SVFROMDATE TYPE="Date">' + config.fromDate + '</SVFROMDATE>');
@@ -280,6 +280,43 @@ function buildDayBookReportExport(withDates, companyName) {
   xml.push('        </STATICVARIABLES>');
   xml.push('      </REQUESTDESC>');
   xml.push('    </EXPORTDATA>');
+  xml.push('  </BODY>');
+  xml.push('</ENVELOPE>');
+  return xml.join('\r\n');
+}
+
+// 3. Dynamic Voucher Collection Export with Full Nested Allocations
+function buildVoucherCollectionExport(withDates, companyName) {
+  var xml = [
+    '<ENVELOPE>',
+    '  <HEADER>',
+    '    <VERSION>1</VERSION>',
+    '    <TALLYREQUEST>Export</TALLYREQUEST>',
+    '    <TYPE>Collection</TYPE>',
+    '    <ID>SEPLVouchers</ID>',
+    '  </HEADER>',
+    '  <BODY>',
+    '    <DESC>',
+    '      <STATICVARIABLES>',
+    '        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>'
+  ];
+  if (companyName) {
+    xml.push('        <SVCURRENTCOMPANY>' + companyName + '</SVCURRENTCOMPANY>');
+  }
+  if (withDates) {
+    xml.push('        <SVFROMDATE TYPE="Date">' + config.fromDate + '</SVFROMDATE>');
+    xml.push('        <SVTODATE TYPE="Date">' + config.toDate + '</SVTODATE>');
+  }
+  xml.push('      </STATICVARIABLES>');
+  xml.push('      <TDL>');
+  xml.push('        <TDLMESSAGE>');
+  xml.push('          <COLLECTION NAME="SEPLVouchers" ISINITIALIZE="Yes">');
+  xml.push('            <TYPE>Voucher</TYPE>');
+  xml.push('            <FETCH>*, ALLLEDGERENTRIES.*, LEDGERENTRIES.*, ALLINVENTORYENTRIES.*, INVENTORYENTRIES.*</FETCH>');
+  xml.push('          </COLLECTION>');
+  xml.push('        </TDLMESSAGE>');
+  xml.push('      </TDL>');
+  xml.push('    </DESC>');
   xml.push('  </BODY>');
   xml.push('</ENVELOPE>');
   return xml.join('\r\n');
@@ -602,52 +639,47 @@ function isBankType(v) {
 
 // Query Tally trying multiple methods
 function queryTally() {
-  return getOpenCompanies().then(function (openCompanies) {
-    var comp = config.companyName;
-    if (openCompanies.length > 0) {
-      var found = null;
-      for (var i = 0; i < openCompanies.length; i++) {
-        if (openCompanies[i].toLowerCase().indexOf('secured') !== -1) {
-          found = openCompanies[i];
-          break;
-        }
-      }
-      comp = found || openCompanies[0];
-      config.companyName = comp;
-    }
+  var compNoDot = (config.companyName || '').replace(/\.\s*$/, '').replace('LTD.', 'LTD');
 
-    // Attempt 1: Daybook with detected company name + date range
-    var q1 = buildDaybookExport(true, comp);
-    return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q1)
-      .then(function (res1) {
-        var list1 = parseVouchersFromXml(res1.data || '');
-        if (list1.length > 0) return { list: list1, raw: res1.data };
+  // Method 1: Standard Daybook for currently open company (NO SVCURRENTCOMPANY - proven at 5:50 PM)
+  var q1 = buildDaybookExport(true, null);
+  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q1)
+    .then(function (res1) {
+      var list1 = parseVouchersFromXml(res1.data || '');
+      if (list1.length > 0) return { list: list1, raw: res1.data };
 
-        // Attempt 2: Daybook with company name without dates
-        var q2 = buildDaybookExport(false, comp);
-        return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q2)
-          .then(function (res2) {
-            var list2 = parseVouchersFromXml(res2.data || '');
-            if (list2.length > 0) return { list: list2, raw: res2.data };
+      // Method 2: Day Book Report Export (proven fallback)
+      var q2 = buildDayBookReportExport(true, null);
+      return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q2)
+        .then(function (res2) {
+          var list2 = parseVouchersFromXml(res2.data || '');
+          if (list2.length > 0) return { list: list2, raw: res2.data };
 
-            // Attempt 3: Day Book Report with company name
-            var q3 = buildDayBookReportExport(true, comp);
-            return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q3)
-              .then(function (res3) {
-                var list3 = parseVouchersFromXml(res3.data || '');
-                if (list3.length > 0) return { list: list3, raw: res3.data };
+          // Method 3: Dynamic Voucher Collection query with full fetches
+          var q3 = buildVoucherCollectionExport(true, null);
+          return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q3)
+            .then(function (res3) {
+              var list3 = parseVouchersFromXml(res3.data || '');
+              if (list3.length > 0) return { list: list3, raw: res3.data };
 
-                // Attempt 4: Fallback without company name (current active screen)
-                var q4 = buildDaybookExport(true, '');
-                return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q4)
-                  .then(function (res4) {
-                    var list4 = parseVouchersFromXml(res4.data || '');
-                    return { list: list4, raw: res4.data || res1.data };
-                  });
-              });
-          });
-      });
-  });
+              // Method 4: With company name from config
+              var q4 = buildDaybookExport(true, compNoDot);
+              return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q4)
+                .then(function (res4) {
+                  var list4 = parseVouchersFromXml(res4.data || '');
+                  if (list4.length > 0) return { list: list4, raw: res4.data };
+
+                  // Method 5: Daybook without dates
+                  var q5 = buildDaybookExport(false, null);
+                  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q5)
+                    .then(function (res5) {
+                      var list5 = parseVouchersFromXml(res5.data || '');
+                      return { list: list5, raw: res1.data || res2.data || res3.data || res4.data || res5.data };
+                    });
+                });
+            });
+        });
+    });
 }
 
 // Master sync cycle
@@ -668,10 +700,20 @@ function syncFromTally() {
     }
 
     if (allVouchers.length === 0) {
-      console.log('[' + now + '] Tally connected on port 9000, but 0 vouchers returned.');
-      if (rawText) {
-        var cleanSnippet = rawText.replace(/[\r\n\t]+/g, ' ').slice(0, 160);
-        console.log('       Tally response: ' + cleanSnippet);
+      var isCompanyError = rawText.indexOf('Could not find Company') !== -1 ||
+                           rawText.indexOf('&apos;&apos;') !== -1 ||
+                           rawText.indexOf('<STATUS>0</STATUS>') !== -1;
+      if (isCompanyError) {
+        console.log('[' + now + '] Tally responded, but NO company is currently loaded/active in Tally.');
+        console.log('       >> ACTION REQUIRED: Please switch to TallyPrime and open your company:');
+        console.log('          "' + config.companyName + '"');
+        console.log('       >> Make sure you are on the "Gateway of Tally" screen.');
+      } else {
+        console.log('[' + now + '] Tally connected on port 9000, but 0 vouchers returned.');
+        if (rawText) {
+          var cleanSnippet = rawText.replace(/[\r\n\t]+/g, ' ').slice(0, 160);
+          console.log('       Tally response: ' + cleanSnippet);
+        }
       }
       return;
     }
