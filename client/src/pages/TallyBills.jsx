@@ -600,6 +600,129 @@ function DetailModal({ id, meta, canEditM, canApproveM, canDeleteM, isAdmin, onC
             {balance != null && balance > 0 && <div className="text-[10px] text-red-600 font-semibold">balance {inr(balance)}</div>}</div>
         </div>
 
+        {/* Items & Material Breakdown Table (Synced from Tally) */}
+        {(() => {
+          let items = [];
+          if (Array.isArray(d.items) && d.items.length > 0) {
+            items = d.items;
+          } else {
+            try {
+              if (d.items_json) items = typeof d.items_json === 'string' ? JSON.parse(d.items_json) : d.items_json;
+            } catch (_) {}
+          }
+          let taxes = [];
+          try {
+            if (d.tax_breakdown_json) taxes = typeof d.tax_breakdown_json === 'string' ? JSON.parse(d.tax_breakdown_json) : d.tax_breakdown_json;
+          } catch (_) {}
+
+          if (!items.length && !taxes.length) return null;
+
+          const itemsSubtotal = items.reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
+
+          return (
+            <div className="card p-3 border border-emerald-300 bg-emerald-50/20 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-emerald-100">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-bold text-emerald-900 uppercase flex items-center gap-1.5">
+                    📦 Items & Material Breakdown
+                  </h4>
+                  {d.purchase_ledger && (
+                    <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      Ledger: <strong>{d.purchase_ledger}</strong>
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] text-emerald-700 font-semibold">
+                  {items.length} line item(s) from Tally
+                </span>
+              </div>
+
+              {items.length > 0 && (
+                <div className="overflow-x-auto rounded border border-gray-200 bg-white mb-3">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase text-[10px]">
+                      <tr>
+                        <th className="py-2 px-2.5 w-8 text-center text-gray-400">#</th>
+                        <th className="py-2 px-2.5">Name of Item</th>
+                        <th className="py-2 px-2.5 text-right">Quantity</th>
+                        <th className="py-2 px-2.5 text-right">Rate</th>
+                        <th className="py-2 px-2.5 text-center">per</th>
+                        <th className="py-2 px-2.5 text-center">Disc %</th>
+                        <th className="py-2 px-2.5 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {items.map((it, idx) => (
+                        <tr key={idx} className="hover:bg-amber-50/40 transition-colors">
+                          <td className="py-2 px-2.5 text-gray-400 text-center">{idx + 1}</td>
+                          <td className="py-2 px-2.5">
+                            <div className="font-semibold text-gray-900">{it.item_name}</div>
+                            {it.description ? (
+                              <div className="text-[11px] text-gray-500 italic mt-0.5">
+                                {it.description}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="py-2 px-2.5 text-right tabular-nums font-semibold text-gray-800">
+                            {it.quantity ? `${it.quantity.toLocaleString('en-IN')} ${it.unit || ''}`.trim() : '—'}
+                          </td>
+                          <td className="py-2 px-2.5 text-right tabular-nums text-gray-700 font-medium">
+                            {it.rate > 0 ? inr(it.rate) : '—'}
+                          </td>
+                          <td className="py-2 px-2.5 text-center text-gray-600 text-[11px]">
+                            {it.per_unit || it.unit || '—'}
+                          </td>
+                          <td className="py-2 px-2.5 text-center text-gray-500 text-[11px]">
+                            {it.discount ? `${it.discount}%` : '—'}
+                          </td>
+                          <td className="py-2 px-2.5 text-right tabular-nums font-bold text-gray-900">
+                            {inr(it.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {itemsSubtotal > 0 && (
+                      <tfoot className="bg-gray-50 border-t border-gray-200 font-semibold text-gray-700">
+                        <tr>
+                          <td colSpan="6" className="py-1.5 px-2.5 text-right text-[11px] uppercase">Subtotal:</td>
+                          <td className="py-1.5 px-2.5 text-right tabular-nums font-bold text-gray-900">{inr(itemsSubtotal)}</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              )}
+
+              {/* Tax & Adjustment Breakdown Card */}
+              {taxes.length > 0 && (
+                <div className="bg-white p-3 rounded border border-gray-200">
+                  <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">
+                    Tax Allocations & Adjustments
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    {taxes.map((tx, idx) => (
+                      <div key={idx} className="p-2 bg-slate-50 rounded border border-slate-100 flex flex-col justify-between">
+                        <span className="text-gray-500 text-[10px] uppercase font-semibold truncate" title={tx.ledger_name}>
+                          {tx.ledger_name}
+                        </span>
+                        <span className={`font-bold tabular-nums mt-1 ${tx.amount < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                          {tx.amount < 0 ? `(-)${inr(Math.abs(tx.amount))}` : inr(tx.amount)}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="p-2 bg-emerald-50 rounded border border-emerald-200 flex flex-col justify-between col-span-2 sm:col-span-1">
+                      <span className="text-emerald-700 text-[10px] uppercase font-extrabold">Grand Total</span>
+                      <span className="font-extrabold text-emerald-900 text-sm tabular-nums mt-1">
+                        {inr(d.bill_amount)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Stage timeline — owner, due, actual, on-time (§6) */}
         <div className="card p-3">
           <h4 className="text-xs font-bold text-gray-500 uppercase mb-2 flex items-center gap-1"><FiClock /> Stage Clock</h4>

@@ -151,6 +151,21 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
     user = db.prepare('SELECT id, name, email, phone, auto_mark_present FROM users WHERE id=?').get(userId);
   } catch (_) {}
 
+  // Fallback: If employee was not linked by user_id, resolve by email, phone, or name
+  if (!employee && user) {
+    try {
+      if (user.email) {
+        employee = db.prepare('SELECT * FROM employees WHERE LOWER(email)=LOWER(?) OR LOWER(personal_email)=LOWER(?)').get(user.email, user.email);
+      }
+      if (!employee && user.phone) {
+        employee = db.prepare('SELECT * FROM employees WHERE phone=?').get(user.phone);
+      }
+      if (!employee && user.name) {
+        employee = db.prepare('SELECT * FROM employees WHERE LOWER(name)=LOWER(?)').get(user.name);
+      }
+    } catch (_) {}
+  }
+
   if (!user && !employee) {
     return { shouldNotify: false, reason: 'user_not_found' };
   }
@@ -205,7 +220,11 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
   const halfDayCutoffFormatted = formatMinutesToTime(halfDayAfterMin);
 
   const empName = user?.name || employee?.name || 'Employee';
-  const empEmail = user?.email || employee?.email || null;
+  // Strictly target personal email (mam / HR requirement: salary deductions and late notices
+  // are confidential and must go directly to the employee's personal email).
+  const personalEmail = (employee?.personal_email || '').trim();
+  const workEmail = (employee?.email || user?.email || '').trim();
+  const empEmail = personalEmail || workEmail || null;
   const empPhone = user?.phone || employee?.phone || null;
 
   // -------------------------------------------------------------
@@ -229,6 +248,8 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
       shortLeaveHours: Number(shortLeaveApp.hours || 0),
       empName,
       empEmail,
+      personalEmail: personalEmail || null,
+      workEmail: workEmail || null,
       empPhone,
     };
   }
@@ -265,6 +286,8 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
       shortLeaveHoursRemaining,
       empName,
       empEmail,
+      personalEmail: personalEmail || null,
+      workEmail: workEmail || null,
       empPhone,
     };
   }
@@ -302,6 +325,8 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
       deduction: 0,
       empName,
       empEmail,
+      personalEmail: personalEmail || null,
+      workEmail: workEmail || null,
       empPhone,
     };
   }
@@ -326,6 +351,8 @@ function evaluateLateAttendance(db, { userId, punchInTime, date }) {
     deduction,
     empName,
     empEmail,
+    personalEmail: personalEmail || null,
+    workEmail: workEmail || null,
     empPhone,
   };
 }
@@ -663,6 +690,7 @@ async function sendLateNotifications(db, evalResult) {
   // 2. Email via email service (never throws)
   if (empEmail) {
     try {
+      console.log(`[lateAttendanceNotifier] Dispatching late notice email to: ${empEmail} ${evalResult.personalEmail ? '(strictly targeted personal_email)' : '(fallback work email)'}`);
       const emailRes = await sendEmail({
         to: empEmail,
         subject: payload.emailSubject,

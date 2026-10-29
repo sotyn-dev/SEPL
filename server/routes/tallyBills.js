@@ -467,6 +467,7 @@ router.get('/:id', requirePermission('tally_bills', 'view'), (req, res) => {
            LEFT JOIN users hu ON hu.id = h.held_by
            LEFT JOIN users ru ON ru.id = h.released_by
           WHERE h.bill_id=? ORDER BY h.id`).all(id),
+      items: db.prepare('SELECT * FROM tally_bill_items WHERE bill_id=? ORDER BY id').all(id),
       audit: db.prepare('SELECT * FROM tally_bill_audit WHERE bill_id=? ORDER BY id DESC LIMIT 500').all(id),
     });
   } catch (e) {
