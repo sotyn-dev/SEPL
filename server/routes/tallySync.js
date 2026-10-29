@@ -151,12 +151,14 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
       register_no, project_id, project_name, category, vendor_id, vendor_name,
       bill_number, bill_date, bill_amount, remarks, status,
       t0_uploaded_at, t1_due_at, tally_guid, tally_alter_id,
-      is_tally_synced, tally_voucher_type, tally_company, tally_party_gstin
+      is_tally_synced, tally_voucher_type, tally_company, tally_party_gstin,
+      items_json, tax_breakdown_json, purchase_ledger, subtotal, round_off
     ) VALUES (
       ?, ?, ?, 'material', ?, ?,
       ?, ?, ?, ?, 'pending_task_creation',
       ?, ?, ?, ?,
-      1, ?, ?, ?
+      1, ?, ?, ?,
+      ?, ?, ?, ?, ?
     )
   `);
 
@@ -165,8 +167,18 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
        SET bill_amount = ?, bill_date = ?, remarks = COALESCE(?, remarks),
            tally_alter_id = ?, tally_company = COALESCE(?, tally_company),
            tally_party_gstin = COALESCE(?, tally_party_gstin),
+           items_json = COALESCE(?, items_json),
+           tax_breakdown_json = COALESCE(?, tax_breakdown_json),
+           purchase_ledger = COALESCE(?, purchase_ledger),
+           subtotal = COALESCE(?, subtotal),
+           round_off = COALESCE(?, round_off),
            is_tally_synced = 1, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?
+  `);
+
+  const insertItemStmt = db.prepare(`
+    INSERT INTO tally_bill_items (bill_id, item_name, description, quantity, unit, rate, per_unit, discount, amount)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   try {
@@ -184,6 +196,11 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
         const vchType = String(v.voucher_type || 'Purchase').trim();
         const remarks = (v.narration || '').trim() || null;
         const company = (company_name || v.company_name || '').trim() || null;
+        const itemsJson = Array.isArray(v.items) && v.items.length > 0 ? JSON.stringify(v.items) : null;
+        const taxJson = Array.isArray(v.tax_breakdown) && v.tax_breakdown.length > 0 ? JSON.stringify(v.tax_breakdown) : null;
+        const purchaseLedger = v.purchase_ledger ? String(v.purchase_ledger).trim() : null;
+        const subtotal = v.subtotal != null ? round2(Number(v.subtotal)) : null;
+        const roundOff = v.round_off != null ? round2(Number(v.round_off)) : null;
 
         if (!billNumber || !vendorName || billAmount <= 0 || !billDate) {
           skipped++;
@@ -216,10 +233,26 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
             changes.push({ field: 'bill_date', old: existing.bill_date, new: billDate });
           }
 
-          if (changes.length > 0 || (guid && !existing.tally_guid)) {
-            updateStmt.run(billAmount, billDate, remarks, alterId, company, gstin, existing.id);
+          if (changes.length > 0 || (guid && !existing.tally_guid) || itemsJson) {
+            updateStmt.run(billAmount, billDate, remarks, alterId, company, gstin, itemsJson, taxJson, purchaseLedger, subtotal, roundOff, existing.id);
             if (guid && !existing.tally_guid) {
               db.prepare('UPDATE tally_bills SET tally_guid = ? WHERE id = ?').run(guid, existing.id);
+            }
+            if (Array.isArray(v.items) && v.items.length > 0) {
+              db.prepare('DELETE FROM tally_bill_items WHERE bill_id = ?').run(existing.id);
+              for (const it of v.items) {
+                insertItemStmt.run(
+                  existing.id,
+                  String(it.item_name || 'Item').trim(),
+                  String(it.description || '').trim(),
+                  Number(it.quantity) || 0,
+                  String(it.unit || '').trim(),
+                  Number(it.rate) || 0,
+                  String(it.per_unit || it.unit || '').trim(),
+                  Number(it.discount) || 0,
+                  Number(it.amount) || 0
+                );
+              }
             }
             auditSync(db, existing.id, 'tally_update', 'Voucher updated from Tally sync', changes);
             updated++;
@@ -250,10 +283,32 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
           alterId,
           vchType,
           company,
-          gstin
+          gstin,
+          itemsJson,
+          taxJson,
+          purchaseLedger,
+          subtotal,
+          roundOff
         );
 
-        auditSync(db, info.lastInsertRowid, 'tally_create', `Synced from Tally (${vchType} Voucher #${billNumber})`);
+        const newBillId = info.lastInsertRowid;
+        if (Array.isArray(v.items) && v.items.length > 0) {
+          for (const it of v.items) {
+            insertItemStmt.run(
+              newBillId,
+              String(it.item_name || 'Item').trim(),
+              String(it.description || '').trim(),
+              Number(it.quantity) || 0,
+              String(it.unit || '').trim(),
+              Number(it.rate) || 0,
+              String(it.per_unit || it.unit || '').trim(),
+              Number(it.discount) || 0,
+              Number(it.amount) || 0
+            );
+          }
+        }
+
+        auditSync(db, newBillId, 'tally_create', `Synced from Tally (${vchType} Voucher #${billNumber})`);
         added++;
       }
 
@@ -288,7 +343,188 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
   }
 });
 
-// ─── 2. Bulk Ingest Payment Vouchers ──────────────────────────────────
+// ─── 1b. Bulk Ingest Sales Vouchers (Invoices to Clients) ─────────────
+router.post('/sales', verifyTallyToken, (req, res) => {
+  const db = getDb();
+  const { vouchers, company_name } = req.body || {};
+
+  if (!Array.isArray(vouchers) || vouchers.length === 0) {
+    return res.json({ message: 'No sales vouchers in payload', added: 0, updated: 0, skipped: 0 });
+  }
+
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
+  let maxAlterId = 0;
+
+  const findByGuid = db.prepare(`SELECT * FROM sales_bills WHERE tally_guid = ?`);
+  const findByNum = db.prepare(`SELECT * FROM sales_bills WHERE LOWER(TRIM(bill_number)) = LOWER(TRIM(?))`);
+
+  const insertStmt = db.prepare(`
+    INSERT INTO sales_bills (
+      bill_number, bill_date, customer_name, customer_gstin,
+      amount, gst_amount, total_amount, payment_status,
+      tally_guid, tally_alter_id, is_tally_synced,
+      items_json, tax_breakdown_json, tally_company
+    ) VALUES (
+      ?, ?, ?, ?,
+      ?, ?, ?, 'pending',
+      ?, ?, 1,
+      ?, ?, ?
+    )
+  `);
+
+  const updateStmt = db.prepare(`
+    UPDATE sales_bills
+       SET bill_date = ?, customer_name = COALESCE(?, customer_name),
+           customer_gstin = COALESCE(?, customer_gstin),
+           amount = ?, gst_amount = ?, total_amount = ?,
+           tally_alter_id = ?, tally_company = COALESCE(?, tally_company),
+           items_json = COALESCE(?, items_json),
+           tax_breakdown_json = COALESCE(?, tax_breakdown_json),
+           is_tally_synced = 1
+     WHERE id = ?
+  `);
+
+  try {
+    db.transaction(() => {
+      for (const v of vouchers) {
+        const alterId = Number(v.alter_id || 0);
+        if (alterId > maxAlterId) maxAlterId = alterId;
+
+        const billNumber = String(v.bill_number || '').trim();
+        const customerName = String(v.customer_name || v.party_name || '').trim();
+        const totalAmount = round2(Math.abs(Number(v.total_amount || v.bill_amount) || 0));
+        const amount = round2(Math.abs(Number(v.amount || v.subtotal) || totalAmount));
+        const gstAmount = round2(Math.abs(Number(v.gst_amount) || (totalAmount - amount)));
+        const billDate = String(v.bill_date || '').trim().slice(0, 10);
+        const guid = v.tally_guid ? String(v.tally_guid).trim() : null;
+        const gstin = v.customer_gstin ? String(v.customer_gstin).trim() : null;
+        const company = (company_name || v.company_name || '').trim() || null;
+        const itemsJson = Array.isArray(v.items) && v.items.length > 0 ? JSON.stringify(v.items) : null;
+        const taxJson = Array.isArray(v.tax_breakdown) && v.tax_breakdown.length > 0 ? JSON.stringify(v.tax_breakdown) : null;
+
+        if (!billNumber || totalAmount <= 0) {
+          skipped++;
+          continue;
+        }
+
+        let existing = guid ? findByGuid.get(guid) : null;
+        if (!existing) {
+          existing = findByNum.get(billNumber);
+        }
+
+        if (existing) {
+          updateStmt.run(billDate, customerName, gstin, amount, gstAmount, totalAmount, alterId, company, itemsJson, taxJson, existing.id);
+          if (guid && !existing.tally_guid) {
+            db.prepare('UPDATE sales_bills SET tally_guid = ?, is_tally_synced = 1 WHERE id = ?').run(guid, existing.id);
+          }
+          updated++;
+        } else {
+          insertStmt.run(billNumber, billDate, customerName, gstin, amount, gstAmount, totalAmount, guid, alterId, itemsJson, taxJson, company);
+          added++;
+        }
+      }
+
+      db.prepare(`
+        INSERT INTO tally_sync_logs (
+          sync_type, vouchers_received, vouchers_added, vouchers_updated,
+          vouchers_skipped, last_alter_id, company_name, status, ip_address
+        ) VALUES ('sales', ?, ?, ?, ?, ?, ?, 'success', ?)
+      `).run(vouchers.length, added, updated, skipped, maxAlterId, company_name || null, req.ip || null);
+    })();
+
+    res.json({ success: true, received: vouchers.length, added, updated, skipped, max_alter_id: maxAlterId });
+  } catch (err) {
+    console.error('[tally-sync] Sales sync failed:', err);
+    res.status(500).json({ error: 'Sales sync failed: ' + err.message });
+  }
+});
+
+// ─── 1c. Bulk Ingest Bank Transactions (Payments, Receipts, Contras) ──
+router.post('/bank', verifyTallyToken, (req, res) => {
+  const db = getDb();
+  const { transactions, company_name } = req.body || {};
+
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return res.json({ message: 'No bank transactions in payload', added: 0, updated: 0, skipped: 0 });
+  }
+
+  let added = 0;
+  let skipped = 0;
+  let maxAlterId = 0;
+
+  const findByGuid = db.prepare(`SELECT id FROM bank_transactions WHERE tally_guid = ?`);
+  const findByHash = db.prepare(`SELECT id FROM bank_transactions WHERE dedupe_hash = ?`);
+
+  const insertStmt = db.prepare(`
+    INSERT INTO bank_transactions (
+      txn_date, description, ref_no, debit, credit,
+      source, dedupe_hash, tally_guid, tally_alter_id,
+      voucher_type, party_name, tally_company
+    ) VALUES (
+      ?, ?, ?, ?, ?,
+      'tally_sync', ?, ?, ?,
+      ?, ?, ?
+    )
+  `);
+
+  try {
+    db.transaction(() => {
+      for (const t of transactions) {
+        const alterId = Number(t.alter_id || 0);
+        if (alterId > maxAlterId) maxAlterId = alterId;
+
+        const date = String(t.date || '').trim().slice(0, 10);
+        const amount = round2(Math.abs(Number(t.amount) || 0));
+        const vchType = String(t.voucher_type || 'Payment').trim();
+        const party = String(t.party_name || '').trim();
+        const refNo = t.ref_no || t.voucher_number || t.instrument_number || null;
+        const narration = t.narration ? ` - ${t.narration}` : '';
+        const desc = `[${vchType}] ${party}${narration}`.trim();
+        const guid = t.tally_guid ? String(t.tally_guid).trim() : null;
+        const company = (company_name || t.company_name || '').trim() || null;
+
+        if (amount <= 0 || !date) {
+          skipped++;
+          continue;
+        }
+
+        const isReceipt = vchType.toLowerCase().includes('receipt');
+        const debit = isReceipt ? 0 : amount;
+        const credit = isReceipt ? amount : 0;
+        const dedupeHash = guid || `tally_${vchType}_${refNo || ''}_${date}_${amount}`;
+
+        let existing = guid ? findByGuid.get(guid) : null;
+        if (!existing) {
+          existing = findByHash.get(dedupeHash);
+        }
+
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
+        insertStmt.run(date, desc, refNo, debit, credit, dedupeHash, guid, alterId, vchType, party, company);
+        added++;
+      }
+
+      db.prepare(`
+        INSERT INTO tally_sync_logs (
+          sync_type, vouchers_received, vouchers_added, vouchers_updated,
+          vouchers_skipped, last_alter_id, company_name, status, ip_address
+        ) VALUES ('bank', ?, ?, 0, ?, ?, ?, 'success', ?)
+      `).run(transactions.length, added, skipped, maxAlterId, company_name || null, req.ip || null);
+    })();
+
+    res.json({ success: true, received: transactions.length, added, skipped, max_alter_id: maxAlterId });
+  } catch (err) {
+    console.error('[tally-sync] Bank sync failed:', err);
+    res.status(500).json({ error: 'Bank sync failed: ' + err.message });
+  }
+});
+
+// ─── 2. Bulk Ingest Payment Vouchers (Reconciliation) ─────────────────
 router.post('/payments', verifyTallyToken, (req, res) => {
   const db = getDb();
   const { payments, company_name } = req.body || {};
@@ -432,6 +668,10 @@ router.post('/payments', verifyTallyToken, (req, res) => {
 });
 
 // ─── 3. Sync Status & Health (For ERP Admin & Settings) ────────────────
+router.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'sepl-tally-sync', timestamp: new Date().toISOString() });
+});
+
 router.get('/status', authMiddleware, requirePermission('tally_bills', 'view'), (req, res) => {
   try {
     const db = getDb();

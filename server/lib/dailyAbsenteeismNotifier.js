@@ -138,7 +138,7 @@ async function scanAndNotifyAbsentEmployees(db, options = {}) {
   let employees = [];
   try {
     employees = db.prepare(`
-      SELECT e.id AS employee_id, e.user_id, e.name, e.email, e.phone, e.department, e.designation,
+      SELECT e.id AS employee_id, e.user_id, e.name, e.email, e.personal_email, e.phone, e.department, e.designation,
              u.name AS user_name, u.email AS user_email, u.phone AS user_phone
       FROM employees e
       JOIN users u ON u.id = e.user_id
@@ -192,7 +192,9 @@ async function scanAndNotifyAbsentEmployees(db, options = {}) {
     } catch (_) {}
 
     const empName = emp.user_name || emp.name || 'Employee';
-    const empEmail = emp.email || emp.user_email || null;
+    const personalEmail = (emp.personal_email || '').trim();
+    const workEmail = (emp.email || emp.user_email || '').trim();
+    const empEmail = personalEmail || workEmail || null;
     const empPhone = emp.phone || emp.user_phone || null;
 
     const payload = buildAbsenteeismPayload({ empName, date: targetDate });
