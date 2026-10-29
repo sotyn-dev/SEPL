@@ -950,7 +950,7 @@ export default function DPR() {
       if (res?.data?.auto_task?.created) {
         toast.success(`DPR submitted! 📌 Auto-task created & assigned to ${res.data.auto_task.assigned_to_name} (${res.data.auto_task.category})`);
       } else {
-        toast.success('DPR submitted!');
+        toast.success('DPR submitted successfully! Overtime attendance is unlocked.', { duration: 5000 });
       }
       setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Error'); }

@@ -7472,7 +7472,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   const rahulUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get('rahul@securedengineers.com', 'rahul');
   if (!rahulUser) {
     db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
-      .run('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', rahulPwdHash, 'user', 'Site Operations');
+      .run('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', rahulPwdHash, 'user', 'Design');
   } // Existing password, username and active state belong to account administration.
 
   // ============================================

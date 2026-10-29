@@ -1,5 +1,6 @@
 import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../api';
 import StaffTypeFilter from '../components/StaffTypeFilter';
 import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
@@ -8,7 +9,7 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload, FiRefreshCw } from 'react-icons/fi';
+import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload, FiRefreshCw, FiUploadCloud } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 import HrIdentity, { hrDeptText } from '../components/HrIdentity';
@@ -94,7 +95,9 @@ const statusFromPunches = (inHHMM, outHHMM, cfg) => {
 };
 
 export default function Attendance() {
+  const navigate = useNavigate();
   const { user, isAdmin, canDelete, canSeeAll, canView, canApprove } = useAuth();
+  const [dprModalOpen, setDprModalOpen] = useState(false);
   // Admins, or anyone granted "See All" on the attendance module, can view
   // everyone's attendance (mam 2026-06-15: "show all attendance if I give some
   // permission to see all"). Geofence config stays admin-only.
@@ -187,6 +190,49 @@ export default function Attendance() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const proofInputRef = useRef(null);
+
+  const handleModalPaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const pastedFiles = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const blob = items[i].getAsFile();
+        if (blob) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const file = new File([blob], `pasted_proof_${pastedFiles.length + 1}_${timestamp.slice(11, 19)}.png`, { type: blob.type });
+          pastedFiles.push(file);
+        }
+      }
+    }
+    if (pastedFiles.length > 0) {
+      e.preventDefault();
+      setForm(f => ({
+        ...f,
+        _proofFiles: [...(f._proofFiles || []), ...pastedFiles]
+      }));
+      toast.success(`${pastedFiles.length} image(s) pasted from clipboard!`);
+    }
+  };
+
+  const handleProofFilesChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setForm(f => ({
+        ...f,
+        _proofFiles: [...(f._proofFiles || []), ...files]
+      }));
+    }
+    e.target.value = '';
+  };
+
+  const removeProofFile = (index) => {
+    setForm(f => ({
+      ...f,
+      _proofFiles: (f._proofFiles || []).filter((_, i) => i !== index)
+    }));
+  };
 
   const load = useCallback(() => {
     api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
@@ -442,12 +488,21 @@ export default function Attendance() {
   };
 
   // Punch Out
-  const handlePunchOut = async () => {
+  const handlePunchOut = () => {
+    if (!photo) return toast.error('Please take a selfie first');
+    if (myToday?.requires_dpr_before_punchout && !myToday?.has_today_dpr) {
+      setDprModalOpen(true);
+      return;
+    }
+    executePunchOut();
+  };
+
+  const executePunchOut = async (opts = {}) => {
     if (!photo) return toast.error('Please take a selfie first');
     setLoading(true);
     try {
       const loc = await getLocation();
-      const res = await api.post('/attendance/punch-out', { ...loc, address, photo });
+      const res = await api.post('/attendance/punch-out', { ...loc, address, photo, confirm_clamped: !!opts.confirm_clamped });
       if (res.data.ot_status === 'clamped_no_dpr' || res.data.ot_status === 'rejected_loss' || res.data.ot_status === 'rejected_no_dpr') {
         toast.error(res.data.message, { duration: 6000 });
       } else if (res.data.ot_status === 'pending_pm') {
@@ -455,8 +510,16 @@ export default function Attendance() {
       } else {
         toast.success(res.data.message);
       }
-      setPhoto(null); load();
-    } catch (err) { toast.error(typeof err === 'string' ? err : err.response?.data?.error || 'Failed'); }
+      setPhoto(null);
+      setDprModalOpen(false);
+      load();
+    } catch (err) {
+      if (err.response?.data?.requires_dpr) {
+        setDprModalOpen(true);
+      } else {
+        toast.error(typeof err === 'string' ? err : err.response?.data?.error || 'Failed');
+      }
+    }
     setLoading(false);
   };
 
@@ -938,6 +1001,25 @@ export default function Attendance() {
             )}
 
             {location && <p className="text-xs text-gray-500 flex items-center gap-1"><FiMapPin size={12} /> {address || `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`}</p>}
+
+            {myToday && !myToday.punch_out_time && myToday.requires_dpr_before_punchout && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900 flex items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-start gap-2">
+                  <FiAlertTriangle className="text-amber-600 mt-0.5 shrink-0" size={16} />
+                  <div>
+                    <span className="font-bold">Overtime / Sunday Work: </span>
+                    <span>Please file today's DPR before punching out to claim approved overtime.</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate('/dpr')}
+                  className="btn btn-primary text-xs py-1 px-3 whitespace-nowrap shrink-0 flex items-center gap-1 font-semibold"
+                >
+                  <FiEdit2 size={13} /> Fill DPR ➔
+                </button>
+              </div>
+            )}
 
             {/* Punch Buttons — "Manual" prefix dropped since auto-punch is
                 disabled; these are now THE punch in/out actions. */}
@@ -2561,8 +2643,8 @@ export default function Attendance() {
       {/* Admin Mark / Backfill Attendance — pick any user + any PAST date.
           Hits /attendance/admin-mark (admin_marked=1, hidden from the user's
           own view). The endpoint refuses to overwrite a real punch. */}
-      <Modal isOpen={modal === 'admin-mark'} onClose={() => setModal(null)} title="Mark / Backfill Attendance">
-        <form onSubmit={async (e) => {
+      <Modal isOpen={modal === 'admin-mark'} onClose={() => { setForm({}); setModal(null); }} title="Mark / Backfill Attendance">
+        <form onPaste={handleModalPaste} onSubmit={async (e) => {
           e.preventDefault();
           if (!form.user_id) return toast.error('Please select an employee');
           if (!form.date) return toast.error('Please pick a date');
@@ -2584,16 +2666,29 @@ export default function Attendance() {
             return toast.error('Fill both Punch In and Punch Out times for a worked day');
           }
           const isBackdate = form.date < today;
-          if (worked && isBackdate && !form._proofFile && !form.proof_url) {
-            return toast.error('Attach a proof document (signed sheet / photo) to back-date a worked day');
+          const hasAttachedFiles = (form._proofFiles && form._proofFiles.length > 0) || form._proofFile || form.proof_url;
+          if (worked && isBackdate && !hasAttachedFiles) {
+            return toast.error('Attach a proof document (signed sheet / photo / screenshot) to back-date a worked day');
           }
           try {
-            let proof_url = form.proof_url || null;
-            if (form._proofFile) {
-              const fd = new FormData(); fd.append('file', form._proofFile);
-              const up = await api.post('/upload', fd);
-              proof_url = up.data.url;
+            let proofUrls = [];
+            if (form.proof_url) {
+              proofUrls.push(...form.proof_url.split(',').map(s => s.trim()).filter(Boolean));
             }
+            const filesToUpload = [...(form._proofFiles || [])];
+            if (form._proofFile && !filesToUpload.includes(form._proofFile)) {
+              filesToUpload.push(form._proofFile);
+            }
+            if (filesToUpload.length > 0) {
+              const uploads = await Promise.all(filesToUpload.map(async (file) => {
+                const fd = new FormData();
+                fd.append('file', file);
+                const up = await api.post('/upload', fd);
+                return up.data?.url;
+              }));
+              proofUrls.push(...uploads.filter(Boolean));
+            }
+            const proof_url = proofUrls.length > 0 ? proofUrls.join(',') : null;
             // fill_in / fill_out are choices of this form only. With just a
             // punch-in the time itself still says late-or-not; with only a
             // punch-out there is nothing to judge. A real punch row keeps its
@@ -2614,7 +2709,7 @@ export default function Attendance() {
             toast.success(/regularized|punch/i.test(res.data?.message || '')
               ? `${who} · ${res.data.message} (${form.date})`
               : `${who} marked ${sentStatus.replace('_', ' ')} for ${form.date}`);
-            setModal(null); load(); loadUserMuster();
+            setModal(null); setForm({}); load(); loadUserMuster();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div>
@@ -2684,21 +2779,80 @@ export default function Attendance() {
             <label className="label">Reason / Remarks (for audit)</label>
             <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
           </div>
-          {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
-            <div>
-              <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date or regularize a worked day)</span></label>
-              <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
-                onChange={e => setForm({ ...form, _proofFile: e.target.files?.[0] || null })} />
-              {form._proofFile && <p className="text-[11px] text-emerald-600 mt-1">Attached: {form._proofFile.name}</p>}
-              {form.proof_url && !form._proofFile && (
-                <p className="text-[11px] text-blue-600 mt-1">
-                  Attached file: <a href={form.proof_url} target="_blank" rel="noreferrer" className="underline font-medium">View current proof</a> (upload above to replace)
-                </p>
-              )}
+          {/* Proof Upload & Clipboard Paste Section (Always Available) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="label mb-0">
+                Proof Document / Screenshot {form.date && form.date < today && ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') ? <span className="text-red-500 font-bold">*</span> : ''}
+                <span className="font-normal text-gray-500 text-xs ml-1">
+                  ({form.date && form.date < today && ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') ? 'mandatory for back-dated worked day' : 'optional, upload file or paste with Ctrl+V'})
+                </span>
+              </label>
+              <span className="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-medium">
+                💡 Paste image with Ctrl+V
+              </span>
             </div>
-          )}
+
+            <div
+              tabIndex={0}
+              className="border-2 border-dashed border-gray-300 hover:border-blue-400 focus:border-blue-500 rounded-lg p-3 text-center bg-gray-50/50 hover:bg-blue-50/30 transition-all cursor-pointer relative"
+              onClick={() => proofInputRef.current?.click()}
+            >
+              <input
+                ref={proofInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+                className="hidden"
+                onChange={handleProofFilesChange}
+              />
+              <div className="flex flex-col items-center justify-center gap-1 text-gray-500 pointer-events-none">
+                <FiUploadCloud size={24} className="text-blue-500" />
+                <p className="text-xs font-medium text-gray-700">
+                  Click to browse files or <span className="text-blue-600 underline">paste (Ctrl+V)</span> screenshots
+                </p>
+                <p className="text-[10px] text-gray-400">PDF, JPG, PNG, WEBP, Excel, Word (Multiple files allowed)</p>
+              </div>
+            </div>
+
+            {/* List of currently attached files */}
+            {form._proofFiles && form._proofFiles.length > 0 && (
+              <div className="mt-2 space-y-1.5">
+                <p className="text-[11px] font-semibold text-gray-600">Files to upload ({form._proofFiles.length}):</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {form._proofFiles.map((file, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-2.5 py-1 rounded-md">
+                      <span className="truncate max-w-[180px]">{file.name}</span>
+                      <span className="text-[10px] text-emerald-600 font-normal">({(file.size / 1024).toFixed(0)} KB)</span>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); removeProofFile(idx); }}
+                        className="text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] ml-1"
+                        title="Remove file"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Existing proof links if regularizing */}
+            {form.proof_url && (!form._proofFiles || form._proofFiles.length === 0) && (
+              <div className="mt-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 p-2 rounded flex flex-wrap items-center gap-2">
+                <span className="font-medium text-gray-700">Current attached proof:</span>
+                {form.proof_url.split(',').map((url, i) => (
+                  <a key={i} href={url.trim()} target="_blank" rel="noreferrer" className="underline font-semibold text-blue-700 hover:text-blue-900">
+                    Proof #{i + 1} ↗
+                  </a>
+                ))}
+                <span className="text-gray-400 text-[10px]">(upload or paste above to replace)</span>
+              </div>
+            )}
+          </div>
           <p className="text-[11px] text-gray-500 italic">Admin regularization updates attendance status and hours with an audit trail while preserving physical punch timestamps and photos.</p>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => { setForm({}); setModal(null); }} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>
 
@@ -2776,6 +2930,50 @@ export default function Attendance() {
           </div>
         </div>
       )}
+      {/* DPR Required Modal */}
+      <Modal isOpen={dprModalOpen} onClose={() => setDprModalOpen(false)} title="Mandatory DPR Required Before Punch-Out">
+        <div className="p-4 space-y-4 text-sm text-gray-700">
+          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 p-3.5 rounded-lg text-amber-800">
+            <FiAlertTriangle className="text-amber-600 mt-0.5 shrink-0" size={22} />
+            <div>
+              <p className="font-semibold text-amber-900 text-sm">Mandatory Daily Progress Report</p>
+              <p className="text-xs mt-1 text-amber-800 leading-relaxed">
+                {myToday?.is_sunday 
+                  ? 'Sunday attendance requires a submitted Daily Progress Report (DPR) before punching out to claim double attendance.'
+                  : `You have clocked overtime (${myToday?.elapsed_hours || '10+'} hours today). Company policy (TK-01466) requires submitting a Daily Progress Report (DPR) to verify site work before punching out.`
+                }
+              </p>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-600 leading-normal">
+            Please submit today's DPR for your site first. Once submitted, your punch-out will be recorded with <strong>full approved overtime hours</strong>.
+          </p>
+
+          <div className="pt-2 flex flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={() => {
+                setDprModalOpen(false);
+                navigate('/dpr');
+              }}
+              className="btn btn-primary w-full py-2.5 flex items-center justify-center gap-2 font-bold text-sm shadow-sm"
+            >
+              <FiEdit2 size={16} /> Fill Today's DPR Now ➔
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                executePunchOut({ confirm_clamped: true });
+              }}
+              className="text-xs text-gray-500 hover:text-red-600 text-center py-1 underline transition-colors"
+            >
+              Punch out anyway without overtime (Clamped to 6:00 PM shift end)
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

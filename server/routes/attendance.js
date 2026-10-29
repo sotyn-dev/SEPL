@@ -10,7 +10,7 @@ const { getEmailConfig } = require('../lib/email');
 const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
 const { rosterCutoffs, ROSTERS } = require('../lib/roster');
 const { validCoordinates } = require('../lib/locationAvailability');
-const { isSiteEngineer, evaluateSiteEngineerDpr } = require('../db/siteEngineerAttendanceSchema');
+const { isSiteEngineer, findSiteEngineerDpr, evaluateSiteEngineerDpr } = require('../db/siteEngineerAttendanceSchema');
 const { processLatePunchNotification } = require('../lib/lateAttendanceNotifier');
 const { scanAndNotifyAbsentEmployees } = require('../lib/dailyAbsenteeismNotifier');
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
@@ -94,11 +94,54 @@ function isPunchLate(db, whenIso, roster) {
 // real presence the user should see).
 router.get('/my-today', (req, res) => {
   const today = istTodayStr();
-  const record = getDb().prepare(
+  const db = getDb();
+  const record = db.prepare(
     `SELECT * FROM attendance WHERE user_id=? AND date=?
         AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')`
   ).get(req.user.id, today);
-  res.json(record || null);
+
+  let isSiteEng = false;
+  try {
+    isSiteEng = isSiteEngineer(db, req.user.id);
+  } catch (_) {}
+
+  const isSun = new Date(today + 'T12:00:00Z').getUTCDay() === 0;
+  let elapsedHours = 0;
+  let hasTodayDpr = false;
+  let todayDprId = null;
+
+  if (record && record.punch_in_time) {
+    const punchIn = new Date(record.punch_in_time);
+    const end = record.punch_out_time ? new Date(record.punch_out_time) : new Date();
+    elapsedHours = Math.round((end - punchIn) / (1000 * 60 * 60) * 100) / 100;
+    if (!Number.isFinite(elapsedHours) || elapsedHours < 0) elapsedHours = 0;
+  }
+
+  if (isSiteEng) {
+    try {
+      const dpr = findSiteEngineerDpr(db, req.user.id, today);
+      if (dpr) {
+        hasTodayDpr = true;
+        todayDprId = dpr.id;
+      }
+    } catch (_) {}
+  }
+
+  const requiresDprBeforePunchout = isSiteEng && !hasTodayDpr && (isSun || elapsedHours > 10);
+
+  if (!record) {
+    return res.json(null);
+  }
+
+  res.json({
+    ...record,
+    is_site_engineer: isSiteEng,
+    is_sunday: isSun,
+    elapsed_hours: elapsedHours,
+    has_today_dpr: hasTodayDpr,
+    today_dpr_id: todayDprId,
+    requires_dpr_before_punchout: requiresDprBeforePunchout,
+  });
 });
 
 // GET current month's attendance for the logged-in user — used by the
@@ -1437,7 +1480,13 @@ router.post('/punch-out', (req, res) => {
   if (totalHours > 24) totalHours = 24;
 
   // Site Engineer DPR & Overtime / Sunday Verification (TK-01466, TK-01401, TSK-1020)
-  const isSiteEng = isSiteEngineer(db, req.user.id);
+  let isSiteEng = false;
+  try {
+    isSiteEng = isSiteEngineer(db, req.user.id);
+  } catch (err) {
+    console.warn('[attendance/punch-out] isSiteEngineer check error:', err.message);
+  }
+
   const isSun = new Date(today + 'T12:00:00Z').getUTCDay() === 0;
   let finalPunchOutTime = now;
   const originalPunchOut = now;
@@ -1448,22 +1497,35 @@ router.post('/punch-out', (req, res) => {
   let otMessage = null;
 
   if (isSiteEng) {
-    const evalRes = evaluateSiteEngineerDpr(db, req.user.id, today, isSun, totalHours);
-    otStatus = evalRes.ot_status;
-    dprId = evalRes.dpr_id;
-    dprProfitLoss = evalRes.dpr_profit_loss;
-    otRejectionReason = evalRes.ot_rejection_reason;
-    otMessage = evalRes.message;
+    try {
+      const evalRes = evaluateSiteEngineerDpr(db, req.user.id, today, isSun, totalHours);
+      otStatus = evalRes.ot_status;
+      dprId = evalRes.dpr_id;
+      dprProfitLoss = evalRes.dpr_profit_loss;
+      otRejectionReason = evalRes.ot_rejection_reason;
+      otMessage = evalRes.message;
 
-    if (evalRes.shouldClampToShiftEnd) {
-      // Early shift for site engineer ends at 18:00 (6:00 PM)
-      const shiftEndIso = new Date(`${today}T18:00:00+05:30`).toISOString();
-      if (new Date(now) > new Date(shiftEndIso)) {
-        finalPunchOutTime = shiftEndIso;
-        totalHours = Math.round((new Date(shiftEndIso) - punchIn) / (1000 * 60 * 60) * 100) / 100;
-        if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
-        if (totalHours > 24) totalHours = 24;
+      if (evalRes.shouldClampToShiftEnd) {
+        // If DPR is missing and engineer didn't explicitly confirm clamping, block punch-out & guide to DPR
+        if (!req.body.confirm_clamped) {
+          return res.status(400).json({
+            requires_dpr: true,
+            error: evalRes.message || 'DPR submission is required before punching out for overtime work (>10h). Please submit your DPR first.',
+            redirect_url: '/dpr'
+          });
+        }
+
+        // Early shift for site engineer ends at 18:00 (6:00 PM)
+        const shiftEndIso = new Date(`${today}T18:00:00+05:30`).toISOString();
+        if (new Date(now) > new Date(shiftEndIso)) {
+          finalPunchOutTime = shiftEndIso;
+          totalHours = Math.round((new Date(shiftEndIso) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+          if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+          if (totalHours > 24) totalHours = 24;
+        }
       }
+    } catch (err) {
+      console.warn('[attendance/punch-out] evaluateSiteEngineerDpr error:', err.message);
     }
   }
 

@@ -167,3 +167,23 @@ test('syncAttendanceWithDpr automatically updates clamped attendance when profit
   assert.equal(updated.total_hours, 11);
   assert.equal(updated.punch_out_time, '2026-10-27T14:30:00.000Z');
 });
+
+test('isSiteEngineer strictly exempts Drawing Viewers and users without DPR permission', () => {
+  const db = setupTestDb();
+  db.exec(`
+    CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT);
+    CREATE TABLE user_roles (id INTEGER PRIMARY KEY, user_id INTEGER, role_id INTEGER);
+    CREATE TABLE role_permissions (id INTEGER PRIMARY KEY, role_id INTEGER, module TEXT, can_create INTEGER, can_edit INTEGER);
+  `);
+
+  // Role 758: Drawing Viewer
+  db.prepare("INSERT INTO roles (id, name) VALUES (758, 'Drawing Viewer')").run();
+  db.prepare("INSERT INTO role_permissions (role_id, module, can_create, can_edit) VALUES (758, 'drawing_tracker', 0, 0)").run();
+  db.prepare("INSERT INTO role_permissions (role_id, module, can_create, can_edit) VALUES (758, 'dpr', 0, 0)").run();
+
+  // User 5: Rahul Sharma with role Drawing Viewer even if department is Site Operations
+  db.prepare("INSERT INTO users (id, name, role, department) VALUES (5, 'Rahul Sharma', 'user', 'Site Operations')").run();
+  db.prepare("INSERT INTO user_roles (user_id, role_id) VALUES (5, 758)").run();
+
+  assert.equal(isSiteEngineer(db, 5), false, 'Drawing Viewer must never be treated as site engineer');
+});
