@@ -83,6 +83,7 @@ const ALL_FIELDS = [
   'payment_against_commissioning', 'payment_retention', 'payment_credit', 'credit_days',
   'advance_received', 'balance_amount',
   'po_number', 'po_date', 'po_copy_link',
+  'work_order_number', 'work_order_date', 'work_order_signed_link',
   'boq_file_link', 'boq_signed_link', 'tpa_material_link', 'tpa_material_signed_link',
   'tpa_labour_link', 'tpa_labour_signed_link', 'final_drawing_link',
   'working_sheet_link',
@@ -91,7 +92,7 @@ const ALL_FIELDS = [
 
 // GET all with filters
 router.get('/', requirePermission('business_book', 'view'), (req, res) => {
-  const { status, category, order_type, lead_type, freight_mentioned_in_po, search, date_from, date_to } = req.query;
+  const { status, category, order_type, lead_type, freight_mentioned_in_po, work_order_status, search, date_from, date_to } = req.query;
   // order_po_files: the client PO copy / BOQ uploaded against this lead in
   // Order to Planning, so the list row can link them next to the lead's own
   // files (mam 2026-09-10: "if po upload show here"). One lead can have
@@ -109,11 +110,16 @@ router.get('/', requirePermission('business_book', 'view'), (req, res) => {
   if (order_type) { sql += ' AND bb.order_type=?'; params.push(order_type); }
   if (lead_type) { sql += ' AND bb.lead_type=?'; params.push(lead_type); }
   if (freight_mentioned_in_po) { sql += ' AND bb.freight_mentioned_in_po=?'; params.push(freight_mentioned_in_po); }
+  if (work_order_status === 'issued') {
+    sql += " AND (COALESCE(bb.work_order_signed_link, '') <> '' OR COALESCE(bb.work_order_number, '') <> '')";
+  } else if (work_order_status === 'pending') {
+    sql += " AND (COALESCE(bb.work_order_signed_link, '') = '' AND COALESCE(bb.work_order_number, '') = '')";
+  }
   if (date_from) { sql += ' AND bb.created_at >= ?'; params.push(date_from); }
   if (date_to) { sql += ' AND bb.created_at <= ?'; params.push(date_to + ' 23:59:59'); }
   if (search) {
-    sql += ' AND (bb.client_name LIKE ? OR bb.company_name LIKE ? OR bb.lead_no LIKE ? OR bb.project_name LIKE ? OR bb.district LIKE ? OR bb.state LIKE ? OR bb.po_number LIKE ? OR bb.customer_code LIKE ?)';
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    sql += ' AND (bb.client_name LIKE ? OR bb.company_name LIKE ? OR bb.lead_no LIKE ? OR bb.project_name LIKE ? OR bb.district LIKE ? OR bb.state LIKE ? OR bb.po_number LIKE ? OR bb.customer_code LIKE ? OR bb.work_order_number LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += ' ORDER BY bb.created_at DESC';
   res.json(getDb().prepare(sql).all(...params));
@@ -218,11 +224,12 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     payment_against_commissioning, payment_retention, payment_credit, credit_days,
     advance_received, balance_amount,
     po_number, po_date, po_copy_link,
+    work_order_number, work_order_date, work_order_signed_link,
     boq_file_link, boq_signed_link, tpa_material_link, tpa_material_signed_link,
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
     working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(79).fill('?').join(',')})`).run(
+  ) VALUES (${Array(82).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.site_location_url || null, b.site_latitude ? Number(b.site_latitude) : null, b.site_longitude ? Number(b.site_longitude) : null,
@@ -243,6 +250,7 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     b.payment_against_commissioning, b.payment_retention, b.payment_credit, b.credit_days || 0,
     b.advance_received || 0, balanceAmount,
     b.po_number, b.po_date || null, b.po_copy_link,
+    b.work_order_number || null, b.work_order_date || null, b.work_order_signed_link || null,
     b.boq_file_link, b.boq_signed_link, b.tpa_material_link, b.tpa_material_signed_link,
     b.tpa_labour_link, b.tpa_labour_signed_link, b.final_drawing_link,
     b.working_sheet_link || null,
@@ -382,6 +390,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     payment_against_commissioning=?, payment_retention=?, payment_credit=?, credit_days=?,
     advance_received=?, balance_amount=?,
     po_number=?, po_date=?, po_copy_link=?,
+    work_order_number=?, work_order_date=?, work_order_signed_link=?,
     boq_file_link=?, boq_signed_link=?, tpa_material_link=?, tpa_material_signed_link=?,
     tpa_labour_link=?, tpa_labour_signed_link=?, final_drawing_link=?,
     working_sheet_link=?,
@@ -406,6 +415,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     b.payment_against_commissioning, b.payment_retention, b.payment_credit, b.credit_days || 0,
     b.advance_received || 0, computedBalance,
     b.po_number, b.po_date || null, b.po_copy_link,
+    b.work_order_number || null, b.work_order_date || null, b.work_order_signed_link || null,
     b.boq_file_link, b.boq_signed_link, b.tpa_material_link, b.tpa_material_signed_link,
     b.tpa_labour_link, b.tpa_labour_signed_link, b.final_drawing_link,
     b.working_sheet_link || null,
