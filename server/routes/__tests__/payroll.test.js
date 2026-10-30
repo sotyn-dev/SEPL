@@ -513,5 +513,61 @@ test('getEligiblePayrollEmployees: excludes historical inactive employees with n
   assert.ok(!septNames.includes('Historical Inactive'), 'Historical inactive employee must NOT be in September');
 });
 
+test('declared holiday worked hours: unworked=1d, <4h=1d+OT, 4h-8h=1.5d, 8h+=2.0d, >9h=2d+OT', () => {
+  // 2025-10-02 is a declared holiday (Gandhi Jayanti)
+  const holiday = { date: '2025-10-02', name: 'Gandhi Jayanti' };
+  const otEmp = { id: 1, user_id: 1, name: 'OT Eligible Staff', salary: 31000, join_date: '2025-01-01', ot_eligible: 1 };
+
+  // Case A: Unworked on holiday -> 1.0 day pay
+  activeDb = fixture({ holidays: [holiday], attendance: [] });
+  let res = calculate(activeDb, settings, otEmp, '2025-10');
+  let b = res.breakdown.find(row => row.date === '2025-10-02');
+  assert.equal(b.pay, 1, 'Unworked holiday must pay 1.0 day');
+  assert.equal(b.label, 'holiday_paid');
+
+  // Case B: Worked 2.5h on holiday (<4h) -> 1.0 day pay + 2.5h OT
+  activeDb = fixture({
+    holidays: [holiday],
+    attendance: [{ date: '2025-10-02', punch_in_time: '2025-10-02T10:00:00Z', punch_out_time: '2025-10-02T12:30:00Z', total_hours: 2.5, status: 'present' }]
+  });
+  res = calculate(activeDb, settings, otEmp, '2025-10');
+  b = res.breakdown.find(row => row.date === '2025-10-02');
+  assert.equal(b.pay, 1, 'Under 4h on holiday must pay 1.0 day');
+  assert.equal(b.ot_hours, 2.5, 'Under 4h on holiday must credit OT for eligible staff');
+
+  // Case C: Worked 6.77h on holiday (4h to <8h) -> 1.5 days pay
+  activeDb = fixture({
+    holidays: [holiday],
+    attendance: [{ date: '2025-10-02', punch_in_time: '2025-10-02T11:26:00Z', punch_out_time: '2025-10-02T18:12:00Z', total_hours: 6.77, status: 'present' }]
+  });
+  res = calculate(activeDb, settings, otEmp, '2025-10');
+  b = res.breakdown.find(row => row.date === '2025-10-02');
+  assert.equal(b.pay, 1.5, 'Worked 6.77h on holiday must pay 1.5 days');
+  assert.equal(b.holiday_bonus, 0.5, 'Worked 6.77h on holiday must give +0.5d holiday bonus');
+  assert.equal(b.label, 'holiday_worked');
+
+  // Case D: Worked 8.5h on holiday (8h to 9h) -> 2.0 days pay
+  activeDb = fixture({
+    holidays: [holiday],
+    attendance: [{ date: '2025-10-02', punch_in_time: '2025-10-02T09:00:00Z', punch_out_time: '2025-10-02T17:30:00Z', total_hours: 8.5, status: 'present' }]
+  });
+  res = calculate(activeDb, settings, otEmp, '2025-10');
+  b = res.breakdown.find(row => row.date === '2025-10-02');
+  assert.equal(b.pay, 2, 'Worked 8.5h on holiday must pay 2.0 days');
+  assert.equal(b.holiday_bonus, 1, 'Worked 8.5h on holiday must give +1.0d holiday bonus');
+  assert.equal(b.ot_hours, 0, '8.5h on holiday does not exceed 9h OT threshold');
+
+  // Case E: Worked 11h on holiday (>9h) -> 2.0 days pay + 2.0h OT
+  activeDb = fixture({
+    holidays: [holiday],
+    attendance: [{ date: '2025-10-02', punch_in_time: '2025-10-02T08:00:00Z', punch_out_time: '2025-10-02T19:00:00Z', total_hours: 11, status: 'present' }]
+  });
+  res = calculate(activeDb, settings, otEmp, '2025-10');
+  b = res.breakdown.find(row => row.date === '2025-10-02');
+  assert.equal(b.pay, 2, 'Worked 11h on holiday must pay 2.0 days');
+  assert.equal(b.holiday_bonus, 1);
+  assert.equal(b.ot_hours, 2, 'Worked 11h on holiday must credit 2.0h OT (11h - 9h)');
+});
+
 
 

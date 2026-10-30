@@ -1,13 +1,13 @@
 import SerialNumber from '../components/SerialNumber';
 import NumberedTable from '../components/NumberedTable';
 import EmployeeMaster from '../components/employee/EmployeeMaster';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiRotateCcw, FiX, FiFilter } from 'react-icons/fi';
 import Pagination, { usePagination } from '../components/PaginationBar';
 import DataCompletion from '../components/DataCompletion';
 
@@ -16,6 +16,12 @@ import { staffTypeLabel, matchesStaffType } from '../utils/staffType';
 
 export default function Employees() {
   const [staffType, setStaffType] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // all | active | inactive | terminated | probation | notice | training
+  const [deptFilter, setDeptFilter] = useState('');
+  const [desigFilter, setDesigFilter] = useState('');
+  const [linkFilter, setLinkFilter] = useState('all'); // all | linked | unlinked
+  const [sortField, setSortField] = useState('name');   // name | designation | department | join_date | salary | status
+  const [sortOrder, setSortOrder] = useState('asc');
   const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
   // Salary is confidential — only admins and holders of employee_salary.can_view see it
   const canSeeSalary = isAdmin() || canView('employee_salary');
@@ -199,10 +205,128 @@ export default function Employees() {
     } catch { toast.error('Import failed'); }
   };
 
-  const filtered = employees.filter(e =>
-    matchesStaffType(e.staff_type, staffType) && (!search || [e.name, e.phone, e.email, e.personal_email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase())))
-  );
-  const pager = usePagination(filtered, { resetKey: [search, staffType] });
+  // KPI counts
+  const counts = useMemo(() => {
+    const total = employees.length;
+    const active = employees.filter(e => {
+      const s = String(e.status || '').toLowerCase().trim();
+      return s === 'active' || s === 'confirmed';
+    }).length;
+    const inactive = employees.filter(e => {
+      const s = String(e.status || '').toLowerCase().trim();
+      return s === 'inactive' || s === 'terminated' || s === 'resigned' || s === 'left';
+    }).length;
+    const unlinked = employees.filter(e => !e.user_id && !e.linked_username).length;
+    const noticeOrProbation = employees.filter(e => {
+      const s = String(e.status || '').toLowerCase().trim();
+      return s === 'notice' || s === 'probation' || s === 'training';
+    }).length;
+    return { total, active, inactive, unlinked, noticeOrProbation };
+  }, [employees]);
+
+  // Unique departments & designations
+  const allDeptOptions = useMemo(() => {
+    const set = new Set();
+    employees.forEach(e => { if (e.department && e.department.trim()) set.add(e.department.trim()); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [employees]);
+
+  const allDesigOptions = useMemo(() => {
+    const set = new Set();
+    employees.forEach(e => { if (e.designation && e.designation.trim()) set.add(e.designation.trim()); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [employees]);
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const hasActiveFilters = statusFilter !== 'all' || staffType || deptFilter || desigFilter || linkFilter !== 'all' || search;
+  const resetFilters = () => {
+    setStatusFilter('all');
+    setStaffType('');
+    setDeptFilter('');
+    setDesigFilter('');
+    setLinkFilter('all');
+    setSearch('');
+  };
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const res = employees.filter(e => {
+      // Staff type
+      if (!matchesStaffType(e.staff_type, staffType)) return false;
+
+      // Status filter
+      if (statusFilter !== 'all') {
+        const s = String(e.status || '').toLowerCase().trim();
+        if (statusFilter === 'active') {
+          if (s !== 'active' && s !== 'confirmed') return false;
+        } else if (statusFilter === 'inactive') {
+          if (s !== 'inactive' && s !== 'terminated' && s !== 'resigned' && s !== 'left') return false;
+        } else if (statusFilter === 'notice_probation') {
+          if (s !== 'notice' && s !== 'probation' && s !== 'training') return false;
+        } else {
+          if (s !== statusFilter.toLowerCase()) return false;
+        }
+      }
+
+      // Department filter
+      if (deptFilter && String(e.department || '').toLowerCase() !== deptFilter.toLowerCase()) return false;
+
+      // Designation filter
+      if (desigFilter && String(e.designation || '').toLowerCase() !== desigFilter.toLowerCase()) return false;
+
+      // Linked user filter
+      if (linkFilter === 'linked') {
+        if (!e.user_id && !e.linked_username) return false;
+      } else if (linkFilter === 'unlinked') {
+        if (e.user_id || e.linked_username) return false;
+      }
+
+      // Search filter
+      if (q) {
+        const match = [e.name, e.phone, e.email, e.personal_email, e.designation, e.department, e.linked_user_name, e.linked_username]
+          .some(f => String(f || '').toLowerCase().includes(q));
+        if (!match) return false;
+      }
+
+      return true;
+    });
+
+    // Sorting
+    res.sort((a, b) => {
+      let va = '';
+      let vb = '';
+      if (sortField === 'name') {
+        va = a.name || ''; vb = b.name || '';
+      } else if (sortField === 'designation') {
+        va = a.designation || ''; vb = b.designation || '';
+      } else if (sortField === 'department') {
+        va = a.department || ''; vb = b.department || '';
+      } else if (sortField === 'join_date') {
+        va = a.join_date || ''; vb = b.join_date || '';
+      } else if (sortField === 'status') {
+        va = a.status || ''; vb = b.status || '';
+      } else if (sortField === 'salary') {
+        va = Number(a.salary || 0); vb = Number(b.salary || 0);
+      }
+      if (typeof va === 'string') {
+        const comp = va.localeCompare(vb);
+        return sortOrder === 'asc' ? comp : -comp;
+      }
+      return sortOrder === 'asc' ? va - vb : vb - va;
+    });
+
+    return res;
+  }, [employees, staffType, statusFilter, deptFilter, desigFilter, linkFilter, search, sortField, sortOrder]);
+
+  const pager = usePagination(filtered, { resetKey: [search, staffType, statusFilter, deptFilter, desigFilter, linkFilter, sortField, sortOrder] });
 
   return (
     <div className="space-y-4">
@@ -226,13 +350,41 @@ export default function Employees() {
         </div>
       </div>
 
-      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
-          the field list and the Data Entry KPI share one definition. */}
+      {/* Data Completion */}
       <DataCompletion module="employees" />
 
-      {/* Tabs — keep the roster-reconciliation flags off the main directory
-          (in production the flag lists can be long and clutter the table).
-          They live in their own "Roster Review" tab as a listed view. */}
+      {/* Top Interactive Metric KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-4">
+        {[
+          { key: 'all',              label: 'Total Employees',    count: counts.total,             color: 'text-red-600' },
+          { key: 'active',           label: 'Active',             count: counts.active,            color: 'text-emerald-600' },
+          { key: 'inactive',         label: 'Inactive / Left',    count: counts.inactive,          color: 'text-red-600' },
+          { key: 'notice_probation', label: 'Notice / Probation', count: counts.noticeOrProbation, color: 'text-purple-600' },
+          { key: 'unlinked',         label: 'Unlinked (No Login)', count: counts.unlinked,         color: 'text-amber-600' },
+        ].map(c => {
+          const isSelected = c.key === 'unlinked' ? linkFilter === 'unlinked' : statusFilter === c.key;
+          return (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => {
+                if (c.key === 'unlinked') {
+                  setLinkFilter(prev => prev === 'unlinked' ? 'all' : 'unlinked');
+                } else {
+                  setStatusFilter(prev => prev === c.key ? 'all' : c.key);
+                  setLinkFilter('all');
+                }
+              }}
+              className={`card p-3 sm:p-4 text-center transition ${isSelected ? 'ring-2 ring-red-500 ring-offset-1 bg-red-50/20' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'}`}
+            >
+              <div className={`text-2xl sm:text-3xl font-bold ${c.color}`}>{c.count}</div>
+              <div className="text-xs sm:text-sm text-gray-500 font-medium">{c.label}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200">
         <button
           onClick={() => setView('directory')}
@@ -250,27 +402,186 @@ export default function Employees() {
       </div>
 
       {view === 'directory' && (
-        <>
-          {/* Search */}
-          <StaffTypeFilter value={staffType} onChange={setStaffType} />
-          <div className="relative">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
+        <div className="card p-0 overflow-hidden">
+          {/* Highlighted Multi-Dimensional Filtration (2 per row) */}
+          <div className="p-3.5 sm:p-4 border-b border-blue-200/80 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-slate-50">
+            <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-blue-200/60">
+              <div className="flex items-center gap-2">
+                <span className="p-1 rounded-md bg-blue-600 text-white shadow-xs"><FiFilter size={13} /></span>
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-950">Filtration & Search</span>
+                {hasActiveFilters && (
+                  <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">Filtered</span>
+                )}
+              </div>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="btn btn-secondary text-xs py-1 px-2.5 text-red-600 hover:bg-red-50 border-red-200 flex items-center gap-1 font-semibold transition-all"
+                  title="Reset all filters"
+                >
+                  <FiRotateCcw size={12} /> Reset Filters
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Row 1 - Left: Search */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Search Employees</label>
+                <div className="relative">
+                  <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+                  <input
+                    className="w-full pl-9 pr-8 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                    placeholder="Search name, phone, email, designation…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-600"
+                      title="Clear search"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Row 1 - Right: Staff Type */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Staff Type</label>
+                <select
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  value={staffType}
+                  onChange={e => setStaffType(e.target.value)}
+                >
+                  <option value="">All staff types</option>
+                  <option value="white_collar">White Collar</option>
+                  <option value="blue_collar">Blue Collar</option>
+                  <option value="unspecified">Not specified</option>
+                </select>
+              </div>
+
+              {/* Row 2 - Left: Status Filter */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Employee Status</label>
+                <select
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value)}
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active / Confirmed</option>
+                  <option value="training">Training</option>
+                  <option value="inactive">Inactive</option>
+                  <option value="terminated">Terminated</option>
+                  <option value="notice">On Notice</option>
+                  <option value="probation">Probation</option>
+                </select>
+              </div>
+
+              {/* Row 2 - Right: Department Filter */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Department</label>
+                <select
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  value={deptFilter}
+                  onChange={e => setDeptFilter(e.target.value)}
+                >
+                  <option value="">All Departments ({allDeptOptions.length})</option>
+                  {allDeptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+
+              {/* Row 3 - Left: Designation Filter */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Designation</label>
+                <select
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  value={desigFilter}
+                  onChange={e => setDesigFilter(e.target.value)}
+                >
+                  <option value="">All Designations ({allDesigOptions.length})</option>
+                  {allDesigOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+
+              {/* Row 3 - Right: Linked User Dropdown */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">ERP Login Status</label>
+                <select
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  value={linkFilter}
+                  onChange={e => setLinkFilter(e.target.value)}
+                >
+                  <option value="all">All Login Status</option>
+                  <option value="linked">Linked to Login</option>
+                  <option value="unlinked">Unlinked (No Login)</option>
+                </select>
+              </div>
+            </div>
           </div>
 
+          {/* Active Filter Summary Bar */}
+          {hasActiveFilters && (
+            <div className="px-4 py-2 text-xs text-gray-700 border-b bg-amber-50/80 flex flex-wrap items-center justify-between gap-2">
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span>Showing <b className="text-gray-900">{filtered.length}</b> of <b className="text-gray-900">{employees.length}</b> employees:</span>
+                {statusFilter !== 'all' && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium capitalize">Status: {statusFilter.replace('_', ' ')}</span>}
+                {deptFilter && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Dept: {deptFilter}</span>}
+                {desigFilter && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Desig: {desigFilter}</span>}
+                {linkFilter !== 'all' && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">{linkFilter === 'linked' ? 'Linked Login' : 'No Login'}</span>}
+                {staffType && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Staff: {staffTypeLabel(staffType)}</span>}
+                {search && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Search: "{search}"</span>}
+              </span>
+              <button type="button" onClick={resetFilters} className="text-red-600 hover:underline font-semibold text-xs flex items-center gap-1">
+                <FiX size={13} /> Clear all filters
+              </button>
+            </div>
+          )}
+
           {/* Table */}
-          <div className="card p-0 hidden md:block table-responsive"><NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head w-full min-w-[900px]">
-            <thead><tr>
-              <th>Name</th><th>Phone</th><th>Email</th><th>Personal Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
-              <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
-              {canSeeSalary && <th>Salary</th>}
-              <th>Status</th><th>Actions</th>
-            </tr></thead>
+          <div className="hidden md:block overflow-x-auto w-full table-responsive">
+            <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head w-full min-w-[1250px]">
+              <thead>
+                <tr>
+                  <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[150px]" onClick={() => handleSort('name')}>
+                    <span className="flex items-center gap-1">Name {sortField === 'name' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                  </th>
+                  <th className="min-w-[110px] whitespace-nowrap">Phone</th>
+                  <th className="min-w-[160px]">Email</th>
+                  <th className="min-w-[160px]">Personal Email</th>
+                  <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[140px]" onClick={() => handleSort('designation')}>
+                    <span className="flex items-center gap-1">Designation {sortField === 'designation' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                  </th>
+                  <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[140px]" onClick={() => handleSort('department')}>
+                    <span className="flex items-center gap-1">Department {sortField === 'department' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                  </th>
+                  <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[100px] whitespace-nowrap" onClick={() => handleSort('join_date')}>
+                    <span className="flex items-center gap-1">Join Date {sortField === 'join_date' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                  </th>
+                  <th className="min-w-[130px] whitespace-nowrap" title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
+                  {canSeeSalary && (
+                    <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[100px] whitespace-nowrap" onClick={() => handleSort('salary')}>
+                      <span className="flex items-center gap-1">Salary {sortField === 'salary' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                    </th>
+                  )}
+                  <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[110px] whitespace-nowrap" onClick={() => handleSort('status')}>
+                    <span className="flex items-center gap-1">Status {sortField === 'status' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                  </th>
+                  <th className="min-w-[100px] whitespace-nowrap text-right">Actions</th>
+                </tr>
+              </thead>
             <tbody>
               {pager.pageItems.map(e => (
                 <tr key={e.id}>
-                  <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email || <span className="text-gray-400 text-xs italic">—</span>}</td>
-                  <td>
+                  <td className="font-medium">{e.name}</td>
+                  <td className="whitespace-nowrap">{e.phone}</td>
+                  <td className="max-w-[200px] truncate" title={e.email || ''}>{e.email || <span className="text-gray-400 text-xs italic">—</span>}</td>
+                  <td className="max-w-[200px] truncate">
                     {e.personal_email ? (
                       <a href={`mailto:${e.personal_email}`} className="text-indigo-600 hover:underline font-medium text-xs flex items-center gap-1" title={e.personal_email}>
                         {e.personal_email}
@@ -279,23 +590,25 @@ export default function Employees() {
                       <span className="text-gray-400 text-xs italic">Not set</span>
                     )}
                   </td>
-                  <td>{e.designation}</td><td>{e.department}<div className="text-xs text-gray-500">{staffTypeLabel(e.staff_type)}</div></td><td>{e.join_date}</td>
-                  <td>
+                  <td>{e.designation}</td>
+                  <td>{e.department}<div className="text-xs text-gray-500">{staffTypeLabel(e.staff_type)}</div></td>
+                  <td className="whitespace-nowrap">{e.join_date}</td>
+                  <td className="whitespace-nowrap">
                     {e.linked_user_name
                       ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
                       : <span className="badge badge-red text-[10px]">Not linked</span>}
                   </td>
-                  {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
-                  <td><StatusBadge status={e.status} /></td>
-                  <td><div className="flex gap-1">
-                    <button onClick={() => { setEditing(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
+                  {canSeeSalary && <td className="font-medium whitespace-nowrap">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
+                  <td className="whitespace-nowrap"><StatusBadge status={e.status} /></td>
+                  <td className="whitespace-nowrap"><div className="flex gap-1 justify-end">
+                    <button onClick={() => { setEditing(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit Employee"><FiEdit2 size={15} /></button>
                     {canEdit('employees') && (
                       <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
                         title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
                         <FiLink size={15} />
                       </button>
                     )}
-                    {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                    {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600" title="Delete Employee"><FiTrash2 size={14} /></button>}
                   </div></td>
                 </tr>
               ))}
@@ -379,7 +692,7 @@ export default function Employees() {
 
           {/* One pagination bar shared by the desktop table and mobile cards */}
           <Pagination {...pager} />
-        </>
+        </div>
       )}
 
       {view === 'review' && (

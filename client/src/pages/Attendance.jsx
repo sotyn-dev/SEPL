@@ -1007,8 +1007,12 @@ export default function Attendance() {
                 <div className="flex items-start gap-2">
                   <FiAlertTriangle className="text-amber-600 mt-0.5 shrink-0" size={16} />
                   <div>
-                    <span className="font-bold">Overtime / Sunday Work: </span>
-                    <span>Please file today's DPR before punching out to claim approved overtime.</span>
+                    <span className="font-bold">{myToday.is_sunday ? 'Sunday Work: ' : 'Overtime Work: '}</span>
+                    <span>
+                      {myToday.is_sunday
+                        ? "Please file today's DPR before punching out to claim Sunday work credit."
+                        : "Please file today's DPR before punching out to claim approved overtime."}
+                    </span>
                   </div>
                 </div>
                 <button
@@ -2931,15 +2935,17 @@ export default function Attendance() {
         </div>
       )}
       {/* DPR Required Modal */}
-      <Modal isOpen={dprModalOpen} onClose={() => setDprModalOpen(false)} title="Mandatory DPR Required Before Punch-Out">
+      <Modal isOpen={dprModalOpen} onClose={() => setDprModalOpen(false)} title={myToday?.is_sunday ? "Mandatory DPR Required for Sunday Work" : "Mandatory DPR Required for Overtime"}>
         <div className="p-4 space-y-4 text-sm text-gray-700">
           <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 p-3.5 rounded-lg text-amber-800">
             <FiAlertTriangle className="text-amber-600 mt-0.5 shrink-0" size={22} />
             <div>
-              <p className="font-semibold text-amber-900 text-sm">Mandatory Daily Progress Report</p>
+              <p className="font-semibold text-amber-900 text-sm">
+                {myToday?.is_sunday ? 'Sunday Work: Mandatory DPR Required' : 'Overtime Work: Mandatory DPR Required'}
+              </p>
               <p className="text-xs mt-1 text-amber-800 leading-relaxed">
                 {myToday?.is_sunday 
-                  ? 'Sunday attendance requires a submitted Daily Progress Report (DPR) before punching out to claim double attendance.'
+                  ? 'Sunday attendance requires a submitted Daily Progress Report (DPR) before punching out to claim double attendance credit.'
                   : `You have clocked overtime (${myToday?.elapsed_hours || '10+'} hours today). Company policy (TK-01466) requires submitting a Daily Progress Report (DPR) to verify site work before punching out.`
                 }
               </p>
@@ -2947,7 +2953,11 @@ export default function Attendance() {
           </div>
 
           <p className="text-xs text-gray-600 leading-normal">
-            Please submit today's DPR for your site first. Once submitted, your punch-out will be recorded with <strong>full approved overtime hours</strong>.
+            {myToday?.is_sunday ? (
+              <span>Please submit today's DPR for your site first. Once submitted, your punch-out will be recorded with <strong>Sunday double attendance</strong>.</span>
+            ) : (
+              <span>Please submit today's DPR for your site first. Once submitted, your punch-out will be recorded with <strong>full approved overtime hours</strong>.</span>
+            )}
           </p>
 
           <div className="pt-2 flex flex-col gap-2.5">
@@ -2969,7 +2979,10 @@ export default function Attendance() {
               }}
               className="text-xs text-gray-500 hover:text-red-600 text-center py-1 underline transition-colors"
             >
-              Punch out anyway without overtime (Clamped to 6:00 PM shift end)
+              {myToday?.is_sunday
+                ? 'Punch out anyway without Sunday credit (Recorded as standard shift without double attendance)'
+                : 'Punch out anyway without overtime (Clamped to 6:00 PM shift end)'
+              }
             </button>
           </div>
         </div>

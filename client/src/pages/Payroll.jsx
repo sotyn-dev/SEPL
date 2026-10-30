@@ -193,6 +193,7 @@ const LABEL_PILL = {
   admin_absent: 'bg-red-100 text-red-700',
   sunday_sandwich_break: 'bg-red-100 text-red-700',
   holiday_paid: 'bg-indigo-100 text-indigo-700',
+  holiday_worked: 'bg-indigo-100 text-indigo-700',
   admin_holiday: 'bg-indigo-100 text-indigo-700',
   paid_casual_leave: 'bg-purple-100 text-purple-700',
   paid_sick_leave: 'bg-purple-100 text-purple-700',
@@ -1379,6 +1380,11 @@ export default function Payroll() {
                           {d.sunday_bonus ? (
                             <span className="block text-[9px] text-emerald-600 font-normal">
                               (incl. Sunday + {d.sunday_bonus}d work)
+                            </span>
+                          ) : null}
+                          {d.holiday_bonus ? (
+                            <span className="block text-[9px] text-emerald-600 font-normal">
+                              (incl. Holiday + {d.holiday_bonus}d work)
                             </span>
                           ) : null}
                         </td>

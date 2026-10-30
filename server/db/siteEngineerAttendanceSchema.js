@@ -38,59 +38,85 @@ function runSiteEngineerAttendanceMigrations(db) {
 function isSiteEngineer(db, userId) {
   if (!userId || !db) return false;
   try {
-    // 0. Admins and office leadership are exempt from site engineer DPR clamping
-    const user = db.prepare(`SELECT role, department FROM users WHERE id = ?`).get(userId);
+    // 0. Fetch user and employee records
+    const user = db.prepare(`SELECT id, role, department FROM users WHERE id = ?`).get(userId);
     if (!user || user.role === 'admin') return false;
 
-    // Check user_roles and roles if tables exist
-    let isExemptOfficeRole = false;
-    let hasSiteRole = false;
-    let hasDprPerm = null; // null if table doesn't exist, true/false if evaluated
+    let emp = null;
+    try {
+      emp = db.prepare(`SELECT id, designation, department, staff_type, employment_type FROM employees WHERE user_id = ?`).get(userId);
+    } catch (_) {}
 
+    const desig = String(emp?.designation || '').toLowerCase().trim();
+    const dept = String(emp?.department || user?.department || '').toLowerCase().trim();
+    const uRole = String(user.role || '').toLowerCase().trim();
+
+    // 1. Explicit Exclusions: Manpower, Labor, Helpers, Welders, Fitters, Electricians, Store, Audit, Office
+    const isManpowerOrNonEngineer = (text) => {
+      if (!text) return false;
+      return [
+        'helper', 'fitter', 'welder', 'electrician', 'technician', 'manpower', 'labor', 'labour',
+        'driver', 'plumber', 'carpenter', 'mason', 'store', 'incharge', 'auditor', 'inventory auditor',
+        'billing', 'trainee', 'apprentice', 'intern', 'pms', 'crm', 'sales', 'hr', 'accountant',
+        'accounts', 'finance', 'drawing viewer', 'viewer', 'legal', 'compliance', 'data entry',
+        'coo', 'dmm', 'dme', 'ea to md', 'management', 'director'
+      ].some(k => text === k || text.includes(k));
+    };
+
+    // If their designation or direct role is manpower / non-engineer, immediately exempt
+    if (isManpowerOrNonEngineer(desig)) return false;
+    if (isManpowerOrNonEngineer(uRole)) return false;
+
+    // 2. Check assigned roles in roles / user_roles table
+    let assignedRoleNames = [];
     try {
       const hasRolesTable = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='roles'`).get();
       const hasUserRolesTable = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_roles'`).get();
       if (hasRolesTable && hasUserRolesTable) {
-        const uRoles = db.prepare(`
+        assignedRoleNames = db.prepare(`
           SELECT r.name FROM roles r
           JOIN user_roles ur ON r.id = ur.role_id
           WHERE ur.user_id = ?
-        `).all(userId).map(r => String(r.name || '').toLowerCase());
-
-        hasSiteRole = uRoles.some(r => r === 'site engineer' || r.includes('site'));
-        isExemptOfficeRole = uRoles.length > 0 && uRoles.every(r => 
-          ['drawing viewer', 'viewer', 'accountant', 'sales executive', 'sales manager', 'hr manager', 'data entry', 'hiring manager', 'interviewer', 'compliance monitor'].includes(r)
-        );
-        if (isExemptOfficeRole && !hasSiteRole) return false;
+        `).all(userId).map(r => String(r.name || '').toLowerCase().trim());
       }
     } catch (_) {}
 
-    try {
-      const hasRolePerms = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='role_permissions'`).get();
-      const hasUserRolesTable = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_roles'`).get();
-      if (hasRolePerms && hasUserRolesTable) {
-        const permRow = db.prepare(`
-          SELECT 1 FROM role_permissions rp
-          JOIN user_roles ur ON rp.role_id = ur.role_id
-          WHERE ur.user_id = ? AND rp.module = 'dpr' AND (rp.can_create = 1 OR rp.can_edit = 1)
-          LIMIT 1
-        `).get(userId);
-        hasDprPerm = !!permRow;
-      }
-    } catch (_) {}
-
-    // If role_permissions table exists and user has explicitly NO dpr permission (like Drawing Viewer),
-    // they are never required to file DPR
-    if (hasDprPerm === false && !hasSiteRole) {
-      return false;
+    // Check if any assigned role is Manpower / Helper / Non-engineer
+    if (assignedRoleNames.some(r => isManpowerOrNonEngineer(r))) {
+      // If they have Helper or non-engineer role and DO NOT have explicit Site Engineer role, exempt
+      const hasEngRole = assignedRoleNames.some(r => 
+        r === 'site engineer' || r === 'jr. site eng' || r === 'jr. site engineer' || r === 'junior site engineer' || r === 'sr. site engineer'
+      );
+      if (!hasEngRole) return false;
     }
 
-    // Check office departments
-    const uDept = String(user.department || '').toLowerCase();
-    const isOfficeDept = ['sales', 'accounts', 'finance', 'hr', 'management', 'admin', 'billing', 'legal', 'audit', 'design', 'drawing', 'estimator'].includes(uDept);
-    if (isOfficeDept && !hasSiteRole) return false;
+    // 3. Strict Match for Site Engineer or Jr. Site Engineer:
+    const isSiteEngName = (name) => {
+      if (!name) return false;
+      const clean = name.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+      return (
+        clean === 'site engineer' ||
+        clean === 'jr site eng' ||
+        clean === 'jr site engineer' ||
+        clean === 'junior site engineer' ||
+        clean === 'sr site engineer' ||
+        clean === 'senior site engineer' ||
+        clean.startsWith('site engineer') ||
+        clean.startsWith('jr site engineer') ||
+        clean.startsWith('junior site engineer')
+      );
+    };
 
-    // 1. Check sites assignment directly or via purchase_orders (if table exists)
+    // A. Role match
+    const hasExplicitSiteEngRole = assignedRoleNames.some(isSiteEngName) || isSiteEngName(uRole);
+    if (hasExplicitSiteEngRole) return true;
+
+    // B. Designation match
+    if (isSiteEngName(desig)) return true;
+
+    // C. Explicit Site / PO Engineer Assignment
+    // Must be assigned in site_engineer_id, site_engineer_ids, or jr_site_engineer_ids
+    // AND must NOT have an office/manpower designation
     let siteAssigned = false;
     try {
       const hasPo = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='purchase_orders'`).get();
@@ -119,29 +145,35 @@ function isSiteEngineer(db, userId) {
       } catch (_) {}
     }
 
-    if (siteAssigned && hasDprPerm !== false) return true;
-
-    // 2. Check users direct role or site role
-    const uRole = String(user.role || '').toLowerCase();
-    if (uRole === 'site_engineer' && hasDprPerm !== false) return true;
-    if (hasSiteRole && hasDprPerm !== false) return true;
-
-    // 3. Check employees roster, department & designation
-    try {
-      const emp = db.prepare(`SELECT roster, designation, department, is_field_employee FROM employees WHERE user_id = ?`).get(userId);
-      if (emp) {
-        const desig = String(emp.designation || '').toLowerCase();
-        const dept = String(emp.department || '').toLowerCase();
-        const isEmpOfficeDept = ['sales', 'accounts', 'finance', 'hr', 'management', 'admin', 'billing', 'legal', 'audit', 'design', 'drawing', 'estimator'].includes(dept);
-        if (isEmpOfficeDept) return false;
-
-        if (desig.includes('site') || dept.includes('site')) return true;
-        if (emp.roster === 'early') return true;
-        if (emp.is_field_employee === 1) return true;
+    if (siteAssigned) {
+      // Check DPR permission - must have DPR access
+      try {
+        const hasRolePerms = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='role_permissions'`).get();
+        if (hasRolePerms && assignedRoleNames.length > 0) {
+          const permRow = db.prepare(`
+            SELECT 1 FROM role_permissions rp
+            JOIN user_roles ur ON rp.role_id = ur.role_id
+            WHERE ur.user_id = ? AND rp.module = 'dpr' AND (rp.can_create = 1 OR rp.can_edit = 1)
+            LIMIT 1
+          `).get(userId);
+          if (permRow) return true;
+        } else {
+          // If no role_permissions table or standalone user assigned to site
+          if (!isManpowerOrNonEngineer(desig) && !isManpowerOrNonEngineer(uRole) && !isManpowerOrNonEngineer(dept)) {
+            return true;
+          }
+        }
+      } catch (_) {
+        if (!isManpowerOrNonEngineer(desig) && !isManpowerOrNonEngineer(uRole) && !isManpowerOrNonEngineer(dept)) {
+          return true;
+        }
       }
-    } catch (_) {}
-  } catch (_) {}
-  return false;
+    }
+
+    return false;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
