@@ -110,6 +110,14 @@ router.get('/', requirePermission('crm_funnel', 'view'), (req, res) => {
     const like = `%${q}%`;
     params.push(like, like, like, like);
   }
+  if (req.query.from_date) {
+    sql += ' AND date(created_at) >= date(?)';
+    params.push(req.query.from_date);
+  }
+  if (req.query.to_date) {
+    sql += ' AND date(created_at) <= date(?)';
+    params.push(req.query.to_date);
+  }
   sql += ' ORDER BY created_at DESC';
   res.json(getDb().prepare(sql).all(...params));
 });

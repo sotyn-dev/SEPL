@@ -1,6 +1,6 @@
 import SerialNumber from '../../components/SerialNumber';
 import NumberedTable from '../../components/NumberedTable';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import Modal from '../../components/Modal';
@@ -9,7 +9,7 @@ import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone, FiFilter } from 'react-icons/fi';
 import DataCompletion from '../../components/DataCompletion';
 import StaffTypeFilter from '../../components/StaffTypeFilter';
 import { STAFF_TYPES, staffTypeLabel, matchesStaffType } from '../../utils/staffType';
@@ -23,6 +23,11 @@ export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [staffType, setStaffType] = useState('');
   const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
+  const [roleFilter, setRoleFilter] = useState('');     // filter by assigned role
+  const [deptFilter, setDeptFilter] = useState('');     // filter by department
+  const [hrLinkFilter, setHrLinkFilter] = useState('all'); // all | linked | unlinked
+  const [sortField, setSortField] = useState('name');   // name | username | department | role | status
+  const [sortOrder, setSortOrder] = useState('asc');    // asc | desc
   const [search, setSearch]   = useState('');    // search by username or email
   const [page, setPage]       = useState(1);
   const [perPage, setPerPage] = useState(15);     // 15 entries per page
@@ -255,6 +260,29 @@ export default function UserManagement() {
     } catch { toast.error('Copy failed — select and copy manually'); }
   };
 
+  // Dynamic list of assigned roles across users or from roles table
+  const allRoleOptions = useMemo(() => {
+    const set = new Set();
+    roles.forEach(r => r.name && set.add(r.name));
+    users.forEach(u => {
+      if (u.role_names) {
+        u.role_names.split(',').forEach(rn => rn && set.add(rn.trim()));
+      }
+      if (u.role && u.role !== 'user') set.add(u.role);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [roles, users]);
+
+  // Dynamic list of departments across users
+  const allDeptOptions = useMemo(() => {
+    const set = new Set();
+    users.forEach(u => {
+      const d = (u.department || u.hr_department || '').trim();
+      if (d) set.add(d);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [users]);
+
   // Status filter for the list (mam 2026-07-02). Archived users are hidden from
   // every tab except the dedicated "Archived" one.
   const matchFilter = (u) => filter === 'archived' ? !!u.archived
@@ -264,12 +292,92 @@ export default function UserManagement() {
     : filter === 'admin' ? u.role === 'admin'
     : true;
 
-  // Status tab + search (name/username/email/phone) combined, then paginated (15/page).
-  const q = search.trim().toLowerCase();
-  const filteredUsers = users.filter(u =>
-    matchFilter(u) && matchesStaffType(u.staff_type, staffType) &&
-    (!q || [u.name, u.username, u.email, u.phone].some(v => String(v || '').toLowerCase().includes(q)))
-  );
+  // Sorting handler
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  const hasActiveFilters = filter !== 'all' || staffType || roleFilter || deptFilter || hrLinkFilter !== 'all' || search;
+  const resetFilters = () => {
+    setFilter('all');
+    setStaffType('');
+    setRoleFilter('');
+    setDeptFilter('');
+    setHrLinkFilter('all');
+    setSearch('');
+    setPage(1);
+  };
+
+  // Comprehensive multi-filter + search + sort, then paginated.
+  const filteredUsers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const res = users.filter(u => {
+      if (!matchFilter(u)) return false;
+      if (!matchesStaffType(u.staff_type, staffType)) return false;
+
+      // Role filter
+      if (roleFilter) {
+        const uRoles = String(u.role_names || '').toLowerCase();
+        const sysRole = String(u.role || '').toLowerCase();
+        const target = roleFilter.toLowerCase();
+        if (!uRoles.includes(target) && sysRole !== target) return false;
+      }
+
+      // Department filter
+      if (deptFilter) {
+        const uDept = String(u.department || '').toLowerCase();
+        const hrDept = String(u.hr_department || '').toLowerCase();
+        const target = deptFilter.toLowerCase();
+        if (uDept !== target && hrDept !== target) return false;
+      }
+
+      // HR Linkage filter
+      if (hrLinkFilter === 'linked') {
+        if (!u.hr_record_count || u.hr_record_count === 0) return false;
+      } else if (hrLinkFilter === 'unlinked') {
+        if (u.hr_record_count && u.hr_record_count > 0) return false;
+      }
+
+      // Search match
+      if (q) {
+        const match = [u.name, u.username, u.email, u.phone, u.department, u.hr_department, u.hr_designation, u.role_names]
+          .some(v => String(v || '').toLowerCase().includes(q));
+        if (!match) return false;
+      }
+
+      return true;
+    });
+
+    // Sorting
+    res.sort((a, b) => {
+      let va = '';
+      let vb = '';
+      if (sortField === 'name') {
+        va = a.name || ''; vb = b.name || '';
+      } else if (sortField === 'username') {
+        va = a.username || ''; vb = b.username || '';
+      } else if (sortField === 'department') {
+        va = a.department || a.hr_department || ''; vb = b.department || b.hr_department || '';
+      } else if (sortField === 'role') {
+        va = a.role_names || a.role || ''; vb = b.role_names || b.role || '';
+      } else if (sortField === 'status') {
+        va = a.active ? 1 : 0; vb = b.active ? 1 : 0;
+      }
+      if (typeof va === 'string') {
+        const comp = va.localeCompare(vb);
+        return sortOrder === 'asc' ? comp : -comp;
+      }
+      return sortOrder === 'asc' ? va - vb : vb - va;
+    });
+
+    return res;
+  }, [users, filter, staffType, roleFilter, deptFilter, hrLinkFilter, search, sortField, sortOrder]);
+
   const pg = usePagination(filteredUsers, perPage, page, setPage);
 
   return (
@@ -317,26 +425,141 @@ export default function UserManagement() {
       </div>
 
       <div className="card p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b bg-gray-50/60 flex flex-wrap gap-3">
-          <StaffTypeFilter value={staffType} onChange={value => { setStaffType(value); setPage(1); }} />
-          <div className="relative w-full sm:max-w-xs">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search name, username, email, phone…"
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }} />
-            {search && (
-              <button type="button" onClick={() => { setSearch(''); setPage(1); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                title="Clear search" aria-label="Clear search">
-                <FiX size={16} />
+        {/* Highlighted Multi-Dimensional Filtration (2 per row) */}
+        <div className="p-3.5 sm:p-4 border-b border-blue-200/80 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-slate-50">
+          <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-blue-200/60">
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded-md bg-blue-600 text-white shadow-xs"><FiFilter size={13} /></span>
+              <span className="text-xs font-bold uppercase tracking-wider text-blue-950">Filtration & Search</span>
+              {hasActiveFilters && (
+                <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">Filtered</span>
+              )}
+            </div>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="btn btn-secondary text-xs py-1 px-2.5 text-red-600 hover:bg-red-50 border-red-200 flex items-center gap-1 font-semibold transition-all"
+                title="Reset all filters"
+              >
+                <FiRotateCcw size={12} /> Reset Filters
               </button>
             )}
           </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Row 1 - Left: Search */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Search Users</label>
+              <div className="relative">
+                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+                <input
+                  className="w-full pl-9 pr-8 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                  placeholder="Search name, username, email, phone…"
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(1); }}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearch(''); setPage(1); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-600"
+                    title="Clear search"
+                  >
+                    <FiX size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Row 1 - Right: Staff Type */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Staff Type</label>
+              <select
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                value={staffType}
+                onChange={e => { setStaffType(e.target.value); setPage(1); }}
+              >
+                <option value="">All staff types</option>
+                <option value="white_collar">White Collar</option>
+                <option value="blue_collar">Blue Collar</option>
+                <option value="unspecified">Not specified</option>
+              </select>
+            </div>
+
+            {/* Row 2 - Left: Role Filter */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Assigned Role</label>
+              <select
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                value={roleFilter}
+                onChange={e => { setRoleFilter(e.target.value); setPage(1); }}
+              >
+                <option value="">All Roles ({allRoleOptions.length})</option>
+                {allRoleOptions.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+
+            {/* Row 2 - Right: Department Filter */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Department</label>
+              <select
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                value={deptFilter}
+                onChange={e => { setDeptFilter(e.target.value); setPage(1); }}
+              >
+                <option value="">All Departments ({allDeptOptions.length})</option>
+                {allDeptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+
+            {/* Row 3 - Left: HR Linkage Filter */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">HR Employee Linkage</label>
+              <select
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                value={hrLinkFilter}
+                onChange={e => { setHrLinkFilter(e.target.value); setPage(1); }}
+              >
+                <option value="all">All HR Status</option>
+                <option value="linked">Linked to HR Record</option>
+                <option value="unlinked">Orphan (No HR Record)</option>
+              </select>
+            </div>
+
+            {/* Row 3 - Right: Account Status Filter */}
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-blue-900/70 mb-1">Account Status</label>
+              <select
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-700/20 focus:border-blue-700 shadow-2xs transition-all"
+                value={filter}
+                onChange={e => { setFilter(e.target.value); setPage(1); }}
+              >
+                <option value="all">All Users</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">Inactive</option>
+                <option value="admin">Admins</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
+          </div>
         </div>
-        {filter !== 'all' && (
-          <div className="px-4 py-2 text-xs text-gray-500 border-b bg-gray-50/60 flex items-center justify-between">
-            <span>Showing <b className="text-gray-700">{filteredUsers.length}</b> {filter} user{filteredUsers.length === 1 ? '' : 's'}</span>
-            <button type="button" onClick={() => { setFilter('all'); setPage(1); }} className="text-red-600 hover:underline font-medium">Show all users</button>
+
+        {/* Active Filter Summary Bar */}
+        {hasActiveFilters && (
+          <div className="px-4 py-2 text-xs text-gray-700 border-b bg-amber-50/80 flex flex-wrap items-center justify-between gap-2">
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span>Showing <b className="text-gray-900">{filteredUsers.length}</b> of <b className="text-gray-900">{users.length}</b> users:</span>
+              {filter !== 'all' && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium capitalize">Status: {filter}</span>}
+              {roleFilter && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Role: {roleFilter}</span>}
+              {deptFilter && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Dept: {deptFilter}</span>}
+              {hrLinkFilter !== 'all' && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">{hrLinkFilter === 'linked' ? 'Linked HR' : 'Orphan (No HR)'}</span>}
+              {staffType && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Staff: {staffTypeLabel(staffType)}</span>}
+              {search && <span className="px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900 font-medium">Search: "{search}"</span>}
+            </span>
+            <button type="button" onClick={resetFilters} className="text-red-600 hover:underline font-semibold text-xs flex items-center gap-1">
+              <FiX size={13} /> Clear all filters
+            </button>
           </div>
         )}
 
@@ -432,10 +655,33 @@ export default function UserManagement() {
         </div>
 
         {/* Desktop Table (md+) */}
-        <div className="hidden md:block overflow-x-auto">
-          <NumberedTable start={pg.from + 1}>
+        <div className="hidden md:block overflow-x-auto w-full table-responsive">
+          <NumberedTable start={pg.from + 1} className="w-full min-w-[1350px]">
             <thead>
-              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Staff Type</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th title="Future password changes only. Passwords are securely hashed and cannot be viewed.">Password changed</th><th>Actions</th></tr>
+              <tr>
+                <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[150px]" onClick={() => handleSort('name')}>
+                  <span className="flex items-center gap-1">Name {sortField === 'name' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                </th>
+                <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[120px]" onClick={() => handleSort('username')}>
+                  <span className="flex items-center gap-1">Username {sortField === 'username' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                </th>
+                <th className="min-w-[160px]">Email</th>
+                <th className="min-w-[110px] whitespace-nowrap">Phone</th>
+                <th className="min-w-[100px] whitespace-nowrap">System Role</th>
+                <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[140px]" onClick={() => handleSort('role')}>
+                  <span className="flex items-center gap-1">Assigned Roles {sortField === 'role' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                </th>
+                <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[140px]" onClick={() => handleSort('department')}>
+                  <span className="flex items-center gap-1">Department {sortField === 'department' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                </th>
+                <th className="min-w-[100px] whitespace-nowrap">Staff Type</th>
+                <th className="min-w-[150px]" title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th>
+                <th className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[110px] whitespace-nowrap" onClick={() => handleSort('status')}>
+                  <span className="flex items-center gap-1">Status {sortField === 'status' && (sortOrder === 'asc' ? '▲' : '▼')}</span>
+                </th>
+                <th className="min-w-[140px] whitespace-nowrap" title="Future password changes only. Passwords are securely hashed and cannot be viewed.">Password changed</th>
+                <th className="min-w-[120px] whitespace-nowrap text-right">Actions</th>
+              </tr>
             </thead>
             <tbody>
               {pg.rows.map(u => (

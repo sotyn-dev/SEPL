@@ -808,20 +808,76 @@ function calculateForEmployee(db, settings, employee, month) {
     // Placed before the leave / admin-mark / punch branches so the outcome is
     // the same for everyone regardless of what else is on the day.
     if (isHoliday) {
-      dayPay = 1;
+      dayPay = 1; // base declared holiday pay
       holidayDays += 1;
       dayLabel = 'holiday_paid';
-      const hrs = att ? (att.total_hours || 0) : 0;
-      const dayOtHours = (att && employee.ot_eligible && hrs > settings.ot_threshold_hours)
-        ? round2(hrs - settings.ot_threshold_hours)
-        : 0;
-      if (dayOtHours > 0) {
-        otHours += dayOtHours;
+      let holidayWorked = false;
+      let holidayBonus = 0;
+      let note = '';
+      let dayOtHours = 0;
+
+      let hrs = 0;
+      if (att) {
+        hrs = Number(att.total_hours || 0);
+        if (hrs <= 0 && att.punch_in_time && att.punch_out_time) {
+          hrs = getPunchDurationHours(att.punch_in_time, att.punch_out_time, att.total_hours);
+        }
+        hrs = round2(hrs);
       }
+
+      // If employee worked (punched in or has recorded hours) on the declared holiday
+      if (att && (att.punch_in_time || hrs > 0)) {
+        holidayWorked = true;
+        dayLabel = 'holiday_worked';
+
+        if (hrs >= 8) {
+          // 8 hours or above -> Full Day work credit (+1.0 day -> Total 2.0 days)
+          holidayBonus = 1.0;
+          dayPay = 2.0;
+          note = 'Declared Holiday + Full-day worked (8h+)';
+          // Standard OT starts strictly after 9 hours for OT-eligible staff
+          const otThresh = settings.ot_threshold_hours != null ? Number(settings.ot_threshold_hours) : 9;
+          if (employee.ot_eligible && hrs > otThresh) {
+            dayOtHours = round2(hrs - otThresh);
+            if (dayOtHours > 0) {
+              otHours += dayOtHours;
+              note += ` (${dayOtHours}h OT credited)`;
+            }
+          }
+        } else if (hrs >= 4) {
+          // 4 hours to < 8 hours -> Half Day work credit (+0.5 day -> Total 1.5 days)
+          holidayBonus = 0.5;
+          dayPay = 1.5;
+          note = 'Declared Holiday + Half-day worked (4h - 8h)';
+        } else {
+          // Under 4 hours (e.g. 0.5h to < 4h) -> Base 1.0 day holiday pay
+          dayPay = 1.0;
+          holidayBonus = 0;
+          if (employee.ot_eligible && hrs >= 0.5) {
+            dayOtHours = round2(hrs);
+            otHours += dayOtHours;
+            note = `Declared Holiday (Under 4h: ${dayOtHours}h OT credited)`;
+          } else {
+            note = 'Declared Holiday (Under 4h worked)';
+          }
+        }
+      }
+
       breakdown.push({
-        date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay,
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: dayPay,
         holiday_name: holidayByDate[dateStr],
-        ...(att ? { punch_in: att.punch_in_time, punch_out: att.punch_out_time || null, hours: hrs, ot_hours: dayOtHours, holiday_worked: true } : {}),
+        note: note || undefined,
+        ...(att ? {
+          punch_in: att.punch_in_time,
+          punch_out: att.punch_out_time || null,
+          hours: hrs,
+          ot_hours: dayOtHours,
+          holiday_worked: holidayWorked,
+          holiday_bonus: holidayBonus || undefined,
+        } : {}),
       });
       paidDays += dayPay;
       continue;
@@ -2247,6 +2303,8 @@ router.post('/send-test-slip', requirePermission('payroll', 'edit'), async (req,
     res.status(500).json({ error: err.message });
   }
 });
+
+router.calculateForEmployee = calculateForEmployee;
 
 module.exports = router;
 

@@ -231,6 +231,36 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   }
 }
 
+/* Universal horizontal table scroll container on desktop and mobile */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-responsive,
+.overflow-x-auto {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.table-responsive::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar {
+  height: 8px;
+}
+.table-responsive::-webkit-scrollbar-track,
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+.table-responsive::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.table-responsive::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
 table {
   @apply w-full text-sm;
 }

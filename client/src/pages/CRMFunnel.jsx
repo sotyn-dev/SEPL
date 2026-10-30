@@ -1,12 +1,12 @@
 import NumberedTable from '../components/NumberedTable';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload, FiCalendar, FiClock, FiRotateCcw } from 'react-icons/fi';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { exportCsv } from '../utils/exportCsv';
 
@@ -17,7 +17,82 @@ const fileName = (link) => String(link || '').split('/').pop().replace(/^\d{10,}
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import { useUrlTab } from '../hooks/useUrlTab';
-import { fmtDate } from '../utils/datetime';
+import { fmtDate, fmtDateTime, parseUTC } from '../utils/datetime';
+
+// Helper: Calculate lead age, relative label, and freshness badge
+function leadAgeInfo(createdAt) {
+  if (!createdAt) return null;
+  const d = parseUTC(createdAt);
+  if (!d) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffHours / 24);
+
+  const dStr = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  const nowStr = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  let relative = '';
+  let badgeClass = '';
+
+  if (dStr === nowStr) {
+    relative = 'Today';
+    badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold';
+  } else if (diffDays <= 1 || diffHours < 48) {
+    relative = 'Yesterday';
+    badgeClass = 'bg-blue-50 text-blue-700 border-blue-300 font-medium';
+  } else if (diffDays < 7) {
+    relative = `${diffDays}d ago`;
+    badgeClass = 'bg-indigo-50 text-indigo-700 border-indigo-200';
+  } else if (diffDays < 15) {
+    relative = `${diffDays}d ago`;
+    badgeClass = 'bg-amber-50 text-amber-700 border-amber-300';
+  } else {
+    relative = `${diffDays}d ago`;
+    badgeClass = 'bg-gray-100 text-gray-600 border-gray-300';
+  }
+
+  return {
+    dateStr: fmtDate(createdAt),
+    dateTimeStr: fmtDateTime(createdAt),
+    relative,
+    badgeClass,
+    days: diffDays,
+  };
+}
+
+// Helper: Calculate date range for period filter
+function getPeriodDates(period, customFrom, customTo) {
+  if (period === 'all') return { from: '', to: '' };
+  if (period === 'custom') return { from: customFrom || '', to: customTo || '' };
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const toYMD = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  if (period === 'today') {
+    const today = toYMD(now);
+    return { from: today, to: today };
+  }
+  if (period === 'yesterday') {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    const ymd = toYMD(y);
+    return { from: ymd, to: ymd };
+  }
+  if (period === 'this_week') {
+    const day = now.getDay();
+    const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+    const monday = new Date(now);
+    monday.setDate(diff);
+    return { from: toYMD(monday), to: toYMD(now) };
+  }
+  if (period === 'this_month') {
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: toYMD(firstDay), to: toYMD(now) };
+  }
+  return { from: '', to: '' };
+}
 
 // CRM Sales Funnel FMS — flat 3-step tracker. Step 1: Quotation submit.
 // Step 2: Negotiation. Step 3: Win/Loss. Mam's columns from her sheet:
@@ -54,6 +129,11 @@ export default function CRMFunnel() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
+  const [period, setPeriod] = useState('all'); // all | today | yesterday | this_week | this_month | custom
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortField, setSortField] = useState('created_at');
+  const [sortOrder, setSortOrder] = useState('desc');
   const [view, setView] = useUrlTab(['funnel', 'responsible'], 'funnel');   // 'funnel' | 'responsible'
   const [modal, setModal] = useState(false);
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
@@ -134,12 +214,42 @@ export default function CRMFunnel() {
     if (filter.step !== 'all') params.step = filter.step;
     if (filter.state) params.state = filter.state;
     if (filter.type) params.type = filter.type;
+    const { from, to } = getPeriodDates(period, fromDate, toDate);
+    if (from) params.from_date = from;
+    if (to) params.to_date = to;
     api.get('/crm-funnel', { params }).then(r => setRows(r.data))
       .catch(e => toast.error(e.response?.data?.error || 'Load failed'))
       .finally(() => setLoading(false));
   };
-  useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
-  const pager = usePagination(rows, { resetKey: [filter.q, filter.step, filter.state, filter.type] });
+  useEffect(load, [filter.q, filter.step, filter.state, filter.type, period, fromDate, toDate]);
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder(field === 'created_at' ? 'desc' : 'asc');
+    }
+  };
+
+  const sortedRows = useMemo(() => {
+    if (!sortField) return rows;
+    return [...rows].sort((a, b) => {
+      if (sortField === 'created_at') {
+        const da = a.created_at ? new Date(a.created_at.replace(' ', 'T')).getTime() : 0;
+        const db = b.created_at ? new Date(b.created_at.replace(' ', 'T')).getTime() : 0;
+        return sortOrder === 'asc' ? da - db : db - da;
+      }
+      let va = a[sortField];
+      let vb = b[sortField];
+      if (typeof va === 'string') {
+        return sortOrder === 'asc' ? va.localeCompare(vb || '') : (vb || '').localeCompare(va);
+      }
+      return sortOrder === 'asc' ? (va || 0) - (vb || 0) : (vb || 0) - (va || 0);
+    });
+  }, [rows, sortField, sortOrder]);
+
+  const pager = usePagination(sortedRows, { resetKey: [filter.q, filter.step, filter.state, filter.type, period, fromDate, toDate, sortField, sortOrder] });
 
   // Every BOQ attached to the lead being edited (mam 2026-09-07: "more upload
   // files ... which attached previous also"). Loaded from the history endpoint
@@ -349,29 +459,73 @@ export default function CRMFunnel() {
           layout (Total / This Month / Won / Lost / Win Rate). */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
-          <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
+          <div
+            onClick={() => setPeriod(p => p === 'this_month' ? 'all' : 'this_month')}
+            className={`card p-4 border-l-4 border-purple-500 cursor-pointer transition-all hover:shadow-md ${period === 'this_month' ? 'ring-2 ring-purple-400 bg-purple-50/40' : ''}`}
+            title="Click to filter leads captured this month"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p>
+              {period === 'this_month' && <span className="text-[9px] bg-purple-100 text-purple-700 px-1 rounded font-bold">Active</span>}
+            </div>
+            <p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p>
+          </div>
           <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
           <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
           <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
         </div>
 
-        <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
-            value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
-          <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
-            <option value="">All states</option>
-            {STATES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
-            <option value="">All types</option>
-            {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
-            <option value="all">All steps</option>
-            <option value="1">Step 1 — Quotation</option>
-            <option value="2">Step 2 — Negotiation</option>
-            <option value="3">Step 3 — Win/Loss</option>
-          </select>
+        <div className="card p-3 space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+            <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
+              value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
+            <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
+              <option value="">All states</option>
+              {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
+              <option value="">All types</option>
+              {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
+              <option value="all">All steps</option>
+              <option value="1">Step 1 — Quotation</option>
+              <option value="2">Step 2 — Negotiation</option>
+              <option value="3">Step 3 — Win/Loss</option>
+            </select>
+            <select className="select text-sm font-medium text-gray-700 border-indigo-200 bg-indigo-50/20"
+              value={period} onChange={e => setPeriod(e.target.value)}>
+              <option value="all">📅 All Dates</option>
+              <option value="today">🟢 Today's Leads</option>
+              <option value="yesterday">🔵 Yesterday</option>
+              <option value="this_week">📅 This Week</option>
+              <option value="this_month">🗓 This Month</option>
+              <option value="custom">🔍 Custom Date Range…</option>
+            </select>
+          </div>
+
+          {period === 'custom' && (
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100 text-xs text-gray-600 bg-gray-50/50 p-2 rounded">
+              <span className="font-semibold text-gray-700 flex items-center gap-1"><FiCalendar size={13} /> Filter Captured Date:</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-gray-500">From</span>
+                <input type="date" className="input text-xs py-1 px-2" value={fromDate} onChange={e => setFromDate(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-gray-500">To</span>
+                <input type="date" className="input text-xs py-1 px-2" value={toDate} onChange={e => setToDate(e.target.value)} />
+              </div>
+              {(fromDate || toDate) && (
+                <button
+                  type="button"
+                  onClick={() => { setFromDate(''); setToDate(''); }}
+                  className="btn btn-secondary text-[11px] py-1 px-2 flex items-center gap-1 text-gray-600"
+                >
+                  <FiRotateCcw size={11} /> Clear dates
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="card p-0 overflow-hidden">
@@ -379,7 +533,19 @@ export default function CRMFunnel() {
             <NumberedTable start={(pager.page - 1) * pager.perPage + 1} className="freeze-head dense-cols text-xs min-w-[950px] w-full">
               <thead>
                 <tr>
-                  <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
+                  <th
+                    className="cursor-pointer select-none hover:text-red-700 transition-colors min-w-[135px]"
+                    onClick={() => handleSort('created_at')}
+                    title="Click to sort by capture date (Newest / Oldest)"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>Lead # / Captured</span>
+                      <span className="text-[10px] text-gray-400">
+                        {sortField === 'created_at' ? (sortOrder === 'asc' ? '▲ Oldest' : '▼ Newest') : '↕'}
+                      </span>
+                    </div>
+                  </th>
+                  <th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
                   <th>Type</th><th>Category</th><th>State</th>
                   <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
                   <th>Neg Status</th><th>Neg Amount</th>
@@ -398,7 +564,21 @@ export default function CRMFunnel() {
                 )}
                 {pager.pageItems.map(r => (
                   <tr key={r.id} onClick={() => setViewRow(r)} className="cursor-pointer hover:bg-red-50/40 group transition-colors" title="Click to view / update lead">
-                    <td className="font-mono text-xs whitespace-nowrap">{r.lead_no}</td>
+                    <td className="whitespace-nowrap py-2">
+                      <div className="font-mono font-bold text-xs text-gray-900">{r.lead_no}</div>
+                      {(() => {
+                        const age = leadAgeInfo(r.created_at);
+                        if (!age) return null;
+                        return (
+                          <div className="flex items-center gap-1 mt-0.5" title={`Captured: ${age.dateTimeStr}`}>
+                            <span className="text-[10px] text-gray-500 font-medium">📅 {age.dateStr}</span>
+                            <span className={`text-[9px] px-1.5 py-0.2 rounded border leading-none font-semibold ${age.badgeClass}`}>
+                              {age.relative}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="font-medium">
                       {r.client_name}
                       {r.requirement_items && (
@@ -676,6 +856,20 @@ export default function CRMFunnel() {
           <div className="space-y-3 text-sm">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <Field label="Lead #">{viewRow.lead_no || '—'}</Field>
+              <Field label="Captured On">
+                {(() => {
+                  const age = leadAgeInfo(viewRow.created_at);
+                  if (!age) return '—';
+                  return (
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-gray-800">{age.dateTimeStr}</span>
+                      <span className={`inline-block w-max text-[9px] px-1.5 py-0.5 rounded border font-semibold mt-1 ${age.badgeClass}`}>
+                        {age.relative}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </Field>
               <Field label="Client">{viewRow.client_name || '—'}</Field>
               <Field label="Company">{viewRow.company_name || '—'}</Field>
               <Field label="Mobile">{viewRow.mobile || '—'}</Field>
@@ -685,9 +879,12 @@ export default function CRMFunnel() {
               <Field label="Lead Type">{viewRow.lead_type || '—'}</Field>
               <Field label="State">{viewRow.state || '—'}</Field>
               <Field label="District">{viewRow.district || '—'}</Field>
-              <Field label="BOQ">{viewRow.boq_status || '—'}</Field>
-              <Field label="Quote">{viewRow.quote_status || '—'}</Field>
-              <Field label="Qty Amount">{viewRow.qty_amount ? `Rs ${(+viewRow.qty_amount).toLocaleString('en-IN')}` : '—'}</Field>
+              <Field label="Quote Submit Date">
+                {viewRow.quotation_submit_date ? fmtDate(viewRow.quotation_submit_date) : (viewRow.quotation_submitted ? 'Submitted' : 'Pending')}
+              </Field>
+              <Field label="BOQ">{viewRow.boq_status || (viewRow.boq_file_link ? 'Attached' : '—')}</Field>
+              <Field label="Quote">{viewRow.quote_status || (viewRow.quotation_link ? 'Attached' : '—')}</Field>
+              <Field label="Qty Amount">{viewRow.quotation_amount ? `Rs ${(+viewRow.quotation_amount).toLocaleString('en-IN')}` : '—'}</Field>
               <Field label="Neg Status">{NEG_STATUSES.find(s => s.v === viewRow.negotiation_status)?.l || '—'}</Field>
               <Field label="Neg Amount">{viewRow.negotiation_amount ? `Rs ${(+viewRow.negotiation_amount).toLocaleString('en-IN')}` : '—'}</Field>
               <Field label="Final Status">{viewRow.final_status || '—'}</Field>
@@ -805,7 +1002,10 @@ export default function CRMFunnel() {
             )}
 
             <div className="flex items-center justify-between pt-3 border-t text-xs text-gray-500">
-              <span>Created {viewRow.created_at?.slice(0, 10) || ''} {viewRow.created_by_name ? `· by ${viewRow.created_by_name}` : ''}</span>
+              <span className="flex items-center gap-1.5">
+                <FiClock size={12} className="text-gray-400" />
+                Captured {viewRow.created_at ? fmtDateTime(viewRow.created_at) : '—'} {viewRow.created_by_name ? `· by ${viewRow.created_by_name}` : ''}
+              </span>
               <div className="flex gap-2">
                 <button onClick={() => setViewRow(null)} className="btn btn-secondary text-sm">Close</button>
                 {canEdit('crm_funnel') && (
