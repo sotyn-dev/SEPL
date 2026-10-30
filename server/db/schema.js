@@ -471,6 +471,10 @@ function initializeDatabase() {
       po_number TEXT,
       po_date DATE,
       po_copy_link TEXT,
+      -- Work Order Details (TK-01507 - Pooja Kaplesh / SEPL issued)
+      work_order_number TEXT,
+      work_order_date DATE,
+      work_order_signed_link TEXT,
       -- File Links
       boq_file_link TEXT,
       boq_signed_link TEXT,
@@ -4355,6 +4359,10 @@ function initializeDatabase() {
     ['hiring_requests', 'target_scorecard_template_id INTEGER REFERENCES score_templates(id)'],
     // TK-01456: Freight mentioned in PO (Pooja Kaplesh)
     ['business_book', "freight_mentioned_in_po TEXT DEFAULT 'No'"],
+    // TK-01507: Work Order issued internally as soon as business booked + upload signed work order (Pooja Kaplesh)
+    ['business_book', 'work_order_number TEXT'],
+    ['business_book', 'work_order_date DATE'],
+    ['business_book', 'work_order_signed_link TEXT'],
     // Requirement 1: Vendor PO site address default & storage
     ['vendor_pos', 'site_address TEXT'],
     // Requirement 2: Sales Funnel move to lost from any stage with audit trail & proof upload

@@ -176,8 +176,9 @@ router.get('/:id', (req, res) => {
 // POST new ticket. `assigned_to` is optional; when set, that user sees the
 // ticket on their dashboard + can respond to it.
 router.post('/', (req, res) => {
-  const { subject, description, category, priority, attachment_link, module, assigned_to, deadline_date } = req.body;
+  let { subject, description, category, priority, attachment_link, module, assigned_to, deadline_date } = req.body;
   if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
+  if (Array.isArray(attachment_link)) attachment_link = JSON.stringify(attachment_link);
   const deadline = normalizeDeadline(deadline_date);
   if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
   const db = getDb();
@@ -375,7 +376,7 @@ router.put('/:id', (req, res) => {
 // Submit proof. Assignee, or admin / follow-up role (the latter two can
 // submit on behalf of the assignee, e.g. an unassigned ticket they handle).
 router.post('/:id/submit-proof', (req, res) => {
-  const { proof_url, proof_notes } = req.body;
+  let { proof_url, proof_notes } = req.body;
   const db = getDb();
   const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
@@ -383,7 +384,10 @@ router.post('/:id/submit-proof', (req, res) => {
   if (!isAssignee && !ticketFollowAll(db, req.user.id)) {
     return res.status(403).json({ error: 'Only the assignee or an admin / follow-up role can submit proof' });
   }
-  if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
+  if (!proof_url || (Array.isArray(proof_url) && !proof_url.length)) return res.status(400).json({ error: 'Proof file is required' });
+  if (Array.isArray(proof_url)) {
+    proof_url = JSON.stringify(proof_url);
+  }
   db.prepare(
     `UPDATE support_tickets SET
        status = 'submitted', proof_url = ?, proof_notes = ?,
@@ -474,8 +478,20 @@ router.delete('/:id', (req, res) => {
   if (user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const t = db.prepare('SELECT attachment_link, proof_url FROM support_tickets WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM support_tickets WHERE id=?').run(req.params.id);
-  // Quarantine the ticket's attachment + proof (reversible cleanup).
-  for (const u of [t && t.attachment_link, t && t.proof_url]) {
+  const cleanList = [];
+  for (const field of [t && t.attachment_link, t && t.proof_url]) {
+    if (!field) continue;
+    if (typeof field === 'string' && field.startsWith('[') && field.endsWith(']')) {
+      try {
+        const arr = JSON.parse(field);
+        if (Array.isArray(arr)) cleanList.push(...arr);
+        else cleanList.push(field);
+      } catch (_) { cleanList.push(field); }
+    } else {
+      cleanList.push(field);
+    }
+  }
+  for (const u of cleanList) {
     if (u) { try { quarantine.quarantineUrl(u).catch(() => {}); } catch (e) { /* best-effort */ } }
   }
   res.json({ message: 'Deleted' });
