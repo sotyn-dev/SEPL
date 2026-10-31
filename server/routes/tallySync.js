@@ -392,8 +392,8 @@ router.post('/sales', verifyTallyToken, (req, res) => {
         const alterId = Number(v.alter_id || 0);
         if (alterId > maxAlterId) maxAlterId = alterId;
 
-        const billNumber = String(v.bill_number || '').trim();
-        const customerName = String(v.customer_name || v.party_name || '').trim();
+        const billNumber = String(v.bill_number || v.invoice_number || v.voucher_number || '').trim();
+        const customerName = String(v.customer_name || v.buyer_name || v.party_name || '').trim();
         const totalAmount = round2(Math.abs(Number(v.total_amount || v.bill_amount) || 0));
         const amount = round2(Math.abs(Number(v.amount || v.subtotal) || totalAmount));
         const gstAmount = round2(Math.abs(Number(v.gst_amount) || (totalAmount - amount)));
