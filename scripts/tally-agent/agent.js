@@ -248,6 +248,16 @@ function buildDaybookExport(withDates, companyName) {
   }
 
   xml.push('      </STATICVARIABLES>');
+  if (withDates) {
+    xml.push('      <TDL>');
+    xml.push('        <TDLMESSAGE>');
+    xml.push('          <REPORT NAME="Daybook" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No">');
+    xml.push('            <SET>SVFromDate: ##SVFromDate</SET>');
+    xml.push('            <SET>SVToDate: ##SVToDate</SET>');
+    xml.push('          </REPORT>');
+    xml.push('        </TDLMESSAGE>');
+    xml.push('      </TDL>');
+  }
   xml.push('    </DESC>');
   xml.push('  </BODY>');
   xml.push('</ENVELOPE>');
@@ -854,16 +864,17 @@ function syncFromTally() {
     }
     console.log('       Breakdown: ' + summaryParts.join(', '));
 
-    // Display the latest voucher found in Tally
-    var latest = allVouchers[allVouchers.length - 1];
-    var latestItemsCount = (latest.items && latest.items.length) ? (' | ' + latest.items.length + ' item(s)') : '';
-    console.log('       Latest voucher in Tally: [' + latest.voucherType + ']' +
-                ' No: ' + (latest.reference || latest.voucherNumber || 'N/A') +
-                ' | Party: ' + (latest.partyLedgerName || 'N/A') +
-                ' | Date: ' + (latest.date || 'N/A') +
-                ' | Rs. ' + latest.amount +
-                latestItemsCount +
-                ' | AlterID: ' + latest.alterId);
+    // Display all vouchers found in Tally
+    for (var vi = 0; vi < allVouchers.length; vi++) {
+      var vx = allVouchers[vi];
+      var itCount = (vx.items && vx.items.length) ? (' | ' + vx.items.length + ' item(s)') : '';
+      console.log('       [' + (vi + 1) + '] [' + vx.voucherType + ']' +
+                  ' No: ' + (vx.reference || vx.voucherNumber || 'N/A') +
+                  ' | Party: ' + (vx.partyLedgerName || 'N/A') +
+                  ' | Date: ' + (vx.date || 'N/A') +
+                  ' | Rs. ' + vx.amount + itCount +
+                  ' | AlterID: ' + vx.alterId);
+    }
 
     // Sequence stream pushes
     var chain = Promise.resolve();
