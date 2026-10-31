@@ -321,10 +321,38 @@ function formatWeekLabel(dateStr) {
 //                before anyone is assigned, and needs `target_auto` per KPI)
 //   allKpis    — ignore the per-user enabled=0 switch (editor shows every row)
 function computeScorecard(db, userId, weekStart, opts = {}) {
-    const templates = opts.templateId
+    let templates = opts.templateId
       ? db.prepare('SELECT * FROM score_templates WHERE id=?').all(opts.templateId)
       : db.prepare(`SELECT t.* FROM score_templates t JOIN score_user_template ut ON ut.template_id=t.id
           WHERE ut.user_id=? AND COALESCE(t.active,1)=1 ORDER BY t.name,t.id`).all(userId);
+    if (!templates.length && !opts.templateId) {
+      // Intelligent fallback by user role / department so employees never see 0% weightage
+      const u = db.prepare('SELECT id, name, role, department FROM users WHERE id=?').get(userId);
+      if (u) {
+        const dept = (u.department || '').toLowerCase();
+        const role = (u.role || '').toLowerCase();
+        let fallback = null;
+        if (dept.includes('sale') || role.includes('sale')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND name LIKE '%Sales%' ORDER BY id LIMIT 1").get();
+        } else if (dept.includes('site') || dept.includes('operat') || role.includes('site')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND (name LIKE '%Site%' OR name LIKE '%Operations%') ORDER BY id LIMIT 1").get();
+        } else if (dept.includes('purch') || dept.includes('procure')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND (name LIKE '%Purchase%' OR name LIKE '%Operations%') ORDER BY id LIMIT 1").get();
+        } else if (dept.includes('account') || dept.includes('finan') || dept.includes('bill')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND (name LIKE '%Billing%' OR name LIKE '%Collections%') ORDER BY id LIMIT 1").get();
+        } else if (dept.includes('hr')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND name LIKE '%HR%' ORDER BY id LIMIT 1").get();
+        } else if (dept.includes('design') || dept.includes('costing') || dept.includes('estimat')) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 AND (name LIKE '%Costing%' OR name LIKE '%Estimation%') ORDER BY id LIMIT 1").get();
+        }
+        if (!fallback) {
+          fallback = db.prepare("SELECT * FROM score_templates WHERE COALESCE(active,1)=1 ORDER BY id LIMIT 1").get();
+        }
+        if (fallback) {
+          templates = [fallback];
+        }
+      }
+    }
     if (!templates.length) {
       return { user_id: userId, week_start: weekStart, template: null, templates: [], kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No active template assigned to this user yet' };
     }

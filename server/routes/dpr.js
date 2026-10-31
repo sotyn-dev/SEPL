@@ -872,6 +872,383 @@ try { getDb().exec(`
   )
 `); } catch (_) {}
 
+// ── SOP-09 Database Schema (S1 Ready Checklist & S6 Closing Checklist) ─────
+try { getDb().exec(`
+  CREATE TABLE IF NOT EXISTS site_ready_checklists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id INTEGER NOT NULL REFERENCES sites(id),
+    work_area TEXT NOT NULL DEFAULT 'Main Work Area',
+    checklist_date DATE NOT NULL,
+    drawing_ok INTEGER DEFAULT 0,
+    material_ok INTEGER DEFAULT 0,
+    space_ok INTEGER DEFAULT 0,
+    men_ok INTEGER DEFAULT 0,
+    tools_ok INTEGER DEFAULT 0,
+    safety_ok INTEGER DEFAULT 0,
+    client_ok INTEGER DEFAULT 0,
+    is_ready INTEGER DEFAULT 0,
+    remarks TEXT,
+    checked_by INTEGER REFERENCES users(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(site_id, work_area, checklist_date)
+  )
+`); } catch (_) {}
+
+try { getDb().exec(`
+  CREATE TABLE IF NOT EXISTS site_closing_checklists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id INTEGER NOT NULL REFERENCES sites(id),
+    work_area TEXT NOT NULL DEFAULT 'Main Work Area',
+    closing_date DATE NOT NULL,
+    quality_ok INTEGER DEFAULT 0,
+    safety_ok INTEGER DEFAULT 0,
+    photos_json TEXT,
+    remarks TEXT,
+    closed_by INTEGER REFERENCES users(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(site_id, work_area, closing_date)
+  )
+`); } catch (_) {}
+
+// ── SOP-09 RACI Role Catalogue (Owner: PM Adarsh Kumar, Dept Head: Ambuj, HR: Ruksana)
+const DEFAULT_SOP_09_RACI = {
+  hr_lead: {
+    key: 'hr_lead',
+    role_name: 'HR & Labour Incharge',
+    raci_type: 'R',
+    stage_label: 'S3 Labour / Manpower Resolution',
+    default_name: 'Ruksana',
+    description: 'Responsible for labour supply, contractor mobilization, and manpower hindrances.'
+  },
+  pm_lead: {
+    key: 'pm_lead',
+    role_name: 'Project Manager (SOP Owner)',
+    raci_type: 'A',
+    stage_label: 'S1/S4/S5 PM Execution & Planning',
+    default_name: 'Adarsh Kumar',
+    description: 'Accountable for weekly plans, yellow site corrective plans, and daily ready-checklists.'
+  },
+  dept_head: {
+    key: 'dept_head',
+    role_name: 'Department Head (Operations)',
+    raci_type: 'A',
+    stage_label: 'S5 Red Site Escalation & S6 Closure',
+    default_name: 'Ambuj',
+    description: 'Leads daily 15-minute Red site review and acts on critical escalations and closures.'
+  },
+  purchase_lead: {
+    key: 'purchase_lead',
+    role_name: 'Purchase & Material Head',
+    raci_type: 'R',
+    stage_label: 'S3 Material Delay Resolution',
+    default_name: 'Awadhesh Kumar Sharma',
+    description: 'Resolves site material shortages, indent dispatches, and delivery hindrances.'
+  },
+  crm_lead: {
+    key: 'crm_lead',
+    role_name: 'CRM, Space & Drawing Coordinator',
+    raci_type: 'R',
+    stage_label: 'S3 Client Clearance & Drawings',
+    default_name: 'Lovely Sharma',
+    description: 'Resolves client access, GFC drawings, and site clearance obstacles.'
+  },
+  machinery_lead: {
+    key: 'machinery_lead',
+    role_name: 'Plant & Machinery Head',
+    raci_type: 'R',
+    stage_label: 'S3 Tools & Equipment Maintenance',
+    default_name: 'Ajmer',
+    description: 'Maintains plant machinery, tools deployment, and repairs breakdowns.'
+  },
+  accounts_lead: {
+    key: 'accounts_lead',
+    role_name: 'Accounts & Payment Head',
+    raci_type: 'R',
+    stage_label: 'S3 Billing & Contractor Funds',
+    default_name: 'Pooja Kaplesh',
+    description: 'Handles contractor payment releases, billing issues, and financial clearance.'
+  }
+};
+
+function getSiteWorkRaci(db) {
+  let saved = {};
+  try {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key='sop09_site_work_raci'").get();
+    if (row?.value) saved = JSON.parse(row.value);
+  } catch (_) {}
+
+  // Also check raci_assignment for any overrides
+  try {
+    const raciRows = db.prepare("SELECT step_key, responsible_id FROM raci_assignment WHERE module IN ('sop_09', 'dpr') AND responsible_id IS NOT NULL ORDER BY record_id DESC").all();
+    for (const rr of raciRows) {
+      if (rr.step_key && !saved[rr.step_key]?.user_id) {
+        saved[rr.step_key] = { ...(saved[rr.step_key] || {}), user_id: rr.responsible_id };
+      }
+    }
+  } catch (_) {}
+
+  let users = [];
+  try {
+    users = db.prepare("SELECT id, name, email, department, role FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0 ORDER BY name").all();
+  } catch (_) {}
+  const userMap = new Map(users.map(u => [u.id, u]));
+
+  const result = {};
+  for (const [k, def] of Object.entries(DEFAULT_SOP_09_RACI)) {
+    const s = saved[k] || {};
+    const uid = s.user_id ? Number(s.user_id) : null;
+    let u = uid ? userMap.get(uid) : null;
+
+    // If not manually mapped to an ID, search by default name
+    if (!u && def.default_name) {
+      const dName = def.default_name.toLowerCase();
+      u = users.find(x => (x.name && x.name.toLowerCase().includes(dName)) || (x.email && x.email.toLowerCase().includes(dName)));
+    }
+
+    result[k] = {
+      ...def,
+      user_id: u ? u.id : (uid || null),
+      assigned_name: u ? u.name : (s.custom_name || def.default_name),
+      assigned_email: u ? u.email : null,
+      assigned_department: u ? u.department : null,
+      is_custom: !!u || !!s.custom_name,
+    };
+  }
+  return { raci: result, users };
+}
+
+// ── SOP-09 Dynamic RACI Management Routes ──────────────────────────────────
+// Allows roles to be transferred to anyone at any time (HR -> Ruksana, PM -> Adarsh Kumar, Head -> Ambuj, etc.)
+router.get('/raci', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  try {
+    const data = getSiteWorkRaci(db);
+    res.json(data);
+  } catch (e) {
+    console.error('[dpr/raci get]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/raci', (req, res) => {
+  const db = getDb();
+  const { assignments } = req.body;
+  if (!assignments || typeof assignments !== 'object') {
+    return res.status(400).json({ error: 'Invalid RACI assignments payload' });
+  }
+
+  // Permission check: admin or dpr.approve
+  const isAdmin = req.user?.role === 'admin';
+  const hasApprove = req.user?.permissions?.['dpr']?.includes('approve');
+  if (!isAdmin && !hasApprove) {
+    return res.status(403).json({ error: 'Only administrators or Project Managers can modify SOP-09 RACI role delegations' });
+  }
+
+  try {
+    // Save to app_settings
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('sop09_site_work_raci', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+    `).run(JSON.stringify(assignments));
+
+    // Also sync with raci_assignment table (module = 'sop_09', record_id = 0)
+    for (const [stepKey, data] of Object.entries(assignments)) {
+      if (data && (data.user_id || data.user_id === null)) {
+        const uid = data.user_id ? Number(data.user_id) : null;
+        db.prepare(`
+          INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, updated_at)
+          VALUES ('sop_09', 0, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(module, record_id, step_key) DO UPDATE SET responsible_id=excluded.responsible_id, updated_at=CURRENT_TIMESTAMP
+        `).run(stepKey, uid);
+      }
+    }
+
+    res.json({ ok: true, message: 'SOP-09 RACI role delegations updated successfully' });
+  } catch (e) {
+    console.error('[dpr/raci save]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── S1: Ready-Checklist Master (SOP-09.1) ──────────────────────────────────
+// Rule: Work starts ONLY when ready-checklist is complete (7 pillars: drawing,
+// material, space, men, tools, safety, client OK). Golden rule: "Half-ready = no start"
+router.get('/sites/:id/ready-checklist', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const date = String(req.query.date || istTodayIso()).slice(0, 10);
+  const siteId = +req.params.id;
+  try {
+    const row = db.prepare(`
+      SELECT c.*, u.name as checked_by_name, s.name as site_name
+        FROM site_ready_checklists c
+        LEFT JOIN users u ON u.id = c.checked_by
+        LEFT JOIN sites s ON s.id = c.site_id
+       WHERE c.site_id = ? AND (c.checklist_date = ? OR date(c.created_at) = ?)
+       ORDER BY c.id DESC LIMIT 1
+    `).get(siteId, date, date);
+    res.json(row || null);
+  } catch (e) {
+    console.error('[dpr/ready-checklist get]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/sites/:id/ready-checklist', requirePermission('dpr', 'create'), (req, res) => {
+  const db = getDb();
+  const siteId = +req.params.id;
+  const {
+    work_area = 'Main Work Area',
+    checklist_date,
+    drawing_ok,
+    material_ok,
+    space_ok,
+    men_ok,
+    tools_ok,
+    safety_ok,
+    client_ok,
+    remarks,
+  } = req.body;
+
+  const date = String(checklist_date || istTodayIso()).slice(0, 10);
+  const d_ok = drawing_ok ? 1 : 0;
+  const m_ok = material_ok ? 1 : 0;
+  const sp_ok = space_ok ? 1 : 0;
+  const mn_ok = men_ok ? 1 : 0;
+  const t_ok = tools_ok ? 1 : 0;
+  const sf_ok = safety_ok ? 1 : 0;
+  const c_ok = client_ok ? 1 : 0;
+
+  // Golden Rule: Half-ready = no start. All 7 must be OK.
+  const isReady = (d_ok && m_ok && sp_ok && mn_ok && t_ok && sf_ok && c_ok) ? 1 : 0;
+
+  try {
+    const existing = db.prepare(`
+      SELECT id FROM site_ready_checklists WHERE site_id=? AND work_area=? AND checklist_date=?
+    `).get(siteId, work_area, date);
+
+    let recId;
+    if (existing) {
+      db.prepare(`
+        UPDATE site_ready_checklists SET
+          drawing_ok=?, material_ok=?, space_ok=?, men_ok=?, tools_ok=?, safety_ok=?, client_ok=?,
+          is_ready=?, remarks=?, checked_by=?, updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).run(d_ok, m_ok, sp_ok, mn_ok, t_ok, sf_ok, c_ok, isReady, remarks || null, req.user.id, existing.id);
+      recId = existing.id;
+    } else {
+      const ins = db.prepare(`
+        INSERT INTO site_ready_checklists
+          (site_id, work_area, checklist_date, drawing_ok, material_ok, space_ok, men_ok, tools_ok, safety_ok, client_ok, is_ready, remarks, checked_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(siteId, work_area, date, d_ok, m_ok, sp_ok, mn_ok, t_ok, sf_ok, c_ok, isReady, remarks || null, req.user.id);
+      recId = ins.lastInsertRowid;
+    }
+
+    res.json({
+      ok: true,
+      id: recId,
+      is_ready: isReady,
+      status: isReady ? 'Ready / Cleared to Start' : 'Half-Ready (Blocked)',
+      message: isReady
+        ? 'All 7 Pillars Verified: Work is cleared to commence (SOP-09.1)'
+        : 'Warning: Half-Ready = No Start! Incomplete pillars must be resolved before work commences (SOP-09.1)',
+    });
+  } catch (e) {
+    console.error('[dpr/ready-checklist save]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── S6: Closing Quality & Safety Checklist (SOP-09.6) ──────────────────────
+// Rule: Before closing a work area — quality & safety checklist with photos.
+// Golden rule: "No photo, no closure".
+router.get('/sites/:id/closing-checklist', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const siteId = +req.params.id;
+  try {
+    const rows = db.prepare(`
+      SELECT c.*, u.name as closed_by_name, s.name as site_name
+        FROM site_closing_checklists c
+        LEFT JOIN users u ON u.id = c.closed_by
+        LEFT JOIN sites s ON s.id = c.site_id
+       WHERE c.site_id = ?
+       ORDER BY c.id DESC LIMIT 10
+    `).all(siteId);
+    res.json(rows);
+  } catch (e) {
+    console.error('[dpr/closing-checklist get]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/sites/:id/closing-checklist', requirePermission('dpr', 'create'), (req, res) => {
+  const db = getDb();
+  const siteId = +req.params.id;
+  const {
+    work_area = 'Main Work Area',
+    closing_date,
+    quality_ok,
+    safety_ok,
+    photos,
+    remarks,
+  } = req.body;
+
+  const date = String(closing_date || istTodayIso()).slice(0, 10);
+  const q_ok = quality_ok ? 1 : 0;
+  const s_ok = safety_ok ? 1 : 0;
+
+  // Parse photos array
+  let photoArr = [];
+  try {
+    photoArr = Array.isArray(photos) ? photos : (photos ? JSON.parse(photos) : []);
+  } catch (_) {
+    photoArr = typeof photos === 'string' && photos.trim() ? photos.split(',').map(s => s.trim()).filter(Boolean) : [];
+  }
+
+  // Golden Rule: "No photo, no closure"
+  if (!photoArr || photoArr.length === 0) {
+    return res.status(400).json({
+      error: 'Golden Rule SOP-09.6: "No photo, no closure." At least one quality/safety completion photo must be attached.',
+    });
+  }
+
+  try {
+    const photosJson = JSON.stringify(photoArr);
+    const existing = db.prepare(`
+      SELECT id FROM site_closing_checklists WHERE site_id=? AND work_area=? AND closing_date=?
+    `).get(siteId, work_area, date);
+
+    let recId;
+    if (existing) {
+      db.prepare(`
+        UPDATE site_closing_checklists SET
+          quality_ok=?, safety_ok=?, photos_json=?, remarks=?, closed_by=?, updated_at=CURRENT_TIMESTAMP
+        WHERE id=?
+      `).run(q_ok, s_ok, photosJson, remarks || null, req.user.id, existing.id);
+      recId = existing.id;
+    } else {
+      const ins = db.prepare(`
+        INSERT INTO site_closing_checklists
+          (site_id, work_area, closing_date, quality_ok, safety_ok, photos_json, remarks, closed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(siteId, work_area, date, q_ok, s_ok, photosJson, remarks || null, req.user.id);
+      recId = ins.lastInsertRowid;
+    }
+
+    res.json({
+      ok: true,
+      id: recId,
+      message: `Area closure verified with ${photoArr.length} photo(s) attached (SOP-09.6).`,
+    });
+  } catch (e) {
+    console.error('[dpr/closing-checklist save]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Returns Mon-Sun (or any 7 consecutive days starting at week_start)
 // for one site, blending planned + actual fields.  Multi-item per
 // day comes back as `items: [{ id, po_item_id, description, unit,
@@ -2199,13 +2576,16 @@ router.post('/', (req, res) => {
 });
 
 // Helper: Resolve all Department Heads / Owners for DPR Hindrances (SOP-09.3)
+// Dynamically consults SOP-09 RACI assignments so roles can transfer to anyone at any time.
 function resolveDepartmentHeadsForHindrance(db, category, text = '') {
   const normCat = String(category || '').trim().toLowerCase();
   const normText = String(text || '').trim().toLowerCase();
   const allUsers = db.prepare(`SELECT id, name, role, email FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0`).all();
+  const { raci } = getSiteWorkRaci(db);
 
   const findUser = (query) => {
-    const qLower = query.toLowerCase();
+    if (!query) return null;
+    const qLower = String(query).toLowerCase();
     return allUsers.find(u => 
       (u.name && u.name.toLowerCase().includes(qLower)) ||
       (u.role && u.role.toLowerCase() === qLower) ||
@@ -2213,47 +2593,65 @@ function resolveDepartmentHeadsForHindrance(db, category, text = '') {
     );
   };
 
+  const getAssignedOrFallback = (raciKey, fallbackSearch) => {
+    const r = raci[raciKey];
+    if (r?.user_id) {
+      const u = allUsers.find(x => x.id === r.user_id);
+      if (u) return { user: u, name: u.name };
+    }
+    const fb = findUser(fallbackSearch);
+    if (fb) return { user: fb, name: fb.name };
+    return { user: null, name: r?.assigned_name || fallbackSearch };
+  };
+
   const matched = [];
 
-  // 1. MATERIAL issue -> Purchase Head (Awdesh Sharma / Anmol / role='purchase')
+  // 1. MATERIAL issue -> Purchase Head (Awadhesh Kumar Sharma / Anmol / RACI purchase_lead)
   if (normCat.includes('mat') || normCat.includes('item') || normCat.includes('store') || normCat.includes('stock') ||
       normText.includes('material') || normText.includes('cement') || normText.includes('pipe') || normText.includes('cable') || normText.includes('procurement') || normText.includes('delivery')) {
-    const u = findUser('awdesh') || findUser('avadesh') || findUser('anmol') || findUser('purchase') || findUser('store');
-    if (u) matched.push({ user: u, category: 'MATERIAL', role_label: 'Purchase Head (Awdesh Sharma / Anmol)' });
+    const p = getAssignedOrFallback('purchase_lead', 'awadhesh');
+    const u = p.user || findUser('anmol') || findUser('purchase') || findUser('store');
+    if (u) matched.push({ user: u, category: 'MATERIAL', role_label: `Purchase Head (${p.name || u.name})` });
   }
 
-  // 2. MANPOWER / LABOUR issue -> HR / Labour Incharge (Pravdeep)
+  // 2. MANPOWER / LABOUR issue -> HR / Labour Incharge (Currently Ruksana; dynamic via RACI hr_lead)
   if (normCat.includes('manpower') || normCat.includes('labour') || normCat.includes('labor') || normCat.includes('worker') || normCat.includes('contractor') ||
       normText.includes('manpower') || normText.includes('labour') || normText.includes('attendance') || normText.includes('mason') || normText.includes('helper') || normText.includes('shortage')) {
-    const u = findUser('pravdeep') || findUser('prabhdeep') || findUser('hr') || findUser('labour') || findUser('pms');
-    if (u) matched.push({ user: u, category: 'MANPOWER', role_label: 'HR / Labour Head (Pravdeep)' });
+    const hr = getAssignedOrFallback('hr_lead', 'ruksana');
+    const u = hr.user || findUser('ruksana') || findUser('hr') || findUser('labour');
+    if (u) matched.push({ user: u, category: 'MANPOWER', role_label: `HR / Labour Incharge (${hr.name || u.name})` });
   }
 
-  // 3. CLIENT / SPACE / DRAWING / APPROVAL / CRM issue -> CRM Head (Lovely Sharma)
+  // 3. CLIENT / SPACE / DRAWING / APPROVAL / CRM issue -> CRM Head (Lovely Sharma / RACI crm_lead)
   if (normCat.includes('client') || normCat.includes('space') || normCat.includes('access') || normCat.includes('clearance') || normCat.includes('approv') || normCat.includes('crm') || normCat.includes('draw') || normCat.includes('design') ||
       normText.includes('client') || normText.includes('permission') || normText.includes('space') || normText.includes('clearance') || normText.includes('drawing') || normText.includes('design')) {
-    const u = findUser('lovely') || findUser('lavoly') || findUser('lavoli') || findUser('crm');
-    if (u) matched.push({ user: u, category: 'CRM_SPACE_DRAWING', role_label: 'CRM Head (Lovely Sharma)' });
+    const crm = getAssignedOrFallback('crm_lead', 'lovely');
+    const u = crm.user || findUser('crm');
+    if (u) matched.push({ user: u, category: 'CRM_SPACE_DRAWING', role_label: `CRM Head (${crm.name || u.name})` });
   }
 
-  // 4. MACHINE / TOOLS / EQUIPMENT issue -> Plant & Machinery Head (Ajmer)
+  // 4. MACHINE / TOOLS / EQUIPMENT issue -> Plant & Machinery Head (Ajmer / RACI machinery_lead)
   if (normCat.includes('machin') || normCat.includes('tool') || normCat.includes('equip') ||
       normText.includes('machine') || normText.includes('machinery') || normText.includes('welding') || normText.includes('crane') || normText.includes('drill') || normText.includes('generator') || normText.includes('breakdown')) {
-    const u = findUser('ajmer') || findUser('machinery') || findUser('maintenance');
-    if (u) matched.push({ user: u, category: 'MACHINERY', role_label: 'Plant & Machinery Head (Ajmer)' });
+    const mach = getAssignedOrFallback('machinery_lead', 'ajmer');
+    const u = mach.user || findUser('machinery') || findUser('maintenance');
+    if (u) matched.push({ user: u, category: 'MACHINERY', role_label: `Plant & Machinery Head (${mach.name || u.name})` });
   }
 
-  // 5. MONEY / PAYMENT / ACCOUNTS issue -> Accounts Head (Aanchal)
+  // 5. MONEY / PAYMENT / ACCOUNTS issue -> Accounts Head (Pooja Kaplesh / Aanchal / RACI accounts_lead)
   if (normCat.includes('money') || normCat.includes('pay') || normCat.includes('fund') || normCat.includes('account') || normCat.includes('bill') ||
       normText.includes('payment') || normText.includes('bill') || normText.includes('funds') || normText.includes('money')) {
-    const u = findUser('aanchal') || findUser('accounts') || findUser('finance') || findUser('account');
-    if (u) matched.push({ user: u, category: 'ACCOUNTS', role_label: 'Accounts Head (Aanchal)' });
+    const acc = getAssignedOrFallback('accounts_lead', 'pooja');
+    const u = acc.user || findUser('aanchal') || findUser('accounts') || findUser('finance');
+    if (u) matched.push({ user: u, category: 'ACCOUNTS', role_label: `Accounts Head (${acc.name || u.name})` });
   }
 
-  // If no specific category matched, fallback to default
+  // If no specific category matched, fallback to PM (Adarsh Kumar) or Dept Head (Ambuj)
   if (matched.length === 0) {
-    const defaultUser = findUser('lovely') || findUser('lavoly') || findUser('ajmer') || findUser('admin') || allUsers[0];
-    matched.push({ user: defaultUser, category: (category || 'GENERAL').toUpperCase(), role_label: 'Department Head (Lovely Sharma / Ajmer)' });
+    const pm = getAssignedOrFallback('pm_lead', 'adarsh');
+    const head = getAssignedOrFallback('dept_head', 'ambuj');
+    const defaultUser = pm.user || head.user || findUser('lovely') || findUser('admin') || allUsers[0];
+    matched.push({ user: defaultUser, category: (category || 'GENERAL').toUpperCase(), role_label: `Project Manager / Head (${pm.name || defaultUser?.name})` });
   }
 
   return matched;
@@ -3034,6 +3432,9 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     const cnt = (sql, ...p) => { try { return db.prepare(sql).get(...p)?.c || 0; } catch { return 0; } };
     const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
 
+    // Dynamic SOP-09 RACI Assignments
+    const { raci: siteWorkRaci } = getSiteWorkRaci(db);
+
     // Active sites
     const activeSites = all(`
       SELECT s.id, s.name, s.client_name, s.site_engineer_id, u.name AS site_engineer_name, s.status,
@@ -3045,23 +3446,42 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
        ORDER BY s.name
     `);
 
-    // S1: Ready-Checklist Master
-    // Active sites checking readiness for current work areas
+    // S1: Ready-Checklist Master (SOP-09.1)
+    // 7 Pillars: Drawing, Material, Space, Men, Tools, Safety, Client OK. Golden Rule: "Half-ready = no start"
     const s1Cards = activeSites.map(s => {
-      const dprToday = db.prepare('SELECT id FROM dpr WHERE site_id=? AND report_date=? LIMIT 1').get(s.id, today);
-      const ready = !!dprToday;
+      const chk = db.prepare(`
+        SELECT * FROM site_ready_checklists
+         WHERE site_id=? AND (checklist_date=? OR date(created_at)=?)
+         ORDER BY id DESC LIMIT 1
+      `).get(s.id, today, today);
+
+      const isReady = chk ? !!chk.is_ready : false;
+      const missing = [];
+      if (chk) {
+        if (!chk.drawing_ok) missing.push('Drawing');
+        if (!chk.material_ok) missing.push('Material');
+        if (!chk.space_ok) missing.push('Space');
+        if (!chk.men_ok) missing.push('Men');
+        if (!chk.tools_ok) missing.push('Tools');
+        if (!chk.safety_ok) missing.push('Safety');
+        if (!chk.client_ok) missing.push('Client OK');
+      }
+
       return {
         rid: s.id,
         ref: `SITE-${s.id}`,
         title: s.name,
         owner: s.site_engineer_name || 'Site Engineer',
         client: s.company_name || s.client_name || '—',
-        status: ready ? 'Ready / Active' : 'Checklist Pending',
-        created_at: today,
+        status: chk ? (isReady ? 'Ready / Cleared to Start' : `Half-Ready: Missing ${missing.slice(0, 2).join(', ')}`) : 'Checklist Pending',
+        is_ready: isReady,
+        checklist: chk || null,
+        missing_count: missing.length,
+        created_at: chk?.created_at ? String(chk.created_at).slice(0, 10) : today,
       };
     });
 
-    // S2: Daily Report Format (Mobile) — DPR submissions for selected date
+    // S2: Daily Report Format (Mobile) (SOP-09.2) — DPR submissions for selected date. Golden Rule: "Photos are proof"
     const recentDprs = all(`
       SELECT d.id AS rid, ('DPR-' || d.id) AS ref, s.name AS title,
              COALESCE(u.name, 'Site Eng') AS owner, d.report_date, d.created_at,
@@ -3078,14 +3498,23 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
        ORDER BY d.id DESC LIMIT 40
     `, today);
 
-    const s2Cards = recentDprs.map(d => ({
-      ...d,
-      created_at: d.created_at || d.report_date,
-      title: `${d.title} (₹${Math.round(d.installed_val || 0).toLocaleString('en-IN')})`,
-      photos_n: d.photo_urls ? d.photo_urls.split(',').filter(Boolean).length : 0,
-    }));
+    const s2Cards = recentDprs.map(d => {
+      let photoList = [];
+      try {
+        photoList = Array.isArray(d.photo_urls) ? d.photo_urls : (d.photo_urls ? JSON.parse(d.photo_urls) : []);
+      } catch (_) {
+        photoList = typeof d.photo_urls === 'string' ? d.photo_urls.split(',').filter(Boolean) : [];
+      }
+      return {
+        ...d,
+        created_at: d.created_at || d.report_date,
+        title: `${d.title} (₹${Math.round(d.installed_val || 0).toLocaleString('en-IN')})`,
+        photos_n: photoList.length,
+        missing_photos: photoList.length === 0,
+      };
+    });
 
-    // S3: Problem-to-Task Rule Card — Hindrances & PMS tasks for selected date
+    // S3: Problem-to-Task Rule Card (SOP-09.3) — "One name, one date. Not just a note."
     const problemDprs = all(`
       SELECT d.id AS rid, ('PRB-' || d.id) AS ref, s.name AS title,
              COALESCE(u.name, 'Site Eng') AS owner, d.report_date AS created_at,
@@ -3133,14 +3562,16 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         owner: p.owner,
         created_at: p.created_at,
         site_id: p.site_id,
+        category: p.category,
+        problem: p.problem,
         is_dpr_hindrance: true,
       })),
     ].slice(0, 40);
 
-    // S4: Buffer Update Rule — Weekly plan vs actual installed / variance
+    // S4: Buffer Update Rule (SOP-09.4) — System compares actual work with plan and updates buffer. "Early warning, automatic"
     const weeklyPlans = all(`
       SELECT wp.id AS rid, ('PLAN-' || wp.id) AS ref, s.name AS title,
-             COALESCE(u.name, 'Lovely Sharma') AS owner, wp.week_start, wp.status, wp.created_at,
+             COALESCE(u.name, 'Adarsh Kumar') AS owner, wp.week_start, wp.status, wp.created_at,
              (SELECT SUM(grand_total_a) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS actual_val,
              (SELECT SUM(planned_grand_total_b) FROM dpr WHERE site_id=wp.site_id AND report_date >= wp.week_start AND report_date <= date(wp.week_start, '+6 days')) AS planned_val
         FROM weekly_plans wp
@@ -3153,7 +3584,6 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     const s4Cards = weeklyPlans.map(wp => {
       const act = +wp.actual_val || 0;
       const pln = +wp.planned_val || 0;
-      const diff = act - pln;
       const bufferPct = pln > 0 ? Math.round((act / pln) * 100) : 100;
       return {
         ...wp,
@@ -3161,13 +3591,12 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
         actual_val: act,
         planned_val: pln,
         buffer_pct: bufferPct,
+        health_status: bufferPct >= 100 ? 'healthy' : (bufferPct >= 70 ? 'warning' : 'critical'),
       };
     });
 
-    // S5: Colour Rule Card (Green / Yellow / Red) — Health status & escalation
-    // Green: Profit / on track
-    // Yellow: Minor loss (< Rs 5000 or 1-2 days delayed) -> PM makes plan
-    // Red: Major loss (> Rs 5000 or stuck > 3 days) -> Head acts today
+    // S5: Colour Rule Card (SOP-09.5) — GREEN = fine, YELLOW = PM makes plan, RED = Head acts today.
+    // Review rule: "Daily 15-minute meeting — only reds"
     const s5Cards = activeSites.map(s => {
       const latestDpr = db.prepare(`
         SELECT grand_total_a, grand_total_b, profit_loss, report_date
@@ -3181,40 +3610,61 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
       let ragLabel = 'GREEN — Fine';
       if (margin < -5000) {
         rag = 'red';
-        ragLabel = 'RED — Head acts today';
+        ragLabel = `RED — Head (${siteWorkRaci.dept_head?.assigned_name || 'Ambuj'}) acts today`;
       } else if (margin < 0) {
         rag = 'yellow';
-        ragLabel = 'YELLOW — PM makes plan';
+        ragLabel = `YELLOW — PM (${siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar'}) makes plan`;
       }
+
+      const assignedOwner = rag === 'red'
+        ? (siteWorkRaci.dept_head?.assigned_name || 'Ambuj')
+        : (rag === 'yellow' ? (siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar') : (s.site_engineer_name || 'Site Engineer'));
 
       return {
         rid: s.id,
         ref: `RAG-${s.id}`,
         title: `${s.name} [${rag.toUpperCase()}]`,
-        owner: rag === 'red' ? 'Head / Ajmer' : (s.site_engineer_name || 'Lovely Sharma'),
+        owner: assignedOwner,
         rag,
         ragLabel,
         margin,
+        is_red_standup: rag === 'red',
         created_at: latestDpr?.report_date || today,
       };
     });
 
-    // S6: Closing Checklist (Quality + Safety) — Area closures with photo verification
-    const s6Cards = activeSites.filter(s => s.status === 'completed' || s.status === 'closing').map(s => ({
-      rid: s.id,
-      ref: `CLOSE-${s.id}`,
-      title: `${s.name} (Closing Inspection)`,
-      owner: s.site_engineer_name || 'Site Engineer',
-      status: 'Checklist + Photos required',
-      created_at: today,
-    }));
-    // If no closing sites, add template cards for active sites reaching completion
+    // S6: Closing Checklist (Quality + Safety) (SOP-09.6) — Area closures with photo verification. "No photo, no closure"
+    const closingRows = all(`
+      SELECT c.*, s.name as site_name, u.name as closed_by_name
+        FROM site_closing_checklists c
+        JOIN sites s ON s.id = c.site_id
+        LEFT JOIN users u ON u.id = c.closed_by
+       WHERE c.closing_date = ? OR date(c.created_at) = ?
+       ORDER BY c.id DESC LIMIT 30
+    `, today, today);
+
+    const s6Cards = closingRows.map(c => {
+      let photos = [];
+      try { photos = JSON.parse(c.photos_json || '[]'); } catch (_) {}
+      return {
+        rid: c.site_id,
+        id: c.id,
+        ref: `CLOSE-${c.id}`,
+        title: `${c.site_name} (${c.work_area || 'Area Closure'})`,
+        owner: c.closed_by_name || 'Site Engineer',
+        status: photos.length > 0 ? `Closed (${photos.length} photos verified)` : 'Photo Pending',
+        photos_n: photos.length,
+        created_at: c.closing_date || today,
+        checklist: c,
+      };
+    });
+
     if (s6Cards.length === 0) {
       activeSites.slice(0, 5).forEach(s => {
         s6Cards.push({
           rid: s.id,
           ref: `QA-${s.id}`,
-          title: `${s.name} · QA/Safety Verification`,
+          title: `${s.name} · QA & Safety Verification`,
           owner: s.site_engineer_name || 'Site Engineer',
           status: 'Quality & Safety checklist gate',
           created_at: today,
@@ -3243,8 +3693,8 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     if (redCount > 0) {
       alerts.push({
         ref: 'SOP-09.5 RED ESCALATION',
-        text: `${redCount} site(s) flagged RED. Department Head (Ajmer / Lovely Sharma) action required today.`,
-        owner: 'Ajmer / Lovely Sharma',
+        text: `${redCount} site(s) flagged RED. Department Head (${siteWorkRaci.dept_head?.assigned_name || 'Ambuj'}) action required today.`,
+        owner: siteWorkRaci.dept_head?.assigned_name || 'Ambuj',
         at: today,
         level: 'red',
       });
@@ -3253,7 +3703,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
       alerts.push({
         ref: 'SOP-09.3 UNRESOLVED PROBLEMS',
         text: `${problemDprs.length} DPR hindrance(s) reported — ensure every problem is assigned a task with one owner and one date.`,
-        owner: 'CRM / Department Head',
+        owner: `${siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar'} / ${siteWorkRaci.hr_lead?.assigned_name || 'Ruksana'}`,
         at: today,
         level: 'yellow',
       });
@@ -3270,10 +3720,10 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
     }
 
     const tasks = [
-      { text: 'Hold daily 15-minute Red sites review meeting', tag: 'Lovely Sharma / Ajmer' },
-      { text: 'Verify photo attachments for today\'s DPR submissions', tag: 'Site Eng' },
-      { text: 'Convert open site problems into PMS tasks with target date', tag: 'Lovely Sharma' },
-      { text: 'Validate Ready-Checklist before clearing work area starts', tag: 'ERP / Lovely Sharma' },
+      { text: 'Hold daily 15-minute Red sites review meeting', tag: `${siteWorkRaci.dept_head?.assigned_name || 'Ambuj'} / ${siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar'}` },
+      { text: 'Verify photo attachments for today\'s DPR submissions ("Photos are proof")', tag: 'Site Engineers' },
+      { text: 'Convert open site problems into PMS tasks with target date ("Problems can\'t hide")', tag: `${siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar'} / ${siteWorkRaci.hr_lead?.assigned_name || 'Ruksana'}` },
+      { text: 'Validate 7-pillar Ready-Checklist before clearing work area starts ("Half-ready = no start")', tag: siteWorkRaci.pm_lead?.assigned_name || 'Adarsh Kumar' },
     ];
 
     const activity = all(`
@@ -3287,6 +3737,7 @@ router.get('/flow-board', requirePermission('dpr', 'view'), (req, res) => {
 
     res.json({
       pipeline,
+      sop09_raci: siteWorkRaci,
       week: { from: wkStart, to: wkEnd },
       kpis: {
         dprs_today: { value: dprsTodayCount, prev: cnt('SELECT COUNT(*) c FROM dpr WHERE report_date=?', wkAgo) },
