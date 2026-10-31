@@ -248,16 +248,6 @@ function buildDaybookExport(withDates, companyName) {
   }
 
   xml.push('      </STATICVARIABLES>');
-  if (withDates) {
-    xml.push('      <TDL>');
-    xml.push('        <TDLMESSAGE>');
-    xml.push('          <REPORT NAME="Daybook" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No">');
-    xml.push('            <SET>SVFromDate: ##SVFromDate</SET>');
-    xml.push('            <SET>SVToDate: ##SVToDate</SET>');
-    xml.push('          </REPORT>');
-    xml.push('        </TDLMESSAGE>');
-    xml.push('      </TDL>');
-  }
   xml.push('    </DESC>');
   xml.push('  </BODY>');
   xml.push('</ENVELOPE>');
