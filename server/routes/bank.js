@@ -155,8 +155,8 @@ router.get('/transactions', (req, res) => {
   if (req.query.q) { where.push('(LOWER(t.description) LIKE ? OR LOWER(COALESCE(t.ref_no,"")) LIKE ?)'); params.push(`%${String(req.query.q).toLowerCase()}%`, `%${String(req.query.q).toLowerCase()}%`); }
   const W = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const total = db.prepare(`SELECT COUNT(*) c FROM bank_transactions t ${W}`).get(...params).c;
-  const rows = db.prepare(`SELECT t.*, a.bank_name, a.account_label FROM bank_transactions t
-    JOIN bank_accounts a ON a.id=t.bank_account_id ${W}
+  const rows = db.prepare(`SELECT t.*, COALESCE(a.bank_name, t.party_name, 'Tally Bank') AS bank_name, a.account_label FROM bank_transactions t
+    LEFT JOIN bank_accounts a ON a.id=t.bank_account_id ${W}
     ORDER BY t.txn_date DESC, t.id DESC LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
   res.json({ total, page, per: PER, rows });
 });

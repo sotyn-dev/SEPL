@@ -847,6 +847,21 @@ function raciModuleWeekBreakdown(db, moduleKey, sinceDate, untilDate) {
   return raciWeekBreakdown(db, null, sinceDate, untilDate, { moduleKey });
 }
 
+function getModuleLink(key, id) {
+  switch (key) {
+    case 'sales_funnel': return '/sales-funnel';
+    case 'indent_to_dispatch': return '/procurement?tab=indents';
+    case 'crm_funnel': return '/crm';
+    case 'solar_funnel': return '/solar';
+    case 'quotation': return '/sales-funnel';
+    case 'payables': return '/payables';
+    case 'cheques': return '/cheques';
+    case 'subcon_hiring': return '/hiring';
+    case 'tally_bills': return '/tally-bills';
+    default: return null;
+  }
+}
+
 function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null } = {}) {
   const HOUR = 3600000;
   const acc = new Map();                              // `${module}|${stepKey}` -> tally
@@ -859,7 +874,12 @@ function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null 
             // Per-step weightage % + "for next week" commitment, set at the module-default
             // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
             weight: (weight != null && weight !== '') ? +weight : null,
-            commitment: commitment || null };
+            commitment: commitment || null,
+            planned_items: [],
+            done_items: [],
+            pending_items: [],
+            prev_pending_items: [],
+            prev_done_items: [] };
       acc.set(k, t);
     }
     return t;
@@ -921,11 +941,41 @@ function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null 
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
               t.planned += 1; t.pending += 1; markRole(t);
               if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+              const item = {
+                id: rec.id,
+                title: rec.title || `${def.label} #${rec.id}`,
+                subtitle: rec.subtitle || '—',
+                created_at: rec.created_at,
+                date: landedStr,
+                role: userRole,
+                status: 'Pending',
+                link: getModuleLink(key, rec.id),
+                module: key,
+                module_label: def.label,
+                step_key: s.key,
+                step_label: s.label,
+              };
+              t.pending_items.push(item);
+              t.planned_items.push(item);
             } else if (!landedStr || landedStr < sinceDate) {
               // Backlog from earlier weeks — NOT in planned (2026-08-22 rule),
               // tracked separately for the Pending "up" figure (mam 2026-08-26).
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
               t.pending_before += 1; markRole(t);
+              t.prev_pending_items.push({
+                id: rec.id,
+                title: rec.title || `${def.label} #${rec.id}`,
+                subtitle: rec.subtitle || '—',
+                created_at: rec.created_at,
+                date: landedStr || (rec.created_at ? String(rec.created_at).slice(0, 10) : '—'),
+                role: userRole,
+                status: 'Backlog Pending',
+                link: getModuleLink(key, rec.id),
+                module: key,
+                module_label: def.label,
+                step_key: s.key,
+                step_label: s.label,
+              });
             }
           }
           // Later steps cannot have reached the workflow before this closure.
@@ -943,9 +993,35 @@ function raciWeekBreakdown(db, userId, sinceDate, untilDate, { moduleKey = null 
         if (dateStr < sinceDate || dateStr > untilDate) continue;
         const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
         t.planned += 1; t.actual += 1; markRole(t);
-        if (landedBeforeStr && landedBeforeStr < sinceDate) t.closed_before += 1;
+        const isPrevDone = landedBeforeStr && landedBeforeStr < sinceDate;
+        if (isPrevDone) t.closed_before += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
-        if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }
+        let onTime = null;
+        if (sla != null && elapsed != null) {
+          t.sla_judged += 1;
+          onTime = (elapsed <= sla);
+          if (onTime) t.on_time += 1;
+        }
+        const item = {
+          id: rec.id,
+          title: rec.title || `${def.label} #${rec.id}`,
+          subtitle: rec.subtitle || '—',
+          created_at: rec.created_at,
+          date: dateStr,
+          role: userRole,
+          status: 'Completed',
+          elapsed: elapsed != null ? Math.round(elapsed * 10) / 10 : null,
+          sla_hours: sla,
+          on_time: onTime,
+          link: getModuleLink(key, rec.id),
+          module: key,
+          module_label: def.label,
+          step_key: s.key,
+          step_label: s.label,
+        };
+        t.done_items.push(item);
+        t.planned_items.push(item);
+        if (isPrevDone) t.prev_done_items.push(item);
       }
     }
   }

@@ -181,9 +181,38 @@ function isSiteEngineer(db, userId) {
  */
 function findSiteEngineerDpr(db, userId, dateStr) {
   try {
+    let attendanceSiteIds = [];
+    try {
+      const attCols = db.prepare(`PRAGMA table_info(attendance)`).all().map(c => c.name);
+      if (attCols.includes('site_id') || attCols.includes('site_name')) {
+        const hasSites = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sites'`).get();
+        if (hasSites && attCols.includes('site_name') && attCols.includes('site_id')) {
+          const rows = db.prepare(`
+            SELECT DISTINCT COALESCE(a.site_id, s2.id) as sid
+            FROM attendance a
+            LEFT JOIN sites s2 ON (LOWER(TRIM(s2.name)) = LOWER(TRIM(a.site_name)))
+            WHERE a.user_id = ? AND a.date = ?
+              AND (a.site_id IS NOT NULL OR s2.id IS NOT NULL)
+          `).all(userId, dateStr);
+          attendanceSiteIds = rows.map(r => r.sid).filter(Boolean);
+        } else if (attCols.includes('site_id')) {
+          const rows = db.prepare(`
+            SELECT DISTINCT a.site_id as sid
+            FROM attendance a
+            WHERE a.user_id = ? AND a.date = ? AND a.site_id IS NOT NULL
+          `).all(userId, dateStr);
+          attendanceSiteIds = rows.map(r => r.sid).filter(Boolean);
+        }
+      }
+    } catch (_) {}
+
+    const extraSiteClause = attendanceSiteIds.length > 0
+      ? ` OR site_id IN (${attendanceSiteIds.map(() => '?').join(',')})`
+      : '';
+
     const hasPo = !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='purchase_orders'`).get();
     if (hasPo) {
-      return db.prepare(`
+      const sql = `
         SELECT id, site_id, report_date, grand_total_a, grand_total_b, profit_loss,
                hindrances, hindrance_category, approval_status
         FROM dpr
@@ -199,12 +228,15 @@ function findSiteEngineerDpr(db, userId, dateStr) {
                  OR (po.jr_site_engineer_ids IS NOT NULL AND (',' || po.jr_site_engineer_ids || ',') LIKE ('%,' || ? || ',%'))
                  OR (s.site_engineer_ids IS NOT NULL AND (',' || s.site_engineer_ids || ',') LIKE ('%,' || ? || ',%'))
             )
+            ${extraSiteClause}
           )
           AND (is_planned_template IS NULL OR is_planned_template = 0)
         ORDER BY id DESC LIMIT 1
-      `).get(dateStr, userId, userId, userId, String(userId), String(userId), String(userId)) || null;
+      `;
+      const params = [dateStr, userId, userId, userId, String(userId), String(userId), String(userId), ...attendanceSiteIds];
+      return db.prepare(sql).get(...params) || null;
     } else {
-      return db.prepare(`
+      const sql = `
         SELECT id, site_id, report_date, grand_total_a, grand_total_b, profit_loss,
                hindrances, hindrance_category, approval_status
         FROM dpr
@@ -216,10 +248,13 @@ function findSiteEngineerDpr(db, userId, dateStr) {
               WHERE s.site_engineer_id = ?
                  OR (s.site_engineer_ids IS NOT NULL AND (',' || s.site_engineer_ids || ',') LIKE ('%,' || ? || ',%'))
             )
+            ${extraSiteClause}
           )
           AND (is_planned_template IS NULL OR is_planned_template = 0)
         ORDER BY id DESC LIMIT 1
-      `).get(dateStr, userId, userId, String(userId)) || null;
+      `;
+      const params = [dateStr, userId, userId, String(userId), ...attendanceSiteIds];
+      return db.prepare(sql).get(...params) || null;
     }
   } catch (_) {
     return null;

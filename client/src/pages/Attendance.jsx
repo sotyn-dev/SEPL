@@ -1025,6 +1025,16 @@ export default function Attendance() {
               </div>
             )}
 
+            {myToday && !myToday.punch_out_time && myToday.has_today_dpr && myToday.is_site_engineer && (myToday.is_sunday || myToday.elapsed_hours > 10) && (
+              <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-3 text-xs text-emerald-900 flex items-center gap-2 shadow-xs">
+                <FiCheckCircle className="text-emerald-600 shrink-0" size={16} />
+                <div>
+                  <span className="font-bold">DPR Submitted for Site: </span>
+                  <span>A DPR for this site has already been submitted today. Your overtime ({myToday.elapsed_hours}h) will be approved upon punch-out without needing another DPR.</span>
+                </div>
+              </div>
+            )}
+
             {/* Punch Buttons — "Manual" prefix dropped since auto-punch is
                 disabled; these are now THE punch in/out actions. */}
             {!myToday ? (
@@ -1799,6 +1809,24 @@ export default function Attendance() {
                                   title="Punch Out Photo"
                                 />
                               )}
+                              {r.proof_url && (() => {
+                                const urls = String(r.proof_url || '')
+                                  .split(',')
+                                  .map(u => u.trim())
+                                  .filter(Boolean);
+                                return urls.map((u, i) => (
+                                  <a
+                                    key={i}
+                                    href={u}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="w-7 h-7 rounded bg-blue-50 border border-blue-200 flex items-center justify-center text-[9px] text-blue-600 font-bold hover:bg-blue-100 shrink-0"
+                                    title={urls.length > 1 ? `View attached proof #${i + 1}` : 'View attached proof document'}
+                                  >
+                                    {urls.length === 1 ? 'Doc' : `Doc ${i + 1}`}
+                                  </a>
+                                ));
+                              })()}
                               {isAbs && (
                                 <button
                                   type="button"
@@ -1809,7 +1837,7 @@ export default function Attendance() {
                                   <FiCalendar size={11} /> Apply Leave
                                 </button>
                               )}
-                              {!r.punch_in_photo && !r.punch_out_photo && !isAbs && (
+                              {!r.punch_in_photo && !r.punch_out_photo && !r.proof_url && !isAbs && (
                                 <span className="text-gray-300 text-xs">—</span>
                               )}
                             </div>
@@ -2177,17 +2205,24 @@ export default function Attendance() {
                                       title="Punch Out Photo"
                                     />
                                   )}
-                                  {d.proof_url && (
-                                    <a
-                                      href={d.proof_url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="w-7 h-7 rounded bg-blue-50 border border-blue-200 flex items-center justify-center text-[10px] text-blue-600 font-bold hover:bg-blue-100"
-                                      title="View attached proof document"
-                                    >
-                                      Doc
-                                    </a>
-                                  )}
+                                  {d.proof_url && (() => {
+                                    const urls = String(d.proof_url || '')
+                                      .split(',')
+                                      .map(u => u.trim())
+                                      .filter(Boolean);
+                                    return urls.map((u, i) => (
+                                      <a
+                                        key={i}
+                                        href={u}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="w-7 h-7 rounded bg-blue-50 border border-blue-200 flex items-center justify-center text-[9px] text-blue-600 font-bold hover:bg-blue-100 shrink-0"
+                                        title={urls.length > 1 ? `View attached proof #${i + 1}` : 'View attached proof document'}
+                                      >
+                                        {urls.length === 1 ? 'Doc' : `Doc ${i + 1}`}
+                                      </a>
+                                    ));
+                                  })()}
                                 </div>
                               </td>
                               <td className="px-2 py-2 text-right">
@@ -2676,9 +2711,6 @@ export default function Attendance() {
           }
           try {
             let proofUrls = [];
-            if (form.proof_url) {
-              proofUrls.push(...form.proof_url.split(',').map(s => s.trim()).filter(Boolean));
-            }
             const filesToUpload = [...(form._proofFiles || [])];
             if (form._proofFile && !filesToUpload.includes(form._proofFile)) {
               filesToUpload.push(form._proofFile);
@@ -2690,7 +2722,9 @@ export default function Attendance() {
                 const up = await api.post('/upload', fd);
                 return up.data?.url;
               }));
-              proofUrls.push(...uploads.filter(Boolean));
+              proofUrls = uploads.filter(Boolean);
+            } else if (form.proof_url) {
+              proofUrls = form.proof_url.split(',').map(s => s.trim()).filter(Boolean);
             }
             const proof_url = proofUrls.length > 0 ? proofUrls.join(',') : null;
             // fill_in / fill_out are choices of this form only. With just a

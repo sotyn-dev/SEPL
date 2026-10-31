@@ -3116,20 +3116,24 @@ export default function Procurement() {
 
       {tab === 'indents' && (() => {
         // ── Database-driven pagination & filtering ─────────────────────
-        const indTotalPages = Math.max(1, Math.ceil(indTotal / indPerPage));
-        const indFrom = indTotal > 0 ? (indPage - 1) * indPerPage : 0;
-        const indTo = Math.min(indFrom + indPerPage, indTotal);
+        const isAll = indPerPage === 'all';
+        const indLimit = isAll ? Math.max(indTotal, 1) : (parseInt(indPerPage, 10) || 15);
+        const indTotalPages = isAll ? 1 : Math.max(1, Math.ceil(indTotal / indLimit));
+        const indCurPage = isAll ? 1 : Math.min(Math.max(1, indPage), indTotalPages);
+        const indFrom = isAll ? 0 : (indTotal > 0 ? (indCurPage - 1) * indLimit : 0);
+        const indTo = isAll ? indTotal : Math.min(indFrom + indLimit, indTotal);
         const indPg = {
-          page: indPage,
+          page: indCurPage,
           pages: indTotalPages,
           perPage: indPerPage,
+          isAll,
           total: indTotal,
           from: indFrom,
           to: indTo,
           setPage: setIndPage,
           rows: indents,
-          hasPrev: indPage > 1,
-          hasNext: indPage < indTotalPages,
+          hasPrev: !isAll && indCurPage > 1,
+          hasNext: !isAll && indCurPage < indTotalPages,
         };
         return (
           <>
@@ -4770,32 +4774,44 @@ export default function Procurement() {
         //   pending  → "Pending for Vendor PO" (yellow highlight, items waiting)
         //   list     → "View by PO"            (the full vendor_pos table)
         // Each sub-tab has its own search + filter + pagination state.
-        const vpoPendingTotalPages = Math.max(1, Math.ceil(vpoPendingTotal / vpoPendingPerPage));
+        const pendingIsAll = vpoPendingPerPage === 'all';
+        const pendingLimit = pendingIsAll ? Math.max(vpoPendingTotal, 1) : (parseInt(vpoPendingPerPage, 10) || 15);
+        const vpoPendingTotalPages = pendingIsAll ? 1 : Math.max(1, Math.ceil(vpoPendingTotal / pendingLimit));
+        const vpoPendingCurPage = pendingIsAll ? 1 : Math.min(Math.max(1, vpoPendingPage), vpoPendingTotalPages);
+        const pendingFrom = pendingIsAll ? 0 : (vpoPendingTotal > 0 ? (vpoPendingCurPage - 1) * pendingLimit : 0);
+        const pendingTo = pendingIsAll ? vpoPendingTotal : Math.min(pendingFrom + pendingLimit, vpoPendingTotal);
         const pendingPg = {
-          page: vpoPendingPage,
+          page: vpoPendingCurPage,
           pages: vpoPendingTotalPages,
           perPage: vpoPendingPerPage,
+          isAll: pendingIsAll,
           total: vpoPendingTotal,
-          from: vpoPendingTotal > 0 ? (vpoPendingPage - 1) * vpoPendingPerPage : 0,
-          to: Math.min((vpoPendingPage - 1) * vpoPendingPerPage + vpoPendingPerPage, vpoPendingTotal),
+          from: pendingFrom,
+          to: pendingTo,
           setPage: setVpoPendingPage,
           rows: pendingPoItems,
-          hasPrev: vpoPendingPage > 1,
-          hasNext: vpoPendingPage < vpoPendingTotalPages,
+          hasPrev: !pendingIsAll && vpoPendingCurPage > 1,
+          hasNext: !pendingIsAll && vpoPendingCurPage < vpoPendingTotalPages,
         };
 
-        const vpoListTotalPages = Math.max(1, Math.ceil(vpoListTotal / vpoListPerPage));
+        const listIsAll = vpoListPerPage === 'all';
+        const listLimit = listIsAll ? Math.max(vpoListTotal, 1) : (parseInt(vpoListPerPage, 10) || 15);
+        const vpoListTotalPages = listIsAll ? 1 : Math.max(1, Math.ceil(vpoListTotal / listLimit));
+        const vpoListCurPage = listIsAll ? 1 : Math.min(Math.max(1, vpoListPage), vpoListTotalPages);
+        const listFrom = listIsAll ? 0 : (vpoListTotal > 0 ? (vpoListCurPage - 1) * listLimit : 0);
+        const listTo = listIsAll ? vpoListTotal : Math.min(listFrom + listLimit, vpoListTotal);
         const listPg = {
-          page: vpoListPage,
+          page: vpoListCurPage,
           pages: vpoListTotalPages,
           perPage: vpoListPerPage,
+          isAll: listIsAll,
           total: vpoListTotal,
-          from: vpoListTotal > 0 ? (vpoListPage - 1) * vpoListPerPage : 0,
-          to: Math.min((vpoListPage - 1) * vpoListPerPage + vpoListPerPage, vpoListTotal),
+          from: listFrom,
+          to: listTo,
           setPage: setVpoListPage,
           rows: vendorPos,
-          hasPrev: vpoListPage > 1,
-          hasNext: vpoListPage < vpoListTotalPages,
+          hasPrev: !listIsAll && vpoListCurPage > 1,
+          hasNext: !listIsAll && vpoListCurPage < vpoListTotalPages,
         };
         return (
         <>
@@ -5612,37 +5628,45 @@ export default function Procurement() {
         const today = new Date().toISOString().slice(0, 10);
 
         // Server-driven pagination & filtering for Follow-up (POs awaiting bill)
-        const fuTotalPages = Math.max(1, Math.ceil(billsFuTotal / billsFuPerPage));
-        const fuFrom = billsFuTotal > 0 ? (billsFuPage - 1) * billsFuPerPage : 0;
-        const fuTo = Math.min(fuFrom + billsFuPerPage, billsFuTotal);
+        const fuIsAll = billsFuPerPage === 'all';
+        const fuLimit = fuIsAll ? Math.max(billsFuTotal, 1) : (parseInt(billsFuPerPage, 10) || 15);
+        const fuTotalPages = fuIsAll ? 1 : Math.max(1, Math.ceil(billsFuTotal / fuLimit));
+        const fuCurPage = fuIsAll ? 1 : Math.min(Math.max(1, billsFuPage), fuTotalPages);
+        const fuFrom = fuIsAll ? 0 : (billsFuTotal > 0 ? (fuCurPage - 1) * fuLimit : 0);
+        const fuTo = fuIsAll ? billsFuTotal : Math.min(fuFrom + fuLimit, billsFuTotal);
         const fuPg = {
-          page: billsFuPage,
+          page: fuCurPage,
           pages: fuTotalPages,
           perPage: billsFuPerPage,
+          isAll: fuIsAll,
           total: billsFuTotal,
           from: fuFrom,
           to: fuTo,
           setPage: setBillsFuPage,
           rows: billsFuRows,
-          hasPrev: billsFuPage > 1,
-          hasNext: billsFuPage < fuTotalPages,
+          hasPrev: !fuIsAll && fuCurPage > 1,
+          hasNext: !fuIsAll && fuCurPage < fuTotalPages,
         };
 
         // Server-driven pagination & filtering for Purchase Bills list
-        const billsListTotalPages = Math.max(1, Math.ceil(billsListTotal / billsListPerPage));
-        const billsListFromIdx = billsListTotal > 0 ? (billsListPage - 1) * billsListPerPage : 0;
-        const billsListToIdx = Math.min(billsListFromIdx + billsListPerPage, billsListTotal);
+        const billsListIsAll = billsListPerPage === 'all';
+        const billsListLimit = billsListIsAll ? Math.max(billsListTotal, 1) : (parseInt(billsListPerPage, 10) || 15);
+        const billsListTotalPages = billsListIsAll ? 1 : Math.max(1, Math.ceil(billsListTotal / billsListLimit));
+        const billsListCurPage = billsListIsAll ? 1 : Math.min(Math.max(1, billsListPage), billsListTotalPages);
+        const billsListFromIdx = billsListIsAll ? 0 : (billsListTotal > 0 ? (billsListCurPage - 1) * billsListLimit : 0);
+        const billsListToIdx = billsListIsAll ? billsListTotal : Math.min(billsListFromIdx + billsListLimit, billsListTotal);
         const billsListPg = {
-          page: billsListPage,
+          page: billsListCurPage,
           pages: billsListTotalPages,
           perPage: billsListPerPage,
+          isAll: billsListIsAll,
           total: billsListTotal,
           from: billsListFromIdx,
           to: billsListToIdx,
           setPage: setBillsListPage,
           rows: billsListRows,
-          hasPrev: billsListPage > 1,
-          hasNext: billsListPage < billsListTotalPages,
+          hasPrev: !billsListIsAll && billsListCurPage > 1,
+          hasNext: !billsListIsAll && billsListCurPage < billsListTotalPages,
         };
 
         const daysDiff = (d) => {
@@ -6035,38 +6059,46 @@ export default function Procurement() {
 
       {tab === 'delivery' && (() => {
         // Server-driven pagination & filtering for Ready to Dispatch
-        const readyTotalPages = Math.max(1, Math.ceil(dispReadyTotal / dispReadyPerPage));
-        const readyFromIdx = dispReadyTotal > 0 ? (dispReadyPage - 1) * dispReadyPerPage : 0;
-        const readyToIdx = Math.min(readyFromIdx + dispReadyPerPage, dispReadyTotal);
+        const readyIsAll = dispReadyPerPage === 'all';
+        const readyLimit = readyIsAll ? Math.max(dispReadyTotal, 1) : (parseInt(dispReadyPerPage, 10) || 15);
+        const readyTotalPages = readyIsAll ? 1 : Math.max(1, Math.ceil(dispReadyTotal / readyLimit));
+        const readyCurPage = readyIsAll ? 1 : Math.min(Math.max(1, dispReadyPage), readyTotalPages);
+        const readyFromIdx = readyIsAll ? 0 : (dispReadyTotal > 0 ? (readyCurPage - 1) * readyLimit : 0);
+        const readyToIdx = readyIsAll ? dispReadyTotal : Math.min(readyFromIdx + readyLimit, dispReadyTotal);
         const readyPg = {
-          page: dispReadyPage,
+          page: readyCurPage,
           pages: readyTotalPages,
           perPage: dispReadyPerPage,
+          isAll: readyIsAll,
           total: dispReadyTotal,
           from: readyFromIdx,
           to: readyToIdx,
           setPage: setDispReadyPage,
           rows: dispReadyRows,
-          hasPrev: dispReadyPage > 1,
-          hasNext: dispReadyPage < readyTotalPages,
+          hasPrev: !readyIsAll && readyCurPage > 1,
+          hasNext: !readyIsAll && readyCurPage < readyTotalPages,
         };
         const sbPendingDNs = dispReadySbPending || [];
 
         // Server-driven pagination & filtering for Dispatch & Receiving Notes
-        const dispListTotalPages = Math.max(1, Math.ceil(dispListTotal / dispListPerPage));
-        const dispListFromIdx = dispListTotal > 0 ? (dispListPage - 1) * dispListPerPage : 0;
-        const dispListToIdx = Math.min(dispListFromIdx + dispListPerPage, dispListTotal);
+        const dispListIsAll = dispListPerPage === 'all';
+        const dispListLimit = dispListIsAll ? Math.max(dispListTotal, 1) : (parseInt(dispListPerPage, 10) || 15);
+        const dispListTotalPages = dispListIsAll ? 1 : Math.max(1, Math.ceil(dispListTotal / dispListLimit));
+        const dispListCurPage = dispListIsAll ? 1 : Math.min(Math.max(1, dispListPage), dispListTotalPages);
+        const dispListFromIdx = dispListIsAll ? 0 : (dispListTotal > 0 ? (dispListCurPage - 1) * dispListLimit : 0);
+        const dispListToIdx = dispListIsAll ? dispListTotal : Math.min(dispListFromIdx + dispListLimit, dispListTotal);
         const dispListPg = {
-          page: dispListPage,
+          page: dispListCurPage,
           pages: dispListTotalPages,
           perPage: dispListPerPage,
+          isAll: dispListIsAll,
           total: dispListTotal,
           from: dispListFromIdx,
           to: dispListToIdx,
           setPage: setDispListPage,
           rows: dispListRows,
-          hasPrev: dispListPage > 1,
-          hasNext: dispListPage < dispListTotalPages,
+          hasPrev: !dispListIsAll && dispListCurPage > 1,
+          hasNext: !dispListIsAll && dispListCurPage < dispListTotalPages,
         };
         const createChallan = async (po) => {
           try {

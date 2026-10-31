@@ -160,9 +160,10 @@ function request(reqUrl, options, postData) {
       reject(err);
     });
 
-    req.setTimeout(35000, function () {
+    var timeoutMs = (options && options.timeout) || 20000;
+    req.setTimeout(timeoutMs, function () {
       req.abort();
-      reject(new Error('Request timed out after 35s'));
+      reject(new Error('Request timed out after ' + Math.round(timeoutMs / 1000) + 's'));
     });
 
     if (postData) {
@@ -637,45 +638,45 @@ function isBankType(v) {
          t.indexOf('bank') !== -1;
 }
 
-// Query Tally trying multiple methods
+// Query Tally trying multiple methods with cascading fallbacks
 function queryTally() {
-  var compNoDot = (config.companyName || '').replace(/\.\s*$/, '').replace('LTD.', 'LTD');
+  function tryExport(xmlPayload, timeoutMs) {
+    return request(config.tallyUrl, { method: 'POST', timeout: timeoutMs || 15000, headers: { 'Content-Type': 'text/xml' } }, xmlPayload);
+  }
 
-  // Method 1: Standard Daybook for currently open company (NO SVCURRENTCOMPANY - proven at 5:50 PM)
+  // Method 1: Standard Daybook for currently open company (proven at 5:50 PM and 10:19 AM)
   var q1 = buildDaybookExport(true, null);
-  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q1)
+  return tryExport(q1, 15000)
     .then(function (res1) {
       var list1 = parseVouchersFromXml(res1.data || '');
       if (list1.length > 0) return { list: list1, raw: res1.data };
-
-      // Method 2: Day Book Report Export (proven fallback)
+      throw new Error('Daybook returned 0 vouchers');
+    })
+    .catch(function () {
+      // Method 2: Day Book Report Export (fallback)
       var q2 = buildDayBookReportExport(true, null);
-      return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q2)
+      return tryExport(q2, 15000)
         .then(function (res2) {
           var list2 = parseVouchersFromXml(res2.data || '');
           if (list2.length > 0) return { list: list2, raw: res2.data };
-
+          throw new Error('Day Book Report returned 0 vouchers');
+        })
+        .catch(function () {
           // Method 3: Dynamic Voucher Collection query with full fetches
           var q3 = buildVoucherCollectionExport(true, null);
-          return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q3)
+          return tryExport(q3, 15000)
             .then(function (res3) {
               var list3 = parseVouchersFromXml(res3.data || '');
               if (list3.length > 0) return { list: list3, raw: res3.data };
-
-              // Method 4: With company name from config
-              var q4 = buildDaybookExport(true, compNoDot);
-              return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q4)
+              throw new Error('Collection returned 0 vouchers');
+            })
+            .catch(function () {
+              // Method 4: Daybook without dates (current date)
+              var q4 = buildDaybookExport(false, null);
+              return tryExport(q4, 15000)
                 .then(function (res4) {
                   var list4 = parseVouchersFromXml(res4.data || '');
-                  if (list4.length > 0) return { list: list4, raw: res4.data };
-
-                  // Method 5: Daybook without dates
-                  var q5 = buildDaybookExport(false, null);
-                  return request(config.tallyUrl, { method: 'POST', headers: { 'Content-Type': 'text/xml' } }, q5)
-                    .then(function (res5) {
-                      var list5 = parseVouchersFromXml(res5.data || '');
-                      return { list: list5, raw: res1.data || res2.data || res3.data || res4.data || res5.data };
-                    });
+                  return { list: list4, raw: res4.data || '' };
                 });
             });
         });
@@ -854,16 +855,17 @@ function syncFromTally() {
     }
     console.log('       Breakdown: ' + summaryParts.join(', '));
 
-    // Display the latest voucher found in Tally
-    var latest = allVouchers[allVouchers.length - 1];
-    var latestItemsCount = (latest.items && latest.items.length) ? (' | ' + latest.items.length + ' item(s)') : '';
-    console.log('       Latest voucher in Tally: [' + latest.voucherType + ']' +
-                ' No: ' + (latest.reference || latest.voucherNumber || 'N/A') +
-                ' | Party: ' + (latest.partyLedgerName || 'N/A') +
-                ' | Date: ' + (latest.date || 'N/A') +
-                ' | Rs. ' + latest.amount +
-                latestItemsCount +
-                ' | AlterID: ' + latest.alterId);
+    // Display all vouchers found in Tally
+    for (var vi = 0; vi < allVouchers.length; vi++) {
+      var vx = allVouchers[vi];
+      var itCount = (vx.items && vx.items.length) ? (' | ' + vx.items.length + ' item(s)') : '';
+      console.log('       [' + (vi + 1) + '] [' + vx.voucherType + ']' +
+                  ' No: ' + (vx.reference || vx.voucherNumber || 'N/A') +
+                  ' | Party: ' + (vx.partyLedgerName || 'N/A') +
+                  ' | Date: ' + (vx.date || 'N/A') +
+                  ' | Rs. ' + vx.amount + itCount +
+                  ' | AlterID: ' + vx.alterId);
+    }
 
     // Sequence stream pushes
     var chain = Promise.resolve();
@@ -962,6 +964,12 @@ function syncFromTally() {
   }).catch(function (err) {
     if (err.code === 'ECONNREFUSED') {
       console.warn('[' + now + '] Tally not reachable at ' + config.tallyUrl + '. Is Tally open with Port 9000 enabled?');
+    } else if (err.message && err.message.indexOf('timed out') !== -1) {
+      console.error('[' + now + '] Tally did not respond within 15s (Connection timed out).');
+      console.error('       >> ACTION REQUIRED in TallyPrime:');
+      console.error('          1. Switch to TallyPrime and press ESC 2-3 times to return to "Gateway of Tally".');
+      console.error('          2. Check if an active voucher screen or popup dialog (e.g. Quit? Yes/No) is open.');
+      console.error('          3. If TallyPrime is frozen or unresponsive, close TallyPrime and reopen it.');
     } else if (err.statusCode === 401) {
       console.error('[' + now + '] Authentication Error: Invalid X-Tally-Token in config.json.');
     } else {
@@ -974,6 +982,7 @@ function syncFromTally() {
 console.log('============================================');
 console.log('   SEPL TALLY -> ERP SYNC AGENT STARTED    ');
 console.log('============================================');
+console.log('Version:      v2.2.0 (Clean Daybook & Line Items)');
 console.log('Tally URL:    ' + config.tallyUrl);
 console.log('ERP Endpoint: ' + config.erpBaseUrl);
 console.log('Company:      ' + config.companyName);
