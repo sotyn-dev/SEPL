@@ -459,11 +459,11 @@ router.post('/bank', verifyTallyToken, (req, res) => {
 
   const insertStmt = db.prepare(`
     INSERT INTO bank_transactions (
-      txn_date, description, ref_no, debit, credit,
+      bank_account_id, txn_date, description, ref_no, debit, credit,
       source, dedupe_hash, tally_guid, tally_alter_id,
       voucher_type, party_name, tally_company
     ) VALUES (
-      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
       'tally_sync', ?, ?, ?,
       ?, ?, ?
     )
@@ -505,7 +505,19 @@ router.post('/bank', verifyTallyToken, (req, res) => {
           continue;
         }
 
-        insertStmt.run(date, desc, refNo, debit, credit, dedupeHash, guid, alterId, vchType, party, company);
+        // Try linking to bank_accounts by matching bank_name in party
+        let bankAccountId = null;
+        if (party) {
+          const matchAcct = db.prepare(`
+            SELECT id FROM bank_accounts
+             WHERE LOWER(?) LIKE '%' || LOWER(bank_name) || '%'
+                OR (account_last4 IS NOT NULL AND ? LIKE '%' || account_last4)
+             LIMIT 1
+          `).get(party, party);
+          if (matchAcct) bankAccountId = matchAcct.id;
+        }
+
+        insertStmt.run(bankAccountId, date, desc, refNo, debit, credit, dedupeHash, guid, alterId, vchType, party, company);
         added++;
       }
 
