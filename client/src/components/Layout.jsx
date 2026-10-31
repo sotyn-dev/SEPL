@@ -157,10 +157,7 @@ const SIDEBAR_GROUPS = [
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
     { path: '/project-dashboard', label: 'Project Dashboard', icon: FiPieChart, module: 'project_dashboard' },
-    // Mam (2026-06-01): the execution + billing pipeline used to sit here.
-    // Mam (2026-08): MOVED into the Labour Management System group as
-    // "Projects & Work Orders" — same route and permission key, listed once so
-    // there is only one place in the sidebar that owns Work Orders.
+    { path: '/site-work-board',   label: 'Site Work Board (SOP-09)', icon: FiActivity, module: 'dpr' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     { path: '/client-snag',  label: 'Site Readiness & Snags', icon: FiCamera, module: 'client_snag' },

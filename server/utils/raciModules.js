@@ -487,6 +487,52 @@ const MODULE_DEFS = {
     },
   },
 
+  // ── SOP-09 (Site Work & Daily Report — 6 Stages & Functional Roles) ─────────
+  // Owner: Project Manager (Adarsh Kumar), Department Head (Ambuj), HR (Ruksana).
+  // Dynamic RACI matrix allowing any role to be transferred to anyone at any time.
+  sop_09: {
+    label: 'SOP-09 (Site Work & Daily Report)',
+    steps: [
+      { key: 's1_ready', label: 'S1: Ready-Checklist Master (7 Pillars)' },
+      { key: 's2_report', label: 'S2: Mobile Daily Report (DPR)' },
+      { key: 's3_problem', label: 'S3: Problem-to-Task (One Name, One Date)' },
+      { key: 's4_buffer', label: 'S4: Buffer & Plan Update' },
+      { key: 's5_rag', label: 'S5: Colour Rule (Green / Yellow / Red)' },
+      { key: 's6_closure', label: 'S6: Closing Checklist (Quality & Safety)' },
+      { key: 'hr_lead', label: 'HR & Manpower Incharge (Ruksana)' },
+      { key: 'purchase_lead', label: 'Purchase & Material Head' },
+      { key: 'crm_lead', label: 'CRM, Space & Drawing Coordinator' },
+      { key: 'machinery_lead', label: 'Plant & Machinery Head' },
+      { key: 'accounts_lead', label: 'Accounts & Payment Head' },
+      { key: 'pm_lead', label: 'Project Manager (PM) — Adarsh Kumar' },
+      { key: 'dept_head', label: 'Department Head (Operations) — Ambuj' },
+    ],
+    rows(db, { allRecords = false } = {}) {
+      return safeAll(db, `
+        SELECT s.id, s.name, s.client_name, s.site_engineer_id, s.created_at,
+               (SELECT d.report_date FROM dpr d WHERE d.site_id=s.id ORDER BY d.report_date DESC LIMIT 1) AS last_dpr_date,
+               (SELECT d.approval_status FROM dpr d WHERE d.site_id=s.id ORDER BY d.report_date DESC LIMIT 1) AS last_status
+          FROM sites s
+         WHERE COALESCE(s.status, 'active') = 'active'
+         ORDER BY s.id DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => ({
+        id: r.id,
+        title: r.name,
+        subtitle: r.client_name || 'Active Site',
+        created_at: r.created_at,
+        owner_id: r.site_engineer_id || null,
+        stamps: {
+          s1_ready: r.last_dpr_date || null,
+          s2_report: r.last_dpr_date || null,
+          s3_problem: null,
+          s4_buffer: null,
+          s5_rag: null,
+          s6_closure: null,
+        },
+        current_key: r.last_status === 'approved' ? 's4_buffer' : 's2_report',
+      }));
+    },
+  },
+
   // ── Sales Billing (per-bill lifecycle: Raise → Approve → Send → Paid) ──────
   // Step times come from sales_bill_status_log (approved/sent/paid changed_at),
   // with sent_at as a fallback for Send. Each step is owned by whoever performed
@@ -858,6 +904,10 @@ function getModuleLink(key, id) {
     case 'cheques': return '/cheques';
     case 'subcon_hiring': return '/hiring';
     case 'tally_bills': return '/tally-bills';
+    case 'sop_09': return '/sites';
+    case 'dpr': return '/dpr';
+    case 'sales_billing': return '/sales-billing';
+    case 'subcon_billing': return '/subcontractor-bills';
     default: return null;
   }
 }
