@@ -1023,10 +1023,11 @@ router.get('/indents', (req, res) => {
   const poGen = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as amount FROM vendor_pos WHERE COALESCE(cancelled, 0) = 0`).get() || { count: 0, amount: 0 };
   const payReq = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(payment_block_amount), 0) as amount FROM vendor_pos WHERE COALESCE(cancelled, 0) = 0 AND payment_block_status = 'pending'`).get() || { count: 0, amount: 0 };
 
+  const isAll = String(rawLimit || '').toLowerCase() === 'all';
   const isPaginated = rawPage != null && isExport !== '1';
-  const page = Math.max(1, parseInt(rawPage, 10) || 1);
-  const limit = Math.min(500, Math.max(1, parseInt(rawLimit, 10) || 15));
-  const offset = (page - 1) * limit;
+  const page = isAll ? 1 : Math.max(1, parseInt(rawPage, 10) || 1);
+  const limit = isAll ? null : Math.max(1, parseInt(rawLimit, 10) || 15);
+  const offset = isAll ? 0 : (page - 1) * limit;
 
   const total = db.prepare(`
     SELECT COUNT(*) as c
@@ -1064,7 +1065,7 @@ router.get('/indents', (req, res) => {
   `;
 
   let indents;
-  if (isPaginated) {
+  if (isPaginated && !isAll) {
     indentsSql += ` LIMIT ? OFFSET ?`;
     indents = db.prepare(indentsSql).all(...listParams, limit, offset);
   } else {
@@ -1240,8 +1241,8 @@ router.get('/indents', (req, res) => {
       rows,
       total,
       page,
-      limit,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
+      limit: isAll ? total : limit,
+      totalPages: isAll ? 1 : Math.max(1, Math.ceil(total / limit)),
       kpis: {
         total_count: kpiAgg.total_count || 0,
         total_budget: kpiAgg.total_budget || 0,

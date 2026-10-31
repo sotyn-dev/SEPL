@@ -319,6 +319,36 @@ export default function Scorecard() {
   // Universal Drilldown Modal for Planned / Actual / Previous Pending / Done
   const [drilldown, setDrilldown] = useState(null);
   const handleDrilldown = useCallback((kpi, type) => {
+    // 0. RACI Step Breakdown Task Drilldown (per module & step)
+    if (kpi && kpi.step_key && kpi.module) {
+      let rows = [];
+      let typeLabel = 'Tasks';
+      if (type === 'planned') {
+        rows = kpi.planned_items || [];
+        typeLabel = 'Planned Tasks (Due / active this week)';
+      } else if (type === 'actual') {
+        rows = kpi.done_items || [];
+        typeLabel = 'Completed Tasks (This week)';
+      } else if (type === 'pending') {
+        rows = [...(kpi.pending_items || []), ...(kpi.prev_pending_items || [])];
+        typeLabel = 'Pending Workload';
+      } else if (type === 'prev_done') {
+        rows = kpi.prev_done_items || [];
+        typeLabel = 'Previous Backlog Completed This Week';
+      }
+      setDrilldown({
+        open: true,
+        loading: false,
+        title: `${kpi.module_label || kpi.module} · ${kpi.step_label || kpi.step_key} — ${typeLabel} (${fmtRange(weekStart)})`,
+        rows,
+        module: 'raci_step',
+        type,
+        stepName: kpi.step_label || kpi.step_key,
+        moduleName: kpi.module_label || kpi.module,
+      });
+      return;
+    }
+
     // 1. Daily Active Users Drilldown (Active vs Inactive company employees)
     if (kpi.data_source === 'auto:daily_active_users') {
       setDrilldown({
@@ -832,7 +862,7 @@ export default function Scorecard() {
                             <td colSpan={7} className="p-3">
                               {raci.loading
                                 ? <p className="text-sm text-gray-500">Loading step-wise…</p>
-                                : <RaciBreakdown data={raci.data} />}
+                                : <RaciBreakdown data={raci.data} onDrilldown={handleDrilldown} />}
                             </td>
                           </tr>
                         )}
@@ -1339,6 +1369,109 @@ export default function Scorecard() {
           // ─── Task Modules Empty State ───
           <div className="p-8 text-center text-sm text-gray-400">
             No tasks found in this category.
+          </div>
+        ) : drilldown.module === 'raci_step' ? (
+          // ─── RACI Step Tasks List ───
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-gray-500 font-medium px-1">
+              <span>Showing <b>{drilldown.rows.length}</b> task{drilldown.rows.length === 1 ? '' : 's'}:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  exportCsv(
+                    `raci_${drilldown.stepName || 'step'}_${drilldown.type}_${weekStart}.csv`,
+                    drilldown.rows.map(r => ({
+                      'Module': r.module_label || r.module,
+                      'Step': r.step_label || r.step_key,
+                      'Task / Ref': r.title,
+                      'Client / Details': r.subtitle,
+                      'Date': r.date || '',
+                      'Role': r.role || '',
+                      'Status': r.status || '',
+                      'Elapsed Hours': r.elapsed ?? '',
+                      'SLA Hours': r.sla_hours ?? '',
+                      'On Time': r.on_time == null ? '' : (r.on_time ? 'Yes' : 'No'),
+                    }))
+                  );
+                }}
+                className="btn btn-secondary text-xs py-1 px-2.5 flex items-center gap-1"
+                title="Export list to CSV"
+              >
+                <FiDownload size={13} /> Export CSV
+              </button>
+            </div>
+            <div className="overflow-x-auto max-h-[60vh] border rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase border-b sticky top-0">
+                  <tr>
+                    <th className="p-2 text-left w-28">Ref / Record</th>
+                    <th className="p-2 text-left">Client / Site / Details</th>
+                    <th className="p-2 text-center w-24">Date</th>
+                    <th className="p-2 text-center w-16">Role</th>
+                    <th className="p-2 text-center w-20">SLA / Time</th>
+                    <th className="p-2 text-center w-24">Status</th>
+                    <th className="p-2 text-center w-20">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {drilldown.rows.map((row, idx) => (
+                    <tr key={`${row.id}-${idx}`} className="hover:bg-blue-50/40">
+                      <td className="p-2 font-mono font-bold text-indigo-700">
+                        {row.link ? (
+                          <a
+                            href={row.link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="hover:underline flex items-center gap-1"
+                            title="Open in new tab"
+                          >
+                            {row.title}
+                            <FiExternalLink size={11} className="text-gray-400" />
+                          </a>
+                        ) : (
+                          row.title
+                        )}
+                      </td>
+                      <td className="p-2 text-gray-800 font-medium">{row.subtitle || '—'}</td>
+                      <td className="p-2 text-center text-gray-600">{row.date || '—'}</td>
+                      <td className="p-2 text-center">
+                        {row.role ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-700">
+                            {row.role}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="p-2 text-center text-gray-600">
+                        {row.elapsed != null ? `${row.elapsed} hrs` : (row.sla_hours ? `SLA: ${row.sla_hours}h` : '—')}
+                      </td>
+                      <td className="p-2 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          row.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' :
+                          row.status === 'Pending' ? 'bg-amber-100 text-amber-800' :
+                          'bg-orange-100 text-orange-800'
+                        }`}>
+                          {row.status}
+                        </span>
+                      </td>
+                      <td className="p-2 text-center">
+                        {row.link ? (
+                          <a
+                            href={row.link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-secondary text-[11px] py-1 px-2 hover:bg-indigo-50 hover:text-indigo-600 inline-flex items-center gap-1"
+                          >
+                            Open ↗
+                          </a>
+                        ) : (
+                          <span className="text-gray-400 text-[10px]">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : (
           // ─── Task Modules List ───
@@ -2313,7 +2446,7 @@ function CommitmentCell({ row }) {
   );
 }
 
-function RaciBreakdown({ data }) {
+function RaciBreakdown({ data, onDrilldown }) {
   if (!data || data.loading) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
   const rows = data.rows || [];
   if (!rows.length) return <p className="text-sm text-gray-500 p-4">No RACI steps on this person for this week.</p>;
@@ -2375,15 +2508,65 @@ function RaciBreakdown({ data }) {
                     )}
                   </td>
                   <td className="text-center p-2 text-indigo-700">{r.weight != null ? `${r.weight}%` : <span className="text-gray-300">—</span>}</td>
-                  <td className="text-center p-2 font-semibold">{r.planned}</td>
-                  <td className="text-center p-2 text-emerald-700">{r.actual}</td>
+                  <td className="text-center p-2 font-semibold">
+                    {r.planned > 0 && onDrilldown ? (
+                      <button
+                        type="button"
+                        onClick={() => onDrilldown(r, 'planned')}
+                        className="font-bold text-indigo-600 hover:underline hover:text-indigo-800 cursor-pointer"
+                        title={`Click to view ${r.planned} planned task${r.planned === 1 ? '' : 's'}`}
+                      >
+                        {r.planned}
+                      </button>
+                    ) : (
+                      r.planned
+                    )}
+                  </td>
+                  <td className="text-center p-2">
+                    {r.actual > 0 && onDrilldown ? (
+                      <button
+                        type="button"
+                        onClick={() => onDrilldown(r, 'actual')}
+                        className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                        title={`Click to view ${r.actual} completed task${r.actual === 1 ? '' : 's'}`}
+                      >
+                        {r.actual}
+                      </button>
+                    ) : (
+                      <span className={r.actual > 0 ? 'text-emerald-700 font-semibold' : 'text-gray-400'}>{r.actual}</span>
+                    )}
+                  </td>
                   {/* Same pair as the scorecard row's Pending column: total
                       outstanding (week + pre-week backlog) / backlog closed
                       this week (mam 2026-08-27 audit — no 502-vs-297 mismatch). */}
                   <td className="text-center p-2"
                       title={`${(r.pending_before || 0) + (r.closed_before || 0)} previous pending total / ${r.closed_before || 0} completed this week — ${r.pending_before || 0} remaining`}>
-                    <span className="text-amber-700">{((r.pending_before || 0) + (r.closed_before || 0)) || ''}</span>
-                    {(r.closed_before || 0) > 0 && <span className="text-gray-300"> / <b className="text-emerald-700">{r.closed_before}</b></span>}
+                    {((r.pending_before || 0) + (r.closed_before || 0)) > 0 && onDrilldown ? (
+                      <button
+                        type="button"
+                        onClick={() => onDrilldown(r, 'pending')}
+                        className="font-bold text-amber-700 hover:underline hover:text-amber-900 cursor-pointer"
+                        title="Click to view pending tasks"
+                      >
+                        {((r.pending_before || 0) + (r.closed_before || 0))}
+                      </button>
+                    ) : (
+                      <span className="text-amber-700">{((r.pending_before || 0) + (r.closed_before || 0)) || ''}</span>
+                    )}
+                    {(r.closed_before || 0) > 0 && (
+                      <span className="text-gray-300"> / {onDrilldown ? (
+                        <button
+                          type="button"
+                          onClick={() => onDrilldown(r, 'prev_done')}
+                          className="font-bold text-emerald-700 hover:underline hover:text-emerald-900 cursor-pointer"
+                          title="Click to view backlog tasks completed this week"
+                        >
+                          {r.closed_before}
+                        </button>
+                      ) : (
+                        <b className="text-emerald-700">{r.closed_before}</b>
+                      )}</span>
+                    )}
                   </td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
@@ -2919,8 +3102,51 @@ function TemplateKpiEditor({ templateId, onChange }) {
   return (
     <div className="space-y-3 max-h-[70vh] overflow-y-auto">
       <div className="flex justify-between items-center flex-wrap gap-2">
-        <p className="text-xs text-gray-500">Total weight: <span className={`font-bold ${totalWeight === 100 ? 'text-emerald-600' : 'text-amber-600'}`}>{totalWeight}%</span> {totalWeight !== 100 && '(should be 100)'}</p>
-        <button onClick={() => setAdding(true)} className="btn btn-primary text-xs flex items-center gap-1"><FiPlus size={12} /> Add KPI</button>
+        <p className="text-xs text-gray-500">
+          Total weight: <span className={`font-bold px-1.5 py-0.5 rounded text-xs ${totalWeight === 100 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{totalWeight}%</span> {totalWeight !== 100 && <span className="text-amber-600 font-medium">(must equal 100%)</span>}
+        </p>
+        <div className="flex items-center gap-2">
+          {totalWeight !== 100 && tpl.kpis?.length > 0 && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm(`Auto-balance KPI weights so they cleanly sum to 100%?`)) return;
+                try {
+                  const kpis = tpl.kpis;
+                  const currentSum = kpis.reduce((s, k) => s + (k.weightage || 0), 0);
+                  if (currentSum === 0) {
+                    const split = Math.floor(100 / kpis.length);
+                    const rem = 100 - (split * kpis.length);
+                    for (let i = 0; i < kpis.length; i++) {
+                      await api.put(`/scoring/kpis/${kpis[i].id}`, { weightage: split + (i === 0 ? rem : 0) });
+                    }
+                  } else {
+                    let acc = 0;
+                    for (let i = 0; i < kpis.length; i++) {
+                      if (i === kpis.length - 1) {
+                        await api.put(`/scoring/kpis/${kpis[i].id}`, { weightage: Math.max(0, 100 - acc) });
+                      } else {
+                        const newW = Math.round((kpis[i].weightage / currentSum) * 100);
+                        acc += newW;
+                        await api.put(`/scoring/kpis/${kpis[i].id}`, { weightage: newW });
+                      }
+                    }
+                  }
+                  toast.success('Weights balanced to 100%');
+                  load();
+                  onChange?.();
+                } catch {
+                  toast.error('Failed to auto-balance weights');
+                }
+              }}
+              className="btn btn-secondary text-xs py-1 px-2.5 text-amber-800 bg-amber-50 hover:bg-amber-100 border-amber-300 font-semibold"
+              title="Proportionally adjust weights to equal 100%"
+            >
+              ⚖️ Auto-balance to 100%
+            </button>
+          )}
+          <button onClick={() => setAdding(true)} className="btn btn-primary text-xs flex items-center gap-1"><FiPlus size={12} /> Add KPI</button>
+        </div>
       </div>
       {/* Why some Targets are typed and some are not (mam 2026-09-05: "some
           place I need to enter plan and some place automatically pick plan,
