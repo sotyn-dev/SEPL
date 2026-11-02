@@ -1412,7 +1412,7 @@ export default function Leads() {
                   </div>
 
                   <textarea className="input" rows="2" placeholder="Verification remarks / GO or NO-GO reason..." value={stageForm.qualified_remarks || ''} onChange={e => setStageForm({ ...stageForm, qualified_remarks: e.target.value })} />
-                  
+
                   {/* Tentative project value */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
@@ -2155,7 +2155,7 @@ export default function Leads() {
                   <span>🏛</span> Government Tender &amp; GeM Bidding Portal
                 </h5>
                 <span className="text-[11px] bg-amber-100 text-amber-800 font-semibold px-2 py-0.5 rounded border border-amber-300">
-                  TK-01510 · GeM Bidding Option
+                  GeM Bidding Option
                 </span>
               </div>
 

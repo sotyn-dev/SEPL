@@ -592,7 +592,7 @@ router.get('/sites', (req, res) => {
      FROM (
        SELECT COALESCE(s.name, bb.project_name, bb.company_name) as name,
               bb.lead_no as lead_no, bb.category as category,
-              COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
+              COALESCE(NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
        FROM business_book bb
        LEFT JOIN sites s ON s.business_book_id = bb.id
        WHERE COALESCE(s.name, bb.project_name, bb.company_name) IS NOT NULL
@@ -1049,7 +1049,14 @@ router.get('/indents', (req, res) => {
             opb.owner as planning_owner,
             opo.crm_name as planning_crm_name,
             op.business_book_id AS business_book_id,
-            opb.payment_against_delivery AS bb_delivery_terms
+            opb.payment_against_delivery AS bb_delivery_terms,
+            COALESCE(
+              NULLIF(TRIM(opb.shipping_address), ''),
+              NULLIF(TRIM(bb_lead.shipping_address), ''),
+              NULLIF(TRIM(s.address), ''),
+              NULLIF(TRIM(opb.billing_address), ''),
+              NULLIF(TRIM(bb_lead.billing_address), '')
+            ) AS site_address
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
@@ -1059,6 +1066,8 @@ router.get('/indents', (req, res) => {
      LEFT JOIN users cu ON i.crm_by = cu.id
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book opb ON opb.id = op.business_book_id
+     LEFT JOIN business_book bb_lead ON bb_lead.lead_no = i.lead_no AND i.lead_no IS NOT NULL AND i.lead_no != ''
+     LEFT JOIN sites s ON s.business_book_id = COALESCE(op.business_book_id, bb_lead.id)
      LEFT JOIN purchase_orders opo ON opo.id = op.po_id
      ${listWhereSql}
      ORDER BY i.created_at DESC, i.id DESC
@@ -1279,9 +1288,20 @@ router.get('/indents/lookup', (req, res) => {
   try {
     const db = getDb();
     const rows = db.prepare(`
-      SELECT id, indent_number, site_name, client_name
-      FROM indents
-      ORDER BY id DESC
+      SELECT i.id, i.indent_number, i.site_name, i.client_name,
+             COALESCE(
+               NULLIF(TRIM(opb.shipping_address), ''),
+               NULLIF(TRIM(bb_lead.shipping_address), ''),
+               NULLIF(TRIM(s.address), ''),
+               NULLIF(TRIM(opb.billing_address), ''),
+               NULLIF(TRIM(bb_lead.billing_address), '')
+             ) AS site_address
+      FROM indents i
+      LEFT JOIN order_planning op ON op.id = i.planning_id
+      LEFT JOIN business_book opb ON opb.id = op.business_book_id
+      LEFT JOIN business_book bb_lead ON bb_lead.lead_no = i.lead_no AND i.lead_no IS NOT NULL AND i.lead_no != ''
+      LEFT JOIN sites s ON s.business_book_id = COALESCE(op.business_book_id, bb_lead.id)
+      ORDER BY i.id DESC
       LIMIT 200
     `).all();
     res.json(rows);
@@ -3520,8 +3540,20 @@ router.get('/indents/:id/delivery-bill', (req, res) => {
 router.get('/indents/:id/print', (req, res) => {
   const db = getDb();
   const indent = db.prepare(`
-    SELECT i.*, u.name as created_by_name
-    FROM indents i LEFT JOIN users u ON i.created_by = u.id
+    SELECT i.*, u.name as created_by_name,
+           COALESCE(
+             NULLIF(TRIM(opb.shipping_address), ''),
+             NULLIF(TRIM(bb_lead.shipping_address), ''),
+             NULLIF(TRIM(s.address), ''),
+             NULLIF(TRIM(opb.billing_address), ''),
+             NULLIF(TRIM(bb_lead.billing_address), '')
+           ) AS site_address
+    FROM indents i
+    LEFT JOIN users u ON i.created_by = u.id
+    LEFT JOIN order_planning op ON op.id = i.planning_id
+    LEFT JOIN business_book opb ON opb.id = op.business_book_id
+    LEFT JOIN business_book bb_lead ON bb_lead.lead_no = i.lead_no AND i.lead_no IS NOT NULL AND i.lead_no != ''
+    LEFT JOIN sites s ON s.business_book_id = COALESCE(op.business_book_id, bb_lead.id)
     WHERE i.id = ?
   `).get(req.params.id);
   if (!indent) return res.status(404).json({ error: 'Indent not found' });
@@ -3543,7 +3575,21 @@ router.get('/indents/:id/print', (req, res) => {
 router.get('/indents/:id', (req, res) => {
   const db = getDb();
   const indent = db.prepare(
-    `SELECT i.*, u.name as created_by_name FROM indents i LEFT JOIN users u ON i.created_by=u.id WHERE i.id=?`
+    `SELECT i.*, u.name as created_by_name,
+            COALESCE(
+              NULLIF(TRIM(opb.shipping_address), ''),
+              NULLIF(TRIM(bb_lead.shipping_address), ''),
+              NULLIF(TRIM(s.address), ''),
+              NULLIF(TRIM(opb.billing_address), ''),
+              NULLIF(TRIM(bb_lead.billing_address), '')
+            ) AS site_address
+     FROM indents i
+     LEFT JOIN users u ON i.created_by=u.id
+     LEFT JOIN order_planning op ON op.id = i.planning_id
+     LEFT JOIN business_book opb ON opb.id = op.business_book_id
+     LEFT JOIN business_book bb_lead ON bb_lead.lead_no = i.lead_no AND i.lead_no IS NOT NULL AND i.lead_no != ''
+     LEFT JOIN sites s ON s.business_book_id = COALESCE(op.business_book_id, bb_lead.id)
+     WHERE i.id=?`
   ).get(req.params.id);
   if (!indent) return res.status(404).json({ error: 'Not found' });
 
@@ -4890,17 +4936,22 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   let site_address = b.site_address ? String(b.site_address).trim() : null;
   if (!site_address && indent_id) {
     try {
-      const indRow = db.prepare('SELECT site_name FROM indents WHERE id=?').get(indent_id);
-      if (indRow?.site_name) {
-        const sRow = db.prepare(`
-          SELECT COALESCE(NULLIF(TRIM(s.address), ''), NULLIF(TRIM(bb.shipping_address), ''), NULLIF(TRIM(bb.billing_address), '')) as address
-          FROM business_book bb
-          LEFT JOIN sites s ON s.business_book_id = bb.id
-          WHERE LOWER(TRIM(COALESCE(s.name, bb.project_name, bb.company_name, ''))) = LOWER(TRIM(?))
-          ORDER BY bb.id DESC LIMIT 1
-        `).get(indRow.site_name);
-        if (sRow?.address) site_address = sRow.address;
-      }
+      const sRow = db.prepare(`
+        SELECT COALESCE(
+                 NULLIF(TRIM(opb.shipping_address), ''),
+                 NULLIF(TRIM(bb_lead.shipping_address), ''),
+                 NULLIF(TRIM(s.address), ''),
+                 NULLIF(TRIM(opb.billing_address), ''),
+                 NULLIF(TRIM(bb_lead.billing_address), '')
+               ) as address
+        FROM indents i
+        LEFT JOIN order_planning op ON op.id = i.planning_id
+        LEFT JOIN business_book opb ON opb.id = op.business_book_id
+        LEFT JOIN business_book bb_lead ON bb_lead.lead_no = i.lead_no AND i.lead_no IS NOT NULL AND i.lead_no != ''
+        LEFT JOIN sites s ON s.business_book_id = COALESCE(op.business_book_id, bb_lead.id)
+        WHERE i.id = ?
+      `).get(indent_id);
+      if (sRow?.address) site_address = sRow.address;
     } catch (_) {}
   }
 

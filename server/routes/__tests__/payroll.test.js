@@ -704,5 +704,53 @@ test('3-month leave rule: probation (<3m) has 0 paid leave; after 3m gets 1 full
   assert.equal(lateEarlyDay.pay, 0.5, 'Early shift late arrival after 09:30 is strictly deducted (pay 0.5)');
 });
 
+test('remaining 0.5 paid leave allowance half-covers approved leave and does not waste allowance', () => {
+  const emp = { ...employee, salary: 30000, join_date: '2025-01-01' };
+  // Day 1: worked 4 hours -> min_hours_half_day (2h) to < min_hours_full_day (6h) -> consumes 0.5 allowance, paid full day
+  // Day 2: approved sick leave -> remaining 0.5 allowance half-covers it -> pay 0.5, half_paid_sick_leave
+  const r = calculate(fixture({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:30', total_hours: 4 }
+    ],
+    leaves: [
+      { from_date: '2025-08-02', to_date: '2025-08-02', leave_type: 'sick' }
+    ]
+  }), settings, emp, '2025-08');
+
+  const d1 = r.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(d1.pay, 1, '4h day uses 0.5 allowance to become full paid day');
+  assert.equal(d1.label, 'half_day_low_hours_paid');
+
+  const d2 = r.breakdown.find(b => b.date === '2025-08-02');
+  assert.equal(d2.pay, 0.5, 'Remaining 0.5 allowance half-covers sick leave');
+  assert.equal(d2.label, 'half_paid_sick_leave');
+  assert.equal(r.paid_leaves, 1.0, 'Total paid leave allowance consumed is 1.0 (0.5 for low hours + 0.5 for sick leave)');
+});
+
+test('inactive employee with zero attendance in month receives zero holiday pay, zero Sunday pay, and zero gross earned', () => {
+  const inactiveEmp = { ...employee, salary: 30000, join_date: '2025-01-01', status: 'inactive', exit_date: '2025-10-25' };
+  const r = calculate(fixture({
+    attendance: [],
+    leaves: [],
+    holidays: [
+      { date: '2025-10-02', name: 'Gandhi Jayanti' },
+      { date: '2025-10-12', name: 'Dussehra' }
+    ]
+  }), settings, inactiveEmp, '2025-10');
+
+  assert.equal(r.paid_days, 0, 'Inactive staff with 0 attendance in month gets 0 paid days');
+  assert.equal(r.gross_earned, 0, 'Inactive staff with 0 attendance gets 0 gross earned');
+  assert.equal(r.net_pay, 0, 'Inactive staff with 0 attendance gets 0 net pay');
+  assert.equal(r.holiday_days, 0, 'Inactive staff gets 0 holiday pay');
+  assert.equal(r.sunday_count, 0, 'Inactive staff gets 0 Sunday pay');
+  assert.equal(r.has_attendance, false);
+  assert.equal(r.has_leave, false);
+
+  const oct2 = r.breakdown.find(b => b.date === '2025-10-02');
+  assert.equal(oct2.pay, 0);
+  assert.equal(oct2.label, 'holiday_unpaid');
+});
+
+
 
 

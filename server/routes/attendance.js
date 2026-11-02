@@ -1864,50 +1864,180 @@ router.get('/report', requirePermission('attendance', 'view'), (req, res) => {
   res.json(report);
 });
 
-// Leave requests (with short leave timing + monthly 4hr limit)
+function addMonthsToDate(dateStr, months) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d, lastDay));
+  return target.toISOString().slice(0, 10);
+}
+
+function evaluateLeaveAutoApproval(db, userId, payload) {
+  const { leave_type, from_date, to_date, from_time, to_time } = payload;
+  let days = payload.days !== undefined ? Number(payload.days) : 1;
+  let hours = payload.hours !== undefined ? Number(payload.hours) : 0;
+  const finalToDate = to_date || from_date;
+  let status = 'approved';
+  let remarks = '';
+
+  const month = from_date ? from_date.substring(0, 7) : new Date().toISOString().slice(0, 7);
+  const monthStart = `${month}-01`;
+  const monthEnd = `${month}-31`;
+
+  if (leave_type === 'short_leave') {
+    if (!hours && from_time && to_time) {
+      const [fh, fm] = from_time.split(':').map(Number);
+      const [th, tm] = to_time.split(':').map(Number);
+      hours = Math.round(((th + tm / 60) - (fh + fm / 60)) * 100) / 100;
+    }
+    days = 0;
+
+    // Check monthly limit (4 hours total)
+    // Probation period / 3 months criteria does NOT apply to short leave
+    const used = db.prepare(`
+      SELECT COALESCE(SUM(hours), 0) as total
+        FROM leave_requests
+       WHERE user_id = ?
+         AND leave_type = 'short_leave'
+         AND status = 'approved'
+         AND from_date BETWEEN ? AND ?
+    `).get(userId, monthStart, monthEnd);
+
+    const currentUsed = Math.round(Number(used?.total || 0) * 100) / 100;
+    const totalHours = Math.round((currentUsed + hours) * 100) / 100;
+
+    if (totalHours <= 4.0) {
+      status = 'approved';
+      remarks = `Auto-approved (monthly short leave: ${totalHours}h/4h used)`;
+    } else {
+      status = 'rejected';
+      remarks = `Auto-rejected: Monthly short leave limit is 4 hrs (used: ${currentUsed}h, requested: ${hours}h)`;
+    }
+  } else {
+    if (leave_type === 'half_day') {
+      const dayCount = Math.max(1, Math.round((new Date(finalToDate) - new Date(from_date)) / (1000 * 60 * 60 * 24)) + 1);
+      days = dayCount * 0.5;
+    } else if (payload.days === undefined) {
+      days = Math.max(1, Math.round((new Date(finalToDate) - new Date(from_date)) / (1000 * 60 * 60 * 24)) + 1);
+    }
+
+    // Check 3-month probation period eligibility
+    let emp = null;
+    try {
+      emp = db.prepare('SELECT * FROM employees WHERE user_id=?').get(userId);
+    } catch {
+      emp = null;
+    }
+
+    const rawJoinDate = emp?.join_date || emp?.joining_date;
+    const hasJoinDate = !!rawJoinDate;
+    const joinDate = hasJoinDate ? String(rawJoinDate).slice(0, 10) : null;
+    const threeMonthsDate = hasJoinDate ? addMonthsToDate(joinDate, 3) : null;
+
+    if (emp && emp.cl_eligible === 0) {
+      status = 'rejected';
+      remarks = 'Auto-rejected: Employee is not eligible for paid leave';
+    } else if (threeMonthsDate && from_date < threeMonthsDate) {
+      status = 'pending';
+      remarks = `Probation period active: 0 paid leave allowance (eligible after ${threeMonthsDate}). Unpaid leave requires HR approval.`;
+    } else {
+      // Completed 3 months! Check monthly limit: 1 full day or 2 half days = max 1.0 day
+      const existingLeaves = db.prepare(`
+        SELECT leave_type, days
+          FROM leave_requests
+         WHERE user_id = ?
+           AND leave_type != 'short_leave'
+           AND status = 'approved'
+           AND from_date BETWEEN ? AND ?
+      `).all(userId, monthStart, monthEnd);
+
+      let usedDays = 0;
+      for (const l of existingLeaves) {
+        if (l.leave_type === 'half_day') usedDays += 0.5;
+        else usedDays += (Number(l.days) || 1.0);
+      }
+      usedDays = Math.round(usedDays * 100) / 100;
+      const totalDays = Math.round((usedDays + days) * 100) / 100;
+
+      if (totalDays <= 1.0) {
+        status = 'approved';
+        remarks = `Auto-approved: ${days} day${days === 1 ? '' : 's'} (monthly paid leave: ${totalDays}d/1.0d full day allowance used)`;
+      } else {
+        status = 'rejected';
+        remarks = `Auto-rejected: ${days} day${days === 1 ? '' : 's'} exceeds the monthly paid leave allowance of 1 full day or 2 half days (already utilized: ${usedDays} day${usedDays === 1 ? '' : 's'})`;
+      }
+    }
+  }
+
+  return { days, hours, status, remarks, finalToDate };
+}
+
+// Leave requests (with auto-approval system: 4h short leave, 1 full day or 2 half days post-probation)
 router.post('/leave', (req, res) => {
   const { leave_type, from_date, to_date, from_time, to_time, reason } = req.body;
   if (!from_date) return res.status(400).json({ error: 'Date required' });
   const db = getDb();
+  const userId = (req.user.role === 'admin' && req.body.user_id) ? Number(req.body.user_id) : req.user.id;
 
-  let days = 1;
-  let hours = 0;
+  const finalToDate = to_date || from_date;
+  if (leave_type !== 'short_leave' && finalToDate < from_date) {
+    return res.status(400).json({ error: 'To Date cannot be earlier than From Date' });
+  }
   if (leave_type === 'short_leave') {
     if (!from_time || !to_time) return res.status(400).json({ error: 'Time required for short leave' });
-    // Calculate hours
-    const [fh, fm] = from_time.split(':').map(Number);
-    const [th, tm] = to_time.split(':').map(Number);
-    hours = (th + tm / 60) - (fh + fm / 60);
-    if (hours <= 0) return res.status(400).json({ error: 'Invalid time range' });
-
-    // Check monthly limit (4 hours)
-    const monthStart = from_date.substring(0, 7) + '-01';
-    const monthEnd = from_date.substring(0, 7) + '-31';
-    const used = db.prepare("SELECT COALESCE(SUM(hours),0) as total FROM leave_requests WHERE user_id=? AND leave_type='short_leave' AND status != 'rejected' AND from_date BETWEEN ? AND ?")
-      .get(req.user.id, monthStart, monthEnd);
-    if ((used.total + hours) > 4) {
-      return res.status(400).json({ error: `Monthly short leave limit is 4 hours. You have used ${used.total}h. Remaining: ${Math.max(0, 4 - used.total)}h` });
-    }
-    days = 0;
-  } else {
-    if (!to_date) return res.status(400).json({ error: 'To date required' });
-    days = Math.ceil((new Date(to_date) - new Date(from_date)) / (1000 * 60 * 60 * 24)) + 1;
   }
 
-  const r = db.prepare('INSERT INTO leave_requests (user_id, leave_type, from_date, to_date, days, hours, from_time, to_time, reason) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(req.user.id, leave_type || 'casual', from_date, to_date || from_date, days, hours, from_time, to_time, reason);
+  const evalResult = evaluateLeaveAutoApproval(db, userId, {
+    leave_type,
+    from_date,
+    to_date: finalToDate,
+    from_time,
+    to_time,
+    reason,
+  });
+
+  const { days, hours, status, remarks } = evalResult;
+
+  const r = db.prepare(`
+    INSERT INTO leave_requests (user_id, leave_type, from_date, to_date, days, hours, from_time, to_time, reason, status, remarks)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).run(userId, leave_type || 'casual', from_date, finalToDate, days, hours, from_time || null, to_time || null, reason || null, status, remarks);
+
+  const empUser = db.prepare('SELECT name, email FROM users WHERE id=?').get(userId);
+  const employeeName = empUser?.name || req.user.name || '';
+  const requesterEmail = empUser?.email || atUserEmail(db, userId);
+
   fireEmailEvent('leave.requested', {
-    employee: req.user.name || '',
+    employee: employeeName,
     leave_type: leave_type || 'casual',
     from_date: from_date,
-    to_date: to_date || from_date,
+    to_date: finalToDate,
     days: String(days),
     reason: reason || '',
     date: istTodayStr(),
-    requester_email: req.user.email || atUserEmail(db, req.user.id),
+    requester_email: requesterEmail,
     director_email: atDirector(),
   });
-  res.status(201).json({ id: r.lastInsertRowid });
+
+  fireEmailEvent('leave.decided', {
+    employee: employeeName,
+    leave_type: leave_type || 'casual',
+    status: status,
+    decided_by: 'Auto-Approval System',
+    date: istTodayStr(),
+    requester_email: requesterEmail,
+    director_email: atDirector(),
+  });
+
+  res.status(201).json({
+    id: r.lastInsertRowid,
+    status,
+    remarks,
+    message: status === 'approved'
+      ? (leave_type === 'short_leave' ? 'Short leave auto-approved' : 'Paid leave auto-approved')
+      : remarks
+  });
 });
 
 router.get('/leaves', requirePermission('attendance', 'view'), (req, res) => {
@@ -1959,7 +2089,7 @@ router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (re
 router.put('/leave/:id', requirePermission('attendance', 'edit'), (req, res) => {
   try {
     const b = req.body;
-    const fields = ['leave_type', 'from_date', 'to_date', 'from_time', 'to_time', 'days', 'hours', 'reason'];
+    const fields = ['leave_type', 'from_date', 'to_date', 'from_time', 'to_time', 'days', 'hours', 'reason', 'status', 'remarks'];
     const sets = []; const vals = [];
     for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
@@ -2071,5 +2201,6 @@ router.post('/trigger-absent-check', requirePermission('attendance', 'can_edit')
     res.status(500).json({ error: err.message });
   }
 });
+router.evaluateLeaveAutoApproval = evaluateLeaveAutoApproval;
 
 module.exports = router;

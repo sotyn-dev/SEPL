@@ -425,9 +425,10 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
   // Update linked site & geofence
   const siteLat = b.site_latitude ? Number(b.site_latitude) : null;
   const siteLng = b.site_longitude ? Number(b.site_longitude) : null;
+  const siteAddress = b.shipping_address || b.billing_address || `${b.district || ''}, ${b.state || ''}`;
   try {
-    getDb().prepare('UPDATE sites SET location_url=?, latitude=?, longitude=? WHERE business_book_id=?')
-      .run(b.site_location_url || null, siteLat, siteLng, req.params.id);
+    getDb().prepare('UPDATE sites SET address=?, location_url=?, latitude=?, longitude=? WHERE business_book_id=?')
+      .run(siteAddress, b.site_location_url || null, siteLat, siteLng, req.params.id);
     if (siteLat && siteLng) {
       const site = getDb().prepare('SELECT id, name FROM sites WHERE business_book_id=?').get(req.params.id);
       if (site) {

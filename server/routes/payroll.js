@@ -566,7 +566,7 @@ router.put('/settings', adminOnly, (req, res) => {
     const ap = req.body.adhoc_pct !== undefined ? Number(req.body.adhoc_pct) : (cur.adhoc_pct || 0);
     const mp = req.body.misc_pct !== undefined ? Number(req.body.misc_pct) : (cur.misc_pct || 0);
     const totalPct = Math.round((bp + cp + hp + ap + mp) * 100) / 100;
-    if (Math.abs(totalPct - 100) > 0.05) {
+    if (Math.abs(totalPct - 100) > 0.15) {
       return res.status(400).json({ error: `Salary slip breakdown percentages must equal 100% (currently ${totalPct}%)` });
     }
   }
@@ -754,6 +754,16 @@ function calculateForEmployee(db, settings, employee, month) {
   // If employee is marked inactive or terminated, establish a hard effective exit date
   let effectiveExitDate = hasExitDate ? exitDate : null;
   const isEmpInactive = ['inactive', 'terminated'].includes(String(employee.status || '').toLowerCase());
+  const hasWorkedInMonth = attRows.some(a => {
+    if (a.punch_in_time) return true;
+    if (a.admin_marked || a.regularized_at) {
+      const s = String(a.status || '').toLowerCase();
+      return ['present', 'late', 'half_day', 'short_day'].includes(s);
+    }
+    return false;
+  });
+  const hasApprovedLeaveInMonth = leaveRows.length > 0;
+
   if (!effectiveExitDate && isEmpInactive) {
     if (userId) {
       const lastAtt = db.prepare(`
@@ -772,7 +782,7 @@ function calculateForEmployee(db, settings, employee, month) {
   // Exact 3 months from join_date eligibility for paid leave
   const threeMonthsDate = hasJoinDate ? addMonthsToDate(joinDate, 3) : null;
   let autoLeaveAllowance = (threeMonthsDate && endDate < threeMonthsDate) ? 0 : 1.0;
-  if (employee.cl_eligible === 0) autoLeaveAllowance = 0;
+  if (employee.cl_eligible === 0 || (isEmpInactive && !hasWorkedInMonth && !hasApprovedLeaveInMonth)) autoLeaveAllowance = 0;
 
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
@@ -805,6 +815,20 @@ function calculateForEmployee(db, settings, employee, month) {
 
     // Sunday (when employee did NOT work/attend)
     if (sun && !hasAttended) {
+      // Inactive/terminated employee who never worked or attended in this month does NOT qualify for Sunday pay
+      if (isEmpInactive && !hasWorkedInMonth && !hasApprovedLeaveInMonth) {
+        dayLabel = 'sunday_unpaid';
+        breakdown.push({
+          date: dateStr,
+          day: 'Sun',
+          label: dayLabel,
+          pay: 0,
+          holiday_name: isHoliday ? holidayByDate[dateStr] : undefined,
+          ...(leaveType ? { applied_leave: leaveType } : {}),
+        });
+        paidDays += 0;
+        continue;
+      }
       if (settings.sundays_paid) {
         dayPay = 1;
         sundayCount += 1;
@@ -843,6 +867,19 @@ function calculateForEmployee(db, settings, employee, month) {
     // Placed before the leave / admin-mark / punch branches so the outcome is
     // the same for everyone regardless of what else is on the day.
     if (isHoliday) {
+      // Inactive/terminated employee who never worked or attended in this month does NOT qualify for holiday pay
+      if (isEmpInactive && !hasWorkedInMonth && !hasApprovedLeaveInMonth) {
+        breakdown.push({
+          date: dateStr,
+          day: dayName(year, mm, day),
+          label: 'holiday_unpaid',
+          pay: 0,
+          holiday_name: holidayByDate[dateStr],
+          note: 'Holiday unpaid for inactive staff with zero attendance'
+        });
+        paidDays += 0;
+        continue;
+      }
       dayPay = 1; // base declared holiday pay
       holidayDays += 1;
       dayLabel = 'holiday_paid';
@@ -923,6 +960,8 @@ function calculateForEmployee(db, settings, employee, month) {
     // attendance takes precedence and leave balance is NOT consumed.
     if (leaveType && !hasAttended) {
       let paid = false;
+      let halfPaid = false;
+      let note = '';
       if (leaveType === 'casual') {
         // 1 paid casual leave per month per staff, eligible after 3 months
         if (isEligibleForPaidLeave && (settings.cl_per_month || 0) > 0 && clUsed < settings.cl_per_month && autoLeaveAllowance >= 1.0) {
@@ -937,15 +976,42 @@ function calculateForEmployee(db, settings, employee, month) {
       } else if (leaveType === 'comp_off' || leaveType === 'half_day') {
         paid = true; // comp-off & half-day leave → full paid day (mam 2026-06-09)
       }
+
+      // If specific quota didn't cover it (e.g. sick leave with no separate SL quota, or CL exhausted),
+      // allow remaining monthly autoLeaveAllowance (1.0 or 0.5) to cover or half-cover it
+      if (!paid && canUseAutoLeave) {
+        if (autoLeaveAllowance >= 1.0) {
+          paid = true;
+          autoLeaveAllowance = Math.max(0, autoLeaveAllowance - 1.0);
+          note = 'Covered by monthly paid leave allowance (after 3 months)';
+        } else if (autoLeaveAllowance >= 0.5) {
+          halfPaid = true;
+          autoLeaveAllowance = Math.max(0, autoLeaveAllowance - 0.5);
+          note = 'Half-covered by remaining paid leave allowance';
+        }
+      }
+
       if (paid) {
         dayPay = 1;
         paidLeaves += 1;
         dayLabel = `paid_${leaveType}_leave`;
+      } else if (halfPaid) {
+        dayPay = 0.5;
+        paidLeaves += 0.5;
+        unpaidLeaves += 0.5;
+        dayLabel = `half_paid_${leaveType}_leave`;
       } else {
         unpaidLeaves += 1;
         dayLabel = `unpaid_${leaveType}_leave`;
       }
-      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay });
+      breakdown.push({
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: dayPay,
+        note: note || undefined,
+        applied_leave: leaveType
+      });
       paidDays += dayPay;
       continue;
     }
@@ -1074,6 +1140,13 @@ function calculateForEmployee(db, settings, employee, month) {
                 paidLeaves += 1;
                 dayLabel = 'missed_punch_out_paid_allowance';
                 note = 'Missed punch-out covered by paid leave allowance';
+              } else if (isEligibleForPaidLeave && autoLeaveAllowance >= 0.5) {
+                autoLeaveAllowance -= 0.5;
+                dayPay = 0.5;
+                paidLeaves += 0.5;
+                absentDays += 0.5;
+                dayLabel = 'missed_punch_out_half_paid_allowance';
+                note = 'Missed punch-out half-covered by paid leave allowance';
               } else {
                 dayPay = 0;
                 absentDays += 1;
@@ -1185,18 +1258,18 @@ function calculateForEmployee(db, settings, employee, month) {
             }
           }
         } else if (hours < minFullHours && !shortLeaveSavesIt) {
-          // 2h to < 6h -> Half Day (low hours, eligible for paid leave allowance after 3 months)
+          // minHalfHours to < minFullHours -> Half Day (low hours, eligible for paid leave allowance after 3 months)
           if (canUseAutoLeave && autoLeaveAllowance >= 0.5) {
             autoLeaveAllowance -= 0.5;
             dayPay = 1;
             paidLeaves += 0.5;
             dayLabel = 'half_day_low_hours_paid';
-            note = 'Half day (2h - 6h) covered by paid leave allowance';
+            note = `Half day (${minHalfHours}h - ${minFullHours}h) covered by paid leave allowance`;
           } else {
             halfDays += 1;
             dayPay = 0.5;
             dayLabel = 'half_day_low_hours';
-            note = 'Half day (2h - 6h)';
+            note = `Half day (${minHalfHours}h - ${minFullHours}h)`;
           }
         } else {
           // 6h+ or saved by short leave
@@ -1279,7 +1352,7 @@ function calculateForEmployee(db, settings, employee, month) {
       dayPay = 0.5;
       paidDays += 0.5;
       paidLeaves += 0.5;
-      halfDays += 1;
+      absentDays += 0.5;
       dayLabel = 'absent_half_paid_allowance';
       breakdown.push({
         date: dateStr,
@@ -1511,6 +1584,8 @@ function calculateForEmployee(db, settings, employee, month) {
     // (full=1, half=0.5) — always the auto figure so a manual Paid Days
     // override doesn't distort the breakdown.
     present_days: round2(paidDays - sundayCount - paidLeaves - holidayDays),
+    has_attendance: hasWorkedInMonth,
+    has_leave: hasApprovedLeaveInMonth,
     holiday_days: round2(holidayDays),
     missed_punch_out_count: missedPunchOutCount,
     missed_punch_out_grace: Math.min(missedPunchOutCount, 3),

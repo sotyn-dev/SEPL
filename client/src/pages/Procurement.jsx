@@ -3541,6 +3541,7 @@ export default function Procurement() {
                       <div className="min-w-0">
                         <div className="text-[10px] uppercase text-gray-400">Site</div>
                         <div className="font-medium text-gray-800">{i.site_name || i.client_name || '—'}</div>
+                        {i.site_address && <div className="text-[10px] text-gray-500 line-clamp-1" title={i.site_address}>{i.site_address}</div>}
                       </div>
                     </div>
 
@@ -3740,7 +3741,10 @@ export default function Procurement() {
                           {!!i.is_emergency && <span title={i.emergency_reason || 'Emergency indent'} className="ml-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300 whitespace-nowrap">⚡ EMG</span>}
                         </td>
                         <td className="text-xs text-gray-600">{i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}</td>
-                        <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
+                        <td>
+                          <div>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</div>
+                          {i.site_address && <div className="text-[10px] text-gray-400 truncate max-w-xs" title={i.site_address}>{i.site_address}</div>}
+                        </td>
                         {/* Dedicated Category column (mam 2026-05-28). Coloured
                       pill mirrors the inline chip's palette so the table
                       reads at a glance. */}
