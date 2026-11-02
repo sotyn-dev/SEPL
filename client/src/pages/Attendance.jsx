@@ -2393,9 +2393,11 @@ export default function Attendance() {
           <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Hrs / Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>{leaves.map(l => {
             // For short_leave show from-time → to-time so admin can audit
+            // For short_leave show from-time → to-time so admin can audit
             // exactly what window the employee took. For full-day leaves
             // (casual / sick / earned / comp_off) just the dates suffice.
-            const isShort = l.leave_type === 'short_leave' || l.leave_type === 'half_day';
+            const isShort = l.leave_type === 'short_leave';
+            const isHalf = l.leave_type === 'half_day';
             return (
             <tr key={l.id}>
               <td className="font-medium">{l.user_name}</td><td className="capitalize">{l.leave_type?.replace('_', ' ')}</td>
@@ -2408,13 +2410,23 @@ export default function Attendance() {
                 {isShort && l.to_time && <div className="text-[10px] text-blue-600 font-bold">{l.to_time}</div>}
               </td>
               <td className="text-xs">
-                {isShort
-                  ? <span className="text-amber-700 font-bold">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</span>
-                  : <span className="font-medium">{l.days} day{l.days !== 1 ? 's' : ''}</span>
-                }
+                {isShort ? (
+                  <span className="text-amber-700 font-bold">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</span>
+                ) : isHalf ? (
+                  <span className="text-amber-700 font-medium">0.5 day</span>
+                ) : (
+                  <span className="font-medium">{l.days} day{l.days !== 1 ? 's' : ''}</span>
+                )}
               </td>
               <td className="text-xs">{l.reason}</td>
-              <td><StatusBadge status={l.status} /></td>
+              <td>
+                <StatusBadge status={l.status} />
+                {l.remarks && (
+                  <div className={`text-[10px] mt-0.5 max-w-[220px] leading-tight ${l.status === 'rejected' ? 'text-red-600 font-medium' : 'text-gray-500'}`} title={l.remarks}>
+                    {l.remarks}
+                  </div>
+                )}
+              </td>
               <td>
                 <div className="flex items-center gap-1">
                   {l.status === 'pending' && (
@@ -2422,6 +2434,12 @@ export default function Attendance() {
                       <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }} className="text-xs text-emerald-600 font-bold mr-1">Approve</button>
                       <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }} className="text-xs text-red-600 font-bold mr-1">Reject</button>
                     </>
+                  )}
+                  {l.status === 'rejected' && (
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved override'); load(); }} className="text-xs text-emerald-600 font-bold mr-1" title="Manually approve this rejected leave">Approve</button>
+                  )}
+                  {l.status === 'approved' && (
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }} className="text-xs text-red-600 font-bold mr-1" title="Manually revoke/reject this leave">Reject</button>
                   )}
                   <button
                     onClick={() => {
@@ -2432,9 +2450,11 @@ export default function Attendance() {
                         to_date: l.to_date || '',
                         from_time: l.from_time || '',
                         to_time: l.to_time || '',
-                        days: l.days || 0,
+                        days: l.days || (l.leave_type === 'half_day' ? 0.5 : 0),
                         hours: l.hours ? +(+l.hours).toFixed(2) : 0,
                         reason: l.reason || '',
+                        status: l.status || 'pending',
+                        remarks: l.remarks || '',
                       });
                     }}
                     className="p-1 text-gray-400 hover:text-blue-600"
@@ -2464,7 +2484,8 @@ export default function Attendance() {
             <div className="card p-6 text-center text-gray-400 text-sm">No leave requests yet.</div>
           )}
           {leaves.map(l => {
-            const isShort = l.leave_type === 'short_leave' || l.leave_type === 'half_day';
+            const isShort = l.leave_type === 'short_leave';
+            const isHalf = l.leave_type === 'half_day';
             return (
               <div key={l.id} className="card p-3 space-y-2">
                 <div className="flex justify-between items-start gap-2">
@@ -2489,22 +2510,40 @@ export default function Attendance() {
                 </div>
                 <div className="text-[11px] pt-1 border-t border-gray-100">
                   <span className="text-gray-400">Duration:</span>{' '}
-                  {isShort
-                    ? <b className="text-amber-700">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</b>
-                    : <b className="text-gray-800">{l.days} day{l.days !== 1 ? 's' : ''}</b>
-                  }
+                  {isShort ? (
+                    <b className="text-amber-700">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</b>
+                  ) : isHalf ? (
+                    <b className="text-amber-700">0.5 day</b>
+                  ) : (
+                    <b className="text-gray-800">{l.days} day{l.days !== 1 ? 's' : ''}</b>
+                  )}
                 </div>
                 {l.reason && (
                   <div className="text-[11px] text-gray-600 italic pt-1 border-t border-gray-100 line-clamp-2">"{l.reason}"</div>
                 )}
-                {l.status === 'pending' && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }}
-                      className="btn btn-success text-xs py-1.5 px-3 flex-1">Approve</button>
-                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }}
-                      className="btn btn-danger text-xs py-1.5 px-3 flex-1">Reject</button>
+                {l.remarks && (
+                  <div className={`text-[10px] pt-1 border-t border-gray-100 ${l.status === 'rejected' ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                    {l.remarks}
                   </div>
                 )}
+                <div className="flex items-center gap-2 pt-1">
+                  {l.status === 'pending' && (
+                    <>
+                      <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }}
+                        className="btn btn-success text-xs py-1.5 px-3 flex-1">Approve</button>
+                      <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }}
+                        className="btn btn-danger text-xs py-1.5 px-3 flex-1">Reject</button>
+                    </>
+                  )}
+                  {l.status === 'rejected' && (
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved override'); load(); }}
+                      className="btn btn-success text-xs py-1.5 px-3 flex-1">Approve</button>
+                  )}
+                  {l.status === 'approved' && (
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }}
+                      className="btn btn-danger text-xs py-1.5 px-3 flex-1">Reject</button>
+                  )}
+                </div>
                 <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
                   <button onClick={() => {
                     setEditingLeave(l);
@@ -2512,8 +2551,11 @@ export default function Attendance() {
                       leave_type: l.leave_type || 'casual',
                       from_date: l.from_date || '', to_date: l.to_date || '',
                       from_time: l.from_time || '', to_time: l.to_time || '',
-                      days: l.days || 0, hours: l.hours ? +(+l.hours).toFixed(2) : 0,
+                      days: l.days || (l.leave_type === 'half_day' ? 0.5 : 0),
+                      hours: l.hours ? +(+l.hours).toFixed(2) : 0,
                       reason: l.reason || '',
+                      status: l.status || 'pending',
+                      remarks: l.remarks || '',
                     });
                   }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                     <FiEdit2 size={11} /> Edit
@@ -2545,16 +2587,26 @@ export default function Attendance() {
               setEditingLeave(null); setLeaveEditForm({}); load();
             } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
           }} className="space-y-3">
-            <div>
-              <label className="label">Type</label>
-              <select className="select" value={leaveEditForm.leave_type || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, leave_type: e.target.value })}>
-                <option value="casual">Casual</option>
-                <option value="sick">Sick</option>
-                <option value="earned">Earned</option>
-                <option value="half_day">Half Day</option>
-                <option value="short_leave">Short Leave</option>
-                <option value="comp_off">Comp Off</option>
-              </select>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Type</label>
+                <select className="select" value={leaveEditForm.leave_type || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, leave_type: e.target.value })}>
+                  <option value="casual">Casual</option>
+                  <option value="sick">Sick</option>
+                  <option value="earned">Earned</option>
+                  <option value="half_day">Half Day</option>
+                  <option value="short_leave">Short Leave</option>
+                  <option value="comp_off">Comp Off</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Status</label>
+                <select className="select" value={leaveEditForm.status || 'pending'} onChange={e => setLeaveEditForm({ ...leaveEditForm, status: e.target.value })}>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="pending">Pending</option>
+                </select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -2592,6 +2644,10 @@ export default function Attendance() {
               <label className="label">Reason</label>
               <textarea className="input" rows="2" value={leaveEditForm.reason || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, reason: e.target.value })} />
             </div>
+            <div>
+              <label className="label">Remarks / Explanation</label>
+              <input type="text" className="input" value={leaveEditForm.remarks || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, remarks: e.target.value })} placeholder="Auto-approval notes or admin reason" />
+            </div>
             <div className="flex justify-end gap-2 pt-2 border-t">
               <button type="button" onClick={() => { setEditingLeave(null); setLeaveEditForm({}); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" className="btn btn-primary">Save</button>
@@ -2610,8 +2666,20 @@ export default function Attendance() {
             toast.error('To Date cannot be earlier than From Date');
             return;
           }
-          try { await api.post('/attendance/leave', form); toast.success('Leave applied'); setModal(null); load(); }
-          catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+          try {
+            const res = await api.post('/attendance/leave', form);
+            if (res.data?.status === 'approved') {
+              toast.success(res.data?.message || 'Leave auto-approved');
+            } else if (res.data?.status === 'rejected') {
+              toast.error(res.data?.remarks || res.data?.message || 'Leave auto-rejected (limit exceeded)');
+            } else {
+              toast.success('Leave applied');
+            }
+            setModal(null);
+            load();
+          } catch (err) {
+            toast.error(err.response?.data?.error || 'Failed');
+          }
         }} className="space-y-4">
           <div><label className="label">Leave Type</label><select className="select" value={form.leave_type} onChange={e => setForm({ ...form, leave_type: e.target.value })}><option value="casual">Casual Leave</option><option value="sick">Sick Leave</option><option value="earned">Earned Leave</option><option value="half_day">Half Day</option><option value="short_leave">Short Leave (max 4hrs/month)</option><option value="comp_off">Comp Off</option></select></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

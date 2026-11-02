@@ -159,7 +159,7 @@ export default function IndentPrint() {
           <div><div className="label">Site</div><div className="val">{i.site_name || i.client_name || '—'}</div></div>
           <div><div className="label">Status</div><div className="val">{(i.status || '').toUpperCase()}</div></div>
           <div><div className="label">Raised By</div><div className="val">{i.raised_by_name || i.created_by_name || '—'}</div></div>
-          <div><div className="label">Location</div><div className="val">{i.location || '—'}</div></div>
+          <div><div className="label">Location</div><div className="val">{i.location || i.site_address || '—'}</div></div>
           <div><div className="label">Lead No</div><div className="val">{i.lead_no || '—'}</div></div>
           <div><div className="label">Total Items</div><div className="val">{items.length}</div></div>
         </div>

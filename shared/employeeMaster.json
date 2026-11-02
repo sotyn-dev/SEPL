@@ -386,6 +386,21 @@
       "quickCreate": true
     },
     {
+      "key": "exit_date",
+      "label": "Exit date / Relieving date",
+      "type": "date",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
       "key": "employment_type",
       "label": "Employment type",
       "type": "select",

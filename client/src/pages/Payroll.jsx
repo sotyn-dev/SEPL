@@ -199,6 +199,12 @@ const LABEL_PILL = {
   paid_sick_leave: 'bg-purple-100 text-purple-700',
   paid_earned_leave: 'bg-purple-100 text-purple-700',
   paid_comp_off_leave: 'bg-purple-100 text-purple-700',
+  half_paid_casual_leave: 'bg-purple-100 text-purple-700',
+  half_paid_sick_leave: 'bg-purple-100 text-purple-700',
+  half_paid_earned_leave: 'bg-purple-100 text-purple-700',
+  half_paid_comp_off_leave: 'bg-purple-100 text-purple-700',
+  absent_half_paid_allowance: 'bg-purple-100 text-purple-700',
+  missed_punch_out_half_paid_allowance: 'bg-purple-100 text-purple-700',
   half_day_leave: 'bg-orange-100 text-orange-700',
   unpaid_casual_leave: 'bg-rose-100 text-rose-700',
   unpaid_sick_leave: 'bg-rose-100 text-rose-700',
@@ -461,7 +467,7 @@ export default function Payroll() {
   const saveSettings = async () => {
     // Validate breakdown percentage equals 100%
     const totalPct = Math.round(((settings.basic_pct || 0) + (settings.conveyance_pct || 0) + (settings.hra_pct || 0) + (settings.adhoc_pct || 0) + (settings.misc_pct || 0)) * 100) / 100;
-    if (Math.abs(totalPct - 100) > 0.05) {
+    if (Math.abs(totalPct - 100) > 0.15) {
       toast.error(`Salary slip breakdown percentages must equal 100% (currently ${totalPct}%)`);
       return;
     }

@@ -1059,11 +1059,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   for (const key of ['name','phone','email','personal_email','designation','department','join_date','exit_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
     if (has(key)) values[key] = input[key] === '' ? null : input[key];
   }
-  if (['terminated','inactive'].includes(newStatus)) {
-    if (!values.exit_date && !existing.exit_date) {
-      values.exit_date = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-    }
-  } else if (newStatus === 'active' && existing.status !== 'active') {
+  if (newStatus === 'active' && existing.status !== 'active') {
     if (!has('exit_date')) values.exit_date = null;
   }
   if (has('name')) values.name = input.name.trim();
