@@ -68,15 +68,17 @@ const withSla = (rows) => {
 
 // GET all with filters
 router.get('/', requirePermission('leads', 'view'), (req, res) => {
-  const { stage, search, assigned_sc, category } = req.query;
+  const { stage, search, assigned_sc, category, lead_kind, portal } = req.query;
   let sql = 'SELECT * FROM sales_funnel WHERE 1=1';
   const params = [];
   if (stage && stage !== 'all') { sql += ' AND current_stage=?'; params.push(stage); }
   if (assigned_sc) { sql += ' AND assigned_sc=?'; params.push(assigned_sc); }
   if (category) { sql += ' AND category LIKE ?'; params.push(`%${category}%`); }
+  if (lead_kind && lead_kind !== 'all') { sql += ' AND lead_kind=?'; params.push(lead_kind); }
+  if (portal) { sql += ' AND government_portal=?'; params.push(portal); }
   if (search) {
-    sql += ' AND (client_name LIKE ? OR company_name LIKE ? OR lead_no LIKE ? OR phone LIKE ?)';
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    sql += ' AND (client_name LIKE ? OR company_name LIKE ? OR lead_no LIKE ? OR phone LIKE ? OR tender_id LIKE ? OR gem_bid_number LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += ' ORDER BY created_at DESC';
   res.json(withSla(getDb().prepare(sql).all(...params)));
@@ -234,7 +236,11 @@ function validateStage1(b, isCreate) {
   }
   // Government-specific
   if (b.lead_kind === 'government') {
-    if (!b.tender_id && isCreate) errors.push('Tender ID is required for Government leads');
+    const portal = b.government_portal || 'GeM';
+    const identifier = b.gem_bid_number || b.tender_id;
+    if (!identifier && isCreate) {
+      errors.push(portal === 'GeM' ? 'GeM Bid Number is required for Government GeM leads' : 'Tender ID is required for Government leads');
+    }
     if (b.bid_deadline) {
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const deadline = new Date(b.bid_deadline);
@@ -267,6 +273,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
 
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : 'private';
+  const govPortal = leadKind === 'government' ? (b.government_portal || 'GeM') : null;
+  const gemBidNo = b.gem_bid_number || (govPortal === 'GeM' ? b.tender_id : null) || null;
+  const tenderId = b.tender_id || gemBidNo || null;
 
   // Tentative closing date → derived timeline, and it seeds closing_date so
   // the lead appears on the Expected Closings dashboard from day one instead
@@ -287,12 +296,14 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
      gst_number, pan_number, project_name, project_location, pin_code,
      estimated_value, tentative_timeline, tentative_date, closing_date, sub_trades_scope, building_category,
      tender_id, bid_deadline, emd_amount, pbg_required,
+     government_portal, gem_bid_number, gem_bid_type, gem_portal_link, gem_ministry_dept,
+     gem_bidding_status, gem_opening_date, emd_exemption, gem_doc_url,
      city, address, district, state, source, influencer_id, influencer_name,
      assigned_sc, assigned_asm, assigned_asm_id,
      remarks, created_by,
      current_stage, stage_entered_at,
      consultancy_category, consultancy_remarks)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'lead_capture', CURRENT_TIMESTAMP, ?, ?)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'lead_capture', CURRENT_TIMESTAMP, ?, ?)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
@@ -300,7 +311,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     b.project_name || null, b.project_location || null, b.pin_code || null,
     +b.estimated_value || 0, tentativeTimeline, tentativeDate, tentativeDate, subTrades,
     b.building_category || null,
-    b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    tenderId, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    govPortal, gemBidNo, b.gem_bid_type || null, b.gem_portal_link || null, b.gem_ministry_dept || null,
+    b.gem_bidding_status || 'Identified', b.gem_opening_date || null, b.emd_exemption || null, b.gem_doc_url || null,
     b.city || null, b.address || null, b.district || null, b.state || null,
     b.source || null,
     // Influencer only stored when source='Influencer' — guards
@@ -313,8 +326,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     b.consultancy_category || null,
     b.consultancy_remarks || null
   );
+  const identifierText = gemBidNo ? ` · GeM Bid ${gemBidNo}` : (tenderId ? ` · Tender ${tenderId}` : '');
   audit(db, r.lastInsertRowid, 'lead_capture', 'create', req.user, {
-    notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
+    notes: `Captured as ${leadKind === 'government' ? (govPortal ? `${govPortal} Tender` : 'Government tender') : 'Private quote'}${identifierText}`
   });
   const leadId = r.lastInsertRowid;
 
@@ -470,6 +484,9 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
 
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : (b.lead_kind === 'private' ? 'private' : null);
+  const govPortal = b.government_portal || (leadKind === 'government' ? 'GeM' : null);
+  const gemBidNo = b.gem_bid_number || (govPortal === 'GeM' ? b.tender_id : null) || null;
+  const tenderId = b.tender_id || gemBidNo || null;
 
   // Tentative closing date → derived timeline. The past-date rule applies
   // only when the date actually CHANGES, so editing an old lead's phone
@@ -494,6 +511,9 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
        project_name=?, project_location=?, pin_code=?,
        estimated_value=?, tentative_timeline=?, tentative_date=?, closing_date=?, sub_trades_scope=?,
        tender_id=?, bid_deadline=?, emd_amount=?, pbg_required=?,
+       government_portal=COALESCE(?, government_portal),
+       gem_bid_number=?, gem_bid_type=?, gem_portal_link=?, gem_ministry_dept=?,
+       gem_bidding_status=COALESCE(?, gem_bidding_status), gem_opening_date=?, emd_exemption=?, gem_doc_url=?,
        city=?, address=?, district=?, state=?, source=?,
        assigned_sc=?, assigned_asm=?, assigned_asm_id=?, remarks=?,
        consultancy_category=?, consultancy_remarks=?,
@@ -506,7 +526,9 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
     b.pan_number ? String(b.pan_number).toUpperCase() : null,
     b.project_name || null, b.project_location || null, b.pin_code || null,
     +b.estimated_value || 0, tentativeTimeline, tentativeDate, closingDate, subTrades,
-    b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    tenderId, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    govPortal, gemBidNo, b.gem_bid_type || null, b.gem_portal_link || null, b.gem_ministry_dept || null,
+    b.gem_bidding_status || null, b.gem_opening_date || null, b.emd_exemption || null, b.gem_doc_url || null,
     b.city || null, b.address || null, b.district || null, b.state || null,
     b.source || null,
     b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,

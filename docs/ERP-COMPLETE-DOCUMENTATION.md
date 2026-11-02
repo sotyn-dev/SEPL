@@ -7527,7 +7527,7 @@ VPS is the live environment.
 5. Starts the app with `pm2 start server/index.js --name erp`, then `pm2 save`
    and `pm2 startup` so it survives reboots.
 6. Configures Nginx as a reverse proxy for `securederp.in` →
-   `http://localhost:5000` with a 20 MB `client_max_body_size`.
+   `http://localhost:5000` with a 100 MB `client_max_body_size`.
 7. Provisions free HTTPS via **Let's Encrypt / certbot** with auto-renewal.
 
 ### Routine deploy flow

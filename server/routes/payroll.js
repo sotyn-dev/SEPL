@@ -75,6 +75,15 @@ function isSunday(year, month, day) {
   return new Date(year, month - 1, day).getDay() === 0;
 }
 
+function addMonthsToDate(dateStr, months) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d, lastDay));
+  return target.toISOString().slice(0, 10);
+}
+
 function pad(n) { return String(n).padStart(2, '0'); }
 
 // Parse "HH:MM" / "HH:MM:SS" / ISO datetime → minutes since midnight
@@ -156,7 +165,7 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
 
   const baseSalary = Number(data.base_salary || emp?.salary || 0);
   const totalDays = Number(data.total_days_in_month || 30);
-  const perDayRate = Number(data.per_day_rate || (totalDays > 0 ? baseSalary / totalDays : 0));
+  const perDayRate = Number(data.per_day_rate || round2(baseSalary / 30));
   const paidDays = Number(data.paid_days || 0);
   const grossEarned = Number(data.gross_earned || (perDayRate * paidDays));
 
@@ -613,7 +622,7 @@ function calculateForEmployee(db, settings, employee, month) {
       designation: employee.designation,
       join_date: employee.join_date,
       base_salary: baseSalary,
-      per_day_rate: round2(settings.working_days_per_month > 0 ? baseSalary / settings.working_days_per_month : 0),
+      per_day_rate: round2(baseSalary / 30),
       working_days: settings.working_days_per_month,
       total_days_in_month: totalDays,
       days_counted: totalDays,
@@ -742,6 +751,29 @@ function calculateForEmployee(db, settings, employee, month) {
   const exitDate = String(employee.exit_date || '').slice(0, 10);
   const hasExitDate = isRealDate(exitDate);
 
+  // If employee is marked inactive or terminated, establish a hard effective exit date
+  let effectiveExitDate = hasExitDate ? exitDate : null;
+  const isEmpInactive = ['inactive', 'terminated'].includes(String(employee.status || '').toLowerCase());
+  if (!effectiveExitDate && isEmpInactive) {
+    if (userId) {
+      const lastAtt = db.prepare(`
+        SELECT MAX(date) AS last_date FROM attendance
+        WHERE user_id = ? AND date <= ? AND (punch_in_time IS NOT NULL OR admin_marked = 1)
+      `).get(userId, endDate);
+      if (lastAtt && lastAtt.last_date) {
+        effectiveExitDate = lastAtt.last_date;
+      }
+    }
+    if (!effectiveExitDate) {
+      effectiveExitDate = `${year}-${pad(mm)}-01`;
+    }
+  }
+
+  // Exact 3 months from join_date eligibility for paid leave
+  const threeMonthsDate = hasJoinDate ? addMonthsToDate(joinDate, 3) : null;
+  let autoLeaveAllowance = (threeMonthsDate && endDate < threeMonthsDate) ? 0 : 1.0;
+  if (employee.cl_eligible === 0) autoLeaveAllowance = 0;
+
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
     // Before employment: no holiday, weekly-off, leave, absence or penalty.
@@ -750,10 +782,13 @@ function calculateForEmployee(db, settings, employee, month) {
       continue;
     }
     // After leaving / inactive: no holiday, weekly-off, leave, absence or penalty.
-    if (hasExitDate && dateStr > exitDate) {
+    if (effectiveExitDate && dateStr > effectiveExitDate) {
       breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'left_company', pay: 0 });
       continue;
     }
+    const isEligibleForPaidLeave = (!threeMonthsDate || dateStr >= threeMonthsDate) && (employee.cl_eligible !== 0);
+    const hasApprovedClUpcoming = leaveRows.some(l => l.leave_type === 'casual' && l.to_date >= dateStr);
+    const canUseAutoLeave = isEligibleForPaidLeave && !hasApprovedClUpcoming;
     const sun = isSunday(year, mm, day);
     const att = attByDate[dateStr];
     const leaveType = leaveByDate[dateStr];
@@ -889,8 +924,12 @@ function calculateForEmployee(db, settings, employee, month) {
     if (leaveType && !hasAttended) {
       let paid = false;
       if (leaveType === 'casual') {
-        // 1 paid casual leave per month per staff (mam 2026-06-09).
-        if ((settings.cl_per_month || 0) > 0 && clUsed < settings.cl_per_month) { paid = true; clUsed += 1; }
+        // 1 paid casual leave per month per staff, eligible after 3 months
+        if (isEligibleForPaidLeave && (settings.cl_per_month || 0) > 0 && clUsed < settings.cl_per_month && autoLeaveAllowance >= 1.0) {
+          paid = true;
+          clUsed += 1;
+          autoLeaveAllowance = Math.max(0, autoLeaveAllowance - 1.0);
+        }
       } else if (leaveType === 'sick') {
         if ((settings.sl_per_month || 0) > 0 && slUsed < settings.sl_per_month) { paid = true; slUsed += 1; }
       } else if (leaveType === 'earned') {
@@ -1029,10 +1068,18 @@ function calculateForEmployee(db, settings, employee, month) {
             }
 
             if (!leavePaid) {
-              dayPay = 0;
-              absentDays += 1;
-              dayLabel = 'missed_punch_out_absent';
-              note = 'Missed punch-out (exceeded 3 grace times - 0 hrs)';
+              if (isEligibleForPaidLeave && autoLeaveAllowance >= 1.0) {
+                autoLeaveAllowance -= 1.0;
+                dayPay = 1;
+                paidLeaves += 1;
+                dayLabel = 'missed_punch_out_paid_allowance';
+                note = 'Missed punch-out covered by paid leave allowance';
+              } else {
+                dayPay = 0;
+                absentDays += 1;
+                dayLabel = 'missed_punch_out_absent';
+                note = 'Missed punch-out (exceeded 3 grace times - 0 hrs)';
+              }
             }
           }
         }
@@ -1111,23 +1158,46 @@ function calculateForEmployee(db, settings, employee, month) {
       } else {
         // WEEKDAY / SATURDAY attendance:
         if (hours < minHalfHours && !shortLeaveSavesIt) {
-          // Under 2h -> Absent, but calculate OT if worked >= 0.5h for OT-eligible staff
-          absentDays += 1;
-          dayPay = 0;
-          dayLabel = 'absent_low_hours';
-          if (employee.ot_eligible && hours >= 0.5) {
-            dayOtHours = round2(hours);
-            otHours += dayOtHours;
-            note = `Under 2h (${dayOtHours}h OT credited)`;
+          // Under 2h -> Absent (eligible for paid leave allowance after 3 months)
+          if (canUseAutoLeave && autoLeaveAllowance >= 1.0) {
+            autoLeaveAllowance -= 1.0;
+            dayPay = 1;
+            paidLeaves += 1;
+            dayLabel = 'absent_low_hours_paid';
+            note = employee.ot_eligible && hours >= 0.5 ? `Under 2h covered by paid leave allowance (${dayOtHours}h OT credited)` : 'Under 2h covered by paid leave allowance';
+          } else if (canUseAutoLeave && autoLeaveAllowance >= 0.5) {
+            autoLeaveAllowance -= 0.5;
+            dayPay = 0.5;
+            halfDays += 1;
+            paidLeaves += 0.5;
+            dayLabel = 'absent_low_hours_half_paid';
+            note = employee.ot_eligible && hours >= 0.5 ? `Under 2h half-covered by paid leave allowance (${dayOtHours}h OT credited)` : 'Under 2h half-covered by paid leave allowance';
           } else {
-            note = 'Under 2h';
+            absentDays += 1;
+            dayPay = 0;
+            dayLabel = 'absent_low_hours';
+            if (employee.ot_eligible && hours >= 0.5) {
+              dayOtHours = round2(hours);
+              otHours += dayOtHours;
+              note = `Under 2h (${dayOtHours}h OT credited)`;
+            } else {
+              note = 'Under 2h';
+            }
           }
         } else if (hours < minFullHours && !shortLeaveSavesIt) {
-          // 2h to < 6h -> Half Day
-          halfDays += 1;
-          dayPay = 0.5;
-          dayLabel = 'half_day_low_hours';
-          note = 'Half day (2h - 6h)';
+          // 2h to < 6h -> Half Day (low hours, eligible for paid leave allowance after 3 months)
+          if (canUseAutoLeave && autoLeaveAllowance >= 0.5) {
+            autoLeaveAllowance -= 0.5;
+            dayPay = 1;
+            paidLeaves += 0.5;
+            dayLabel = 'half_day_low_hours_paid';
+            note = 'Half day (2h - 6h) covered by paid leave allowance';
+          } else {
+            halfDays += 1;
+            dayPay = 0.5;
+            dayLabel = 'half_day_low_hours';
+            note = 'Half day (2h - 6h)';
+          }
         } else {
           // 6h+ or saved by short leave
           const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
@@ -1146,10 +1216,11 @@ function calculateForEmployee(db, settings, employee, month) {
           }
 
           if (veryLate && !shortLeaveSavesIt) {
+            // STRICT EXCLUSION: half_day_late is not covered by paid leave allowance
             halfDays += 1;
             dayPay = 0.5;
             dayLabel = 'half_day_late';
-            note = 'Late arrival after 10:00 (half day)';
+            note = `Late arrival after ${cut.half_day_after_time} (half day)`;
           } else {
             dayPay = 1;
             if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
@@ -1190,9 +1261,38 @@ function calculateForEmployee(db, settings, employee, month) {
     }
 
     // No attendance, no leave, not Sunday → absent
-    absentDays += 1;
-    dayLabel = 'absent_no_punch';
-    breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: 0 });
+    if (canUseAutoLeave && autoLeaveAllowance >= 1.0) {
+      autoLeaveAllowance -= 1.0;
+      dayPay = 1;
+      paidDays += 1;
+      paidLeaves += 1;
+      dayLabel = 'absent_paid_allowance';
+      breakdown.push({
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: 1,
+        note: 'Full-day absent covered by monthly paid leave (after 3 months)'
+      });
+    } else if (canUseAutoLeave && autoLeaveAllowance >= 0.5) {
+      autoLeaveAllowance -= 0.5;
+      dayPay = 0.5;
+      paidDays += 0.5;
+      paidLeaves += 0.5;
+      halfDays += 1;
+      dayLabel = 'absent_half_paid_allowance';
+      breakdown.push({
+        date: dateStr,
+        day: dayName(year, mm, day),
+        label: dayLabel,
+        pay: 0.5,
+        note: 'Full-day absent half-covered by remaining paid leave allowance'
+      });
+    } else {
+      absentDays += 1;
+      dayLabel = 'absent_no_punch';
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: 0 });
+    }
   }
 
   // N lates → 1 absent conversion (legacy model — disabled by default when 0)
@@ -1339,15 +1439,29 @@ function calculateForEmployee(db, settings, employee, month) {
   const effLatePenalty = latePenalty;
 
   const baseSalary = employee.salary || 0;
-  const perDayRate = totalDays > 0 ? baseSalary / totalDays : 0;
-  const grossEarned = perDayRate * effPaidDays;
+  // Always divide base salary by 30 days for per day rate of salary regardless of calendar days
+  const perDayRate = round2(baseSalary / 30);
 
-  // Overtime pay — hourly rate derived from the same monthly base so
-  // it stays consistent with the new per-day formula.
-  const perHourRate = totalDays > 0
-    ? baseSalary / (totalDays * settings.ot_threshold_hours)
-    : 0;
-  const otPay = otHours * perHourRate * (settings.ot_rate_multiplier || 1);
+  // Overtime pay — hourly rate derived from the 30-day base
+  const perHourRate = round2((baseSalary / 30) / (settings.ot_threshold_hours || 9));
+  const otPay = round2(otHours * perHourRate * (settings.ot_rate_multiplier || 1));
+
+  const basePaidDays = Math.max(0, round2(effPaidDays - (sundayWorkedPay || 0)));
+  const isFullMonthActive = (!hasJoinDate || joinDate <= startDate) && (!effectiveExitDate || effectiveExitDate >= endDate);
+
+  let grossEarned = 0;
+  if (isFullMonthActive) {
+    // Full month active: no unexcused absences pays 100% of base salary.
+    // Unexcused absent days deduct at (baseSalary / 30) per day.
+    const unpaidDays = Math.max(0, totalDays - basePaidDays);
+    const baseGross = unpaidDays === 0 ? baseSalary : Math.max(0, baseSalary - (unpaidDays * (baseSalary / 30)));
+    grossEarned = round2(baseGross + (sundayWorkedPay * (baseSalary / 30)));
+  } else {
+    // Partial month active (mid-month joiner or mid-month exit):
+    // Paid based on earned days at (baseSalary / 30) per day, capped at baseSalary
+    const baseGross = Math.min(baseSalary, basePaidDays * (baseSalary / 30));
+    grossEarned = round2(baseGross + (sundayWorkedPay * (baseSalary / 30)));
+  }
 
   // Salary breakdown — split the prorated gross into Basic / Conveyance /
   // HRA / Adhoc / Misc using the percentages in settings (matches mam's

@@ -60,7 +60,7 @@ server {
     listen 80;
     server_name securederp.in www.securederp.in;
 
-    client_max_body_size 20M;
+    client_max_body_size 100M;
 
     location / {
         # 127.0.0.1 explicitly (not "localhost"): Node binds IPv4 loopback
