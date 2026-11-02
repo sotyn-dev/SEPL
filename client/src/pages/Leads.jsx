@@ -11,7 +11,7 @@ import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock, FiXCircle, FiSettings } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock, FiXCircle, FiSettings, FiExternalLink, FiTag } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import Pagination, { usePagination } from '../components/PaginationBar';
@@ -234,6 +234,8 @@ export default function Leads() {
   });
   const [savingLostAccess, setSavingLostAccess] = useState(false);
 
+  const [kindFilter, setKindFilter] = useState('all'); // 'all' | 'private' | 'government'
+
   // MD 2026-09-03 (TSK-0397, "Sales Funnel ... no sales tracking"): both calls
   // used to end in `.catch(() => {})`. A swallowed failure left `dashboard`
   // null, and the Dashboard tab below renders NOTHING while it is null — so any
@@ -244,13 +246,14 @@ export default function Leads() {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (stageTab !== 'all' && stageTab !== 'dashboard') params.set('stage', stageTab);
+    if (kindFilter !== 'all') params.set('lead_kind', kindFilter);
     setLoadError(null);
     const why = (e) => e?.response?.data?.error || e?.message || 'Could not reach the server';
     api.get(`/sales-funnel?${params}`).then(r => setLeads(r.data)).catch(e => setLoadError(why(e)));
     api.get('/sales-funnel/dashboard')
       .then(r => { setDashboard(r.data); setDashLoaded(true); })
       .catch(e => { setDashLoaded(true); setLoadError(why(e)); });
-  }, [search, stageTab]);
+  }, [search, stageTab, kindFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -309,6 +312,19 @@ export default function Leads() {
   const cloneLead = (l) => {
     setForm({
       lead_kind: l.lead_kind || 'private',
+      government_portal: l.government_portal || 'GeM',
+      gem_bid_number: l.gem_bid_number || '',
+      gem_bid_type: l.gem_bid_type || '',
+      gem_portal_link: l.gem_portal_link || '',
+      gem_ministry_dept: l.gem_ministry_dept || '',
+      gem_bidding_status: l.gem_bidding_status || 'Identified',
+      gem_opening_date: l.gem_opening_date || '',
+      emd_exemption: l.emd_exemption || 'exempted_msme',
+      gem_doc_url: l.gem_doc_url || '',
+      tender_id: l.tender_id || '',
+      bid_deadline: l.bid_deadline || '',
+      emd_amount: l.emd_amount || 0,
+      pbg_required: l.pbg_required || 0,
       client_name: l.client_name || '',
       company_name: l.company_name || '',
       phone: l.phone || '',
@@ -602,8 +618,23 @@ export default function Leads() {
   // columns never drift. Tentative Amount column added (mam 2026-06-25).
   const renderLeadRow = (l, child = false) => (
     <tr key={l.id} data-serial-skip={child} className={`border-b hover:bg-red-50/40 cursor-pointer ${child ? 'bg-gray-50/60' : ''}`} onClick={() => viewLead(l)}>
-      <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>{l.lead_no}</td>
-      <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
+      <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>
+        <div>{l.lead_no}</div>
+        {(l.lead_kind === 'government' || l.gem_bid_number || l.government_portal === 'GeM') && (
+          <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300 mt-0.5" title={`Government Portal: ${l.government_portal || 'GeM'}`}>
+            🛒 {l.gem_bid_number ? 'GeM Bid' : (l.government_portal || 'Govt')}
+          </span>
+        )}
+      </td>
+      <td className="px-3 py-2.5">
+        <div className="font-semibold">{l.client_name}</div>
+        {l.gem_bid_number && (
+          <div className="text-[10px] text-amber-700 font-mono font-medium">Bid: {l.gem_bid_number}</div>
+        )}
+        {!l.gem_bid_number && l.tender_id && (
+          <div className="text-[10px] text-gray-500 font-mono">Tender: {l.tender_id}</div>
+        )}
+      </td>
       <td className="px-3 py-2.5 text-gray-600">{l.company_name || '-'}</td>
       <td className="px-3 py-2.5">
         <span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">
@@ -701,6 +732,20 @@ export default function Leads() {
             <button
               onClick={() => {
                 setForm({
+                  lead_kind: 'private',
+                  government_portal: 'GeM',
+                  gem_bid_number: '',
+                  gem_bid_type: 'Custom Bid (BOQ-based)',
+                  gem_portal_link: '',
+                  gem_ministry_dept: '',
+                  gem_bidding_status: 'Identified',
+                  gem_opening_date: '',
+                  emd_exemption: 'exempted_msme',
+                  gem_doc_url: '',
+                  tender_id: '',
+                  bid_deadline: '',
+                  emd_amount: 0,
+                  pbg_required: 0,
                   client_name: '',
                   company_name: '',
                   phone: '',
@@ -911,7 +956,41 @@ export default function Leads() {
       {/* List Tab */}
       {tab === 'list' && (<>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[220px]"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search client, company, lead no, phone..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+          <div className="relative flex-1 min-w-[220px]">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input
+              className="input pl-10"
+              placeholder="Search client, company, lead no, tender, GeM bid..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Quick Filter: All vs Private vs Govt & GeM Bids */}
+          <div className="flex items-center bg-gray-100 p-0.5 rounded-lg border border-gray-200 text-xs">
+            <button
+              type="button"
+              onClick={() => setKindFilter('all')}
+              className={`px-2.5 py-1.5 rounded-md font-medium transition ${kindFilter === 'all' ? 'bg-white shadow text-gray-900 font-bold' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              All Types
+            </button>
+            <button
+              type="button"
+              onClick={() => setKindFilter('private')}
+              className={`px-2.5 py-1.5 rounded-md font-medium transition ${kindFilter === 'private' ? 'bg-white shadow text-blue-700 font-bold' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              🏢 Private
+            </button>
+            <button
+              type="button"
+              onClick={() => setKindFilter('government')}
+              className={`px-2.5 py-1.5 rounded-md font-medium transition flex items-center gap-1 ${kindFilter === 'government' ? 'bg-amber-500 shadow text-white font-bold' : 'text-gray-600 hover:text-amber-800'}`}
+            >
+              <span>🛒</span> Govt &amp; GeM Bids
+            </button>
+          </div>
+
           <button onClick={() => setGroupLeads(v => !v)}
             className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${groupLeads ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
             title="Merge leads that share the same project">
@@ -1008,6 +1087,89 @@ export default function Leads() {
               </div>
             )}
           </div>
+
+          {/* Government & GeM Bidding Summary Card */}
+          {(viewData.lead_kind === 'government' || viewData.gem_bid_number || viewData.tender_id) && (
+            <div className="border border-amber-300 bg-amber-50/60 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2 border-b border-amber-200/80 pb-2">
+                <span className="font-bold text-amber-900 flex items-center gap-1.5 text-xs">
+                  <span>🛒</span> {viewData.government_portal === 'GeM' || viewData.gem_bid_number ? 'GeM Bidding Portal Details' : 'Government Tender Details'}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                    {viewData.government_portal || 'GeM'}
+                  </span>
+                  {viewData.gem_bidding_status && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      {viewData.gem_bidding_status}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">Bid / Tender ID</span>
+                  <span className="font-mono font-bold text-amber-900">{viewData.gem_bid_number || viewData.tender_id || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">Bid Type</span>
+                  <span>{viewData.gem_bid_type || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">Deadline</span>
+                  <span className="font-medium text-red-600">{viewData.bid_deadline ? fmtDateIST(viewData.bid_deadline) : '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">Opening Date</span>
+                  <span>{viewData.gem_opening_date ? fmtDateIST(viewData.gem_opening_date) : '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">EMD Amount</span>
+                  <span className="font-semibold">{viewData.emd_amount > 0 ? `₹${Number(viewData.emd_amount).toLocaleString('en-IN')}` : 'Nil'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">EMD Exemption</span>
+                  <span className="capitalize">{viewData.emd_exemption ? viewData.emd_exemption.replace('_', ' ') : '—'}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">PBG Required</span>
+                  <span className={viewData.pbg_required ? 'text-amber-700 font-bold' : 'text-gray-500'}>
+                    {viewData.pbg_required ? 'Yes (Required)' : 'No'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500 text-[10px] uppercase font-bold block">Buyer Ministry</span>
+                  <span className="truncate block" title={viewData.gem_ministry_dept}>{viewData.gem_ministry_dept || '—'}</span>
+                </div>
+              </div>
+
+              {(viewData.gem_portal_link || viewData.gem_doc_url) && (
+                <div className="pt-2 border-t border-amber-200/60 flex items-center gap-3 flex-wrap text-xs">
+                  {viewData.gem_portal_link && (
+                    <a
+                      href={viewData.gem_portal_link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-700 hover:text-blue-900 font-medium underline flex items-center gap-1"
+                    >
+                      <FiExternalLink size={12} /> Open GeM Portal Page
+                    </a>
+                  )}
+                  {viewData.gem_doc_url && (
+                    <a
+                      href={viewData.gem_doc_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-700 hover:text-emerald-900 font-medium underline flex items-center gap-1"
+                    >
+                      <FiFileText size={12} /> View Uploaded GeM Bid Document
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Lost Lead Details Card if lead is in lost stage */}
           {viewData.current_stage === 'lost' && (
@@ -1985,19 +2147,267 @@ export default function Leads() {
             )}
           </div>
 
-          {/* Government-only block */}
+          {/* Government & GeM Bidding block (TK-01510) */}
           {form.lead_kind === 'government' && (
             <>
-              <div className="border-t pt-3"><h5 className="font-bold text-sm text-amber-700 mb-2">🏛 Government / Tender Details</h5></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-amber-50/40 p-3 rounded-lg border border-amber-200">
-                <div className="md:col-span-2"><label className="label">Tender ID *</label><input className="input" value={form.tender_id || ''} onChange={e => F('tender_id', e.target.value)} required={form.lead_kind === 'government'} placeholder="e.g. GEM/2026/B/12345" /></div>
-                <div><label className="label">Bid Deadline</label><input className="input" type="date" value={form.bid_deadline || ''} onChange={e => F('bid_deadline', e.target.value)} min={new Date().toISOString().slice(0, 10)} /></div>
-                <div><label className="label">EMD Amount (₹)</label><input className="input" type="number" min="0" value={form.emd_amount || 0} onChange={e => F('emd_amount', +e.target.value)} /></div>
-                <div className="md:col-span-4 flex items-center gap-2 pt-1">
-                  <input id="pbg" type="checkbox" className="w-4 h-4" checked={!!form.pbg_required} onChange={e => F('pbg_required', e.target.checked ? 1 : 0)} />
-                  <label htmlFor="pbg" className="text-sm">PBG (Performance Bank Guarantee) Required</label>
+              <div className="border-t pt-3 flex items-center justify-between flex-wrap gap-2">
+                <h5 className="font-bold text-sm text-amber-700 flex items-center gap-1.5">
+                  <span>🏛</span> Government Tender &amp; GeM Bidding Portal
+                </h5>
+                <span className="text-[11px] bg-amber-100 text-amber-800 font-semibold px-2 py-0.5 rounded border border-amber-300">
+                  TK-01510 · GeM Bidding Option
+                </span>
+              </div>
+
+              {/* Bidding Portal Selector */}
+              <div>
+                <label className="label text-xs font-semibold text-gray-700">Tender Bidding Portal *</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { v: 'GeM', label: '🛒 GeM Portal', sub: 'gem.gov.in (Bids & RA)' },
+                    { v: 'CPPP', label: '🏢 CPPP Central', sub: 'eprocure.gov.in' },
+                    { v: 'State Portal', label: '🏛 State Portal', sub: 'State e-Procurement' },
+                    { v: 'Other', label: '🌐 Other Portal', sub: 'Direct / PSU Tender' },
+                  ].map(p => {
+                    const sel = (form.government_portal || 'GeM') === p.v;
+                    return (
+                      <button
+                        key={p.v}
+                        type="button"
+                        onClick={() => {
+                          F('government_portal', p.v);
+                          if (p.v === 'GeM' && !form.source) F('source', 'GeM');
+                          else if (p.v === 'CPPP' && !form.source) F('source', 'CPPP');
+                        }}
+                        className={`p-2 rounded-lg border text-left transition ${sel ? 'border-amber-500 bg-amber-50 text-amber-900 shadow-sm font-bold' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+                      >
+                        <div className="text-xs">{p.label}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5 font-normal">{p.sub}</div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
+
+              {/* GeM Portal Specific Fields */}
+              {(form.government_portal || 'GeM') === 'GeM' ? (
+                <div className="p-3.5 bg-gradient-to-br from-amber-50/70 via-orange-50/30 to-amber-50/70 rounded-xl border border-amber-200 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-900 border-b border-amber-200/80 pb-2">
+                    <span className="flex items-center gap-1.5">
+                      <FiTag className="text-amber-700" /> GeM Bid Specification &amp; Status
+                    </span>
+                    <span className="text-[10px] text-amber-700 font-mono bg-white px-2 py-0.5 rounded border border-amber-200">
+                      GeM Portal
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="md:col-span-2">
+                      <label className="label">GeM Bid Number *</label>
+                      <input
+                        className="input font-mono font-bold text-amber-950 placeholder:font-normal"
+                        value={form.gem_bid_number || form.tender_id || ''}
+                        onChange={e => {
+                          F('gem_bid_number', e.target.value);
+                          F('tender_id', e.target.value);
+                        }}
+                        required={form.lead_kind === 'government'}
+                        placeholder="e.g. GEM/2026/B/5412980"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">GeM Bid Type</label>
+                      <select
+                        className="select"
+                        value={form.gem_bid_type || 'Custom Bid (BOQ-based)'}
+                        onChange={e => F('gem_bid_type', e.target.value)}
+                      >
+                        <option value="Custom Bid (BOQ-based)">Custom Bid (BOQ-based)</option>
+                        <option value="Product Bid">Product Bid</option>
+                        <option value="Service Bid">Service Bid</option>
+                        <option value="Bunch Bid">Bunch Bid</option>
+                        <option value="Direct Purchase / L1">Direct Purchase / L1</option>
+                        <option value="PAC Bid">PAC (Proprietary Article)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="label">Bidding Stage / Status</label>
+                      <select
+                        className="select font-semibold text-amber-950"
+                        value={form.gem_bidding_status || 'Identified'}
+                        onChange={e => F('gem_bidding_status', e.target.value)}
+                      >
+                        <option value="Identified">1. Bid Identified / Review</option>
+                        <option value="Pre-Bid Representation">2. Pre-Bid Representation</option>
+                        <option value="Technical Submitted">3. Technical Bid Submitted</option>
+                        <option value="Technical Qualified (T1)">4. Technical Qualified (T1)</option>
+                        <option value="Financial Open">5. Financial Bid Open (L1/L2)</option>
+                        <option value="Awarded">6. Awarded (Contract Issued) ✓</option>
+                        <option value="Disqualified / Lost">7. Disqualified / Lost</option>
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="label">Buyer Ministry / Department / Organization</label>
+                      <input
+                        className="input"
+                        value={form.gem_ministry_dept || ''}
+                        onChange={e => F('gem_ministry_dept', e.target.value)}
+                        placeholder="e.g. Ministry of Defence, MES, CPWD, AIIMS"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="label">GeM Portal Link / Bid URL</label>
+                      <input
+                        className="input text-xs"
+                        value={form.gem_portal_link || ''}
+                        onChange={e => F('gem_portal_link', e.target.value)}
+                        placeholder="https://bidplus.gem.gov.in/showbidDocument/..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">Bid Submission Deadline *</label>
+                      <input
+                        className="input font-medium"
+                        type="date"
+                        value={form.bid_deadline || ''}
+                        onChange={e => F('bid_deadline', e.target.value)}
+                        min={new Date().toISOString().slice(0, 10)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">Bid Opening Date</label>
+                      <input
+                        className="input"
+                        type="date"
+                        value={form.gem_opening_date || ''}
+                        onChange={e => F('gem_opening_date', e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">EMD Amount (₹)</label>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        value={form.emd_amount || 0}
+                        onChange={e => F('emd_amount', +e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">EMD Exemption / MSME</label>
+                      <select
+                        className="select"
+                        value={form.emd_exemption || 'exempted_msme'}
+                        onChange={e => F('emd_exemption', e.target.value)}
+                      >
+                        <option value="exempted_msme">Exempted under MSME / Udyam</option>
+                        <option value="exempted_startup">Exempted under Startup India</option>
+                        <option value="paid_fdr_bg">Paid (FDR / BG / Online)</option>
+                        <option value="na">Zero EMD / Not Applicable</option>
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-2 flex items-center gap-2 pt-2">
+                      <input
+                        id="pbg"
+                        type="checkbox"
+                        className="w-4 h-4 text-amber-600 rounded"
+                        checked={!!form.pbg_required}
+                        onChange={e => F('pbg_required', e.target.checked ? 1 : 0)}
+                      />
+                      <label htmlFor="pbg" className="text-xs font-semibold text-gray-800">
+                        PBG (Performance Bank Guarantee) Required for this Bid
+                      </label>
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="label">GeM Bid Document / BOQ Upload</label>
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xlsx,.xls,.zip"
+                          className="text-xs file:btn file:btn-secondary file:btn-sm file:text-xs"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              const url = await uploadFile(file);
+                              F('gem_doc_url', url);
+                              toast.success('GeM Bid document uploaded');
+                            } catch {
+                              toast.error('Failed to upload document');
+                            }
+                          }}
+                        />
+                        {form.gem_doc_url && (
+                          <a
+                            href={form.gem_doc_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-blue-600 hover:underline font-medium shrink-0 flex items-center gap-1"
+                          >
+                            <FiFileText size={12} /> View File
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Non-GeM Portal Generic Government Fields (CPPP / State) */
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-amber-50/40 p-3.5 rounded-xl border border-amber-200">
+                  <div className="md:col-span-2">
+                    <label className="label">Tender ID / Ref No *</label>
+                    <input
+                      className="input"
+                      value={form.tender_id || ''}
+                      onChange={e => F('tender_id', e.target.value)}
+                      required={form.lead_kind === 'government'}
+                      placeholder="e.g. CPPP/2026/123456"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Bid Deadline</label>
+                    <input
+                      className="input"
+                      type="date"
+                      value={form.bid_deadline || ''}
+                      onChange={e => F('bid_deadline', e.target.value)}
+                      min={new Date().toISOString().slice(0, 10)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">EMD Amount (₹)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      value={form.emd_amount || 0}
+                      onChange={e => F('emd_amount', +e.target.value)}
+                    />
+                  </div>
+                  <div className="md:col-span-4 flex items-center gap-2 pt-1">
+                    <input
+                      id="pbg"
+                      type="checkbox"
+                      className="w-4 h-4"
+                      checked={!!form.pbg_required}
+                      onChange={e => F('pbg_required', e.target.checked ? 1 : 0)}
+                    />
+                    <label htmlFor="pbg" className="text-sm">
+                      PBG (Performance Bank Guarantee) Required
+                    </label>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

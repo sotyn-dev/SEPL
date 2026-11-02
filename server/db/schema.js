@@ -3639,6 +3639,16 @@ function initializeDatabase() {
     ['sales_funnel', 'bid_deadline DATE'],
     ['sales_funnel', 'emd_amount REAL DEFAULT 0'],
     ['sales_funnel', 'pbg_required INTEGER DEFAULT 0'],
+    // GeM Bidding Portal & Govt Tender Fields (TK-01510)
+    ['sales_funnel', "government_portal TEXT DEFAULT 'GeM'"],
+    ['sales_funnel', 'gem_bid_number TEXT'],
+    ['sales_funnel', 'gem_bid_type TEXT'],
+    ['sales_funnel', 'gem_portal_link TEXT'],
+    ['sales_funnel', 'gem_ministry_dept TEXT'],
+    ['sales_funnel', "gem_bidding_status TEXT DEFAULT 'Identified'"],
+    ['sales_funnel', 'gem_opening_date DATE'],
+    ['sales_funnel', 'emd_exemption TEXT'],
+    ['sales_funnel', 'gem_doc_url TEXT'],
     // Drop tracking — mam's universal principle: 'Drop with reason'
     ['sales_funnel', 'dropped INTEGER DEFAULT 0'],
     ['sales_funnel', 'drop_reason TEXT'],

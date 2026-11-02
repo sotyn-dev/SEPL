@@ -301,7 +301,7 @@ test('salary slip email delivery targets strictly personal_email and never falls
 });
 
 test('hour thresholds: <2h is absent, 2h-6h is half day, >=6h is full day, >9h is OT', () => {
-  const customEmployee = { ...employee, ot_eligible: 1 };
+  const customEmployee = { ...employee, ot_eligible: 1, cl_eligible: 0 };
   const r = run({
     attendance: [
       { date: '2025-08-01', punch_in_time: '09:30', total_hours: 1.5 }, // Fri: <2h -> absent
@@ -349,7 +349,7 @@ test('Sundays have no late penalties or cutoffs regardless of punch in time', ()
 });
 
 test('inactive employee: dates after exit_date are marked left_company with pay 0 and no absent deduction', () => {
-  const inactiveEmp = { ...employee, exit_date: '2025-08-15' };
+  const inactiveEmp = { ...employee, exit_date: '2025-08-15', cl_eligible: 0 };
   const r = run({
     attendance: [
       { date: '2025-08-01', punch_in_time: '09:30', total_hours: 8 },
@@ -406,7 +406,7 @@ test('missed punch-out: up to 3 times per month counts as Full Day (Grace); 4th 
 
 test('worked hours under 2h: credits OT only if worked >= 0.5h and employee is ot_eligible; exact worked hours reported', () => {
   // Employee 1: ot_eligible = 1
-  const otEmp = { ...employee, ot_eligible: 1 };
+  const otEmp = { ...employee, ot_eligible: 1, cl_eligible: 0 };
   const r1 = run({
     attendance: [
       { date: '2025-08-01', punch_in_time: '09:00', punch_out_time: '10:12', total_hours: 1.2 }, // 1.2h: >=0.5h and <2h -> OT
@@ -429,7 +429,7 @@ test('worked hours under 2h: credits OT only if worked >= 0.5h and employee is o
   assert.equal(r1.ot_hours, 1.2);
 
   // Employee 2: ot_eligible = 0
-  const nonOtEmp = { ...employee, ot_eligible: 0 };
+  const nonOtEmp = { ...employee, ot_eligible: 0, cl_eligible: 0 };
   const r2 = run({
     attendance: [
       { date: '2025-08-01', punch_in_time: '09:00', punch_out_time: '10:12', total_hours: 1.2 },
@@ -567,6 +567,141 @@ test('declared holiday worked hours: unworked=1d, <4h=1d+OT, 4h-8h=1.5d, 8h+=2.0
   assert.equal(b.pay, 2, 'Worked 11h on holiday must pay 2.0 days');
   assert.equal(b.holiday_bonus, 1);
   assert.equal(b.ot_hours, 2, 'Worked 11h on holiday must credit 2.0h OT (11h - 9h)');
+});
+
+test('payroll 30-day divisor: per_day_rate is always base_salary / 30, full attendance pays 100% salary', () => {
+  const emp = { ...employee, salary: 30000, join_date: '2024-01-01' };
+  // October 2025 (31 days)
+  // Attendance for all 27 working days (Mon-Sat):
+  const allAtt = [];
+  for (let d = 1; d <= 31; d++) {
+    const dt = new Date(2025, 9, d);
+    if (dt.getDay() !== 0) { // not Sunday
+      allAtt.push({ date: `2025-10-${String(d).padStart(2, '0')}`, punch_in_time: '09:30', total_hours: 8 });
+    }
+  }
+  const rFull = calculate(fixture({ attendance: allAtt }), settings, emp, '2025-10');
+  assert.equal(rFull.per_day_rate, 1000); // 30,000 / 30
+  assert.equal(rFull.paid_days, 31);
+  assert.equal(rFull.gross_earned, 30000, 'Full month worked in 31-day month pays 100% base salary');
+
+  // February 2025 (28 days)
+  const febAtt = [];
+  for (let d = 1; d <= 28; d++) {
+    const dt = new Date(2025, 1, d);
+    if (dt.getDay() !== 0) {
+      febAtt.push({ date: `2025-02-${String(d).padStart(2, '0')}`, punch_in_time: '09:30', total_hours: 8 });
+    }
+  }
+  const rFeb = calculate(fixture({ attendance: febAtt }), settings, emp, '2025-02');
+  assert.equal(rFeb.per_day_rate, 1000);
+  assert.equal(rFeb.paid_days, 28);
+  assert.equal(rFeb.gross_earned, 30000, 'Full month worked in 28-day month pays 100% base salary');
+
+  // 1 absent day after 3 months is covered by paid leave allowance -> full salary 30000
+  const oneAbsentAtt = allAtt.slice(1); // missing Oct 1
+  const rOneAbsent = calculate(fixture({ attendance: oneAbsentAtt }), settings, emp, '2025-10');
+  assert.equal(rOneAbsent.paid_leaves, 1, '1st absent day covered as paid leave');
+  assert.equal(rOneAbsent.gross_earned, 30000, '1st absent day covered pays full base salary');
+
+  // 2 absent days: 1 day covered by allowance, 1 day deducted at base_salary / 30 = 1000 -> 29000
+  const twoAbsentAtt = allAtt.slice(2); // missing Oct 1 and Oct 2
+  const rTwoAbsent = calculate(fixture({ attendance: twoAbsentAtt }), settings, emp, '2025-10');
+  assert.equal(rTwoAbsent.gross_earned, 29000, '2nd absent day deducts 1000 (base_salary / 30)');
+});
+
+test('inactive employee cutoff: dates after exit_date receive 0 pay, no Sundays and no holidays', () => {
+  const emp = { ...employee, salary: 30000, status: 'inactive', exit_date: '2025-10-10' };
+  // Oct 1 to Oct 10 attended (excluding Oct 2 which is holiday, so holiday is paid once)
+  const att = [];
+  for (let d = 1; d <= 10; d++) {
+    const dt = new Date(2025, 9, d);
+    if (dt.getDay() !== 0 && d !== 2) {
+      att.push({ date: `2025-10-${String(d).padStart(2, '0')}`, punch_in_time: '09:30', total_hours: 8 });
+    }
+  }
+  const holidays = [
+    { date: '2025-10-02', name: 'Gandhi Jayanti' },
+    { date: '2025-10-20', name: 'Dussehra' }
+  ];
+  const r = calculate(fixture({ attendance: att, holidays }), settings, emp, '2025-10');
+  
+  // Oct 1-10 includes Oct 5 (Sunday) and Oct 2 (Holiday)
+  // Oct 11-31 includes Sundays (Oct 12, 19, 26) and Holiday (Oct 20) -> all must be left_company with pay 0
+  const afterExit = r.breakdown.filter(b => b.date > '2025-10-10');
+  assert.equal(afterExit.length, 21);
+  for (const b of afterExit) {
+    assert.equal(b.pay, 0);
+    assert.equal(b.label, 'left_company');
+  }
+  // Holiday on Oct 20 must NOT be credited
+  assert.equal(r.holiday_days, 1, 'Only Oct 2 holiday credited, Oct 20 after exit excluded');
+  // Sundays after Oct 10 must NOT be credited
+  assert.equal(r.sunday_count, 1, 'Only Oct 5 Sunday credited, Oct 12/19/26 excluded');
+  // Salary is 10 days * 1000 = 10,000
+  assert.equal(r.gross_earned, 10000, 'Partial month paid based on active days at base/30');
+});
+
+test('3-month leave rule: probation (<3m) has 0 paid leave; after 3m gets 1 full day or 2 half days (excluding half_day_late)', () => {
+  // 1. Employee during probation (joined 2025-06-15, calculating 2025-08 -> < 3 months)
+  const probationEmp = { ...employee, salary: 30000, join_date: '2025-06-15' };
+  // Absent on 2025-08-01 (no punch)
+  const rProbation = calculate(fixture({ attendance: [] }), settings, probationEmp, '2025-08');
+  const aug1Prob = rProbation.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(aug1Prob.label, 'absent_no_punch');
+  assert.equal(aug1Prob.pay, 0, 'Probation employee receives 0 pay for absence');
+
+  // 2. Employee completed 3 months (joined 2025-01-01, calculating 2025-08 -> > 3 months)
+  const regularEmp = { ...employee, salary: 30000, join_date: '2025-01-01' };
+  // Case A: 1 full-day absent on Aug 1
+  const rFullAbs = calculate(fixture({
+    attendance: [
+      { date: '2025-08-02', punch_in_time: '09:30', total_hours: 8 },
+      { date: '2025-08-04', punch_in_time: '09:30', total_hours: 8 },
+    ]
+  }), settings, regularEmp, '2025-08');
+  const aug1Abs = rFullAbs.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(aug1Abs.pay, 1, '1st full-day absence converted to paid leave');
+  assert.equal(aug1Abs.label, 'absent_paid_allowance');
+
+  // Case B: 2 half-days due to low hours (<6h) on Aug 1 and Aug 2
+  const r2Half = calculate(fixture({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:30', total_hours: 4 }, // 4h: 2h-6h -> half day low hours
+      { date: '2025-08-02', punch_in_time: '09:30', total_hours: 5 }, // 5h: 2h-6h -> half day low hours
+      { date: '2025-08-04', punch_in_time: '09:30', total_hours: 4 }, // 3rd low hours half day -> deducted!
+    ]
+  }), settings, regularEmp, '2025-08');
+  const d1 = r2Half.breakdown.find(b => b.date === '2025-08-01');
+  const d2 = r2Half.breakdown.find(b => b.date === '2025-08-02');
+  const d4 = r2Half.breakdown.find(b => b.date === '2025-08-04');
+  assert.equal(d1.pay, 1, '1st low-hours half day covered by allowance');
+  assert.equal(d1.label, 'half_day_low_hours_paid');
+  assert.equal(d2.pay, 1, '2nd low-hours half day covered by allowance');
+  assert.equal(d2.label, 'half_day_low_hours_paid');
+  assert.equal(d4.pay, 0.5, '3rd half day beyond allowance is deducted');
+  assert.equal(d4.label, 'half_day_low_hours');
+
+  // Case C: half_day_late is STRICTLY EXCLUDED
+  // General shift: arrival after 10:00 AM (e.g. 10:15 AM)
+  const rLateGen = calculate(fixture({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '10:15', total_hours: 8 }
+    ]
+  }), settings, { ...regularEmp, roster: 'general' }, '2025-08');
+  const lateGenDay = rLateGen.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(lateGenDay.label, 'half_day_late');
+  assert.equal(lateGenDay.pay, 0.5, 'General shift late arrival after 10:00 is strictly deducted (pay 0.5)');
+
+  // Early shift: arrival after 09:30 AM (e.g. 09:40 AM)
+  const rLateEarly = calculate(fixture({
+    attendance: [
+      { date: '2025-08-01', punch_in_time: '09:40', total_hours: 8 }
+    ]
+  }), settings, { ...regularEmp, roster: 'early' }, '2025-08');
+  const lateEarlyDay = rLateEarly.breakdown.find(b => b.date === '2025-08-01');
+  assert.equal(lateEarlyDay.label, 'half_day_late');
+  assert.equal(lateEarlyDay.pay, 0.5, 'Early shift late arrival after 09:30 is strictly deducted (pay 0.5)');
 });
 
 

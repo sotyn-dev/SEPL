@@ -45,8 +45,7 @@ const int = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 
 // never be auto-deleted by a background job. That is the point of the module.
 const DRAWINGS_FOLDER = 'drawings';
 
-// Module-local multer at 100 MB. The ERP-wide /api/upload stays at 20 MB —
-// this larger limit applies only to drawing files (CAD/PDF run big).
+// Module-local multer at 100 MB (CAD/PDF run big).
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, ensureDir(uploadsSub(DRAWINGS_FOLDER))),

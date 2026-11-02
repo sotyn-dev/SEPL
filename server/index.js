@@ -112,7 +112,7 @@ const upload = multer({
     // line. Only NEW filenames change; existing DB rows and objects are untouched.
     filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`),
   }),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
 });
 // multer has already chosen the filename; the seam key is just <folder>/<that name>.
 const uploadKey = (req, file) => {
@@ -1024,6 +1024,13 @@ app.use((err, req, res, next) => {
   console.error('[express-error]', req.method, req.originalUrl, '-', err.message);
   console.error(err.stack);
   if (res.headersSent) return next(err);
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      error: 'File too large (max 100 MB)',
+      path: req.originalUrl,
+      method: req.method,
+    });
+  }
   res.status(500).json({
     error: err.message || 'Internal server error',
     path: req.originalUrl,

@@ -509,27 +509,41 @@ const MODULE_DEFS = {
     ],
     rows(db, { allRecords = false } = {}) {
       return safeAll(db, `
-        SELECT s.id, s.name, s.client_name, s.site_engineer_id, s.created_at,
+        SELECT s.id, s.name, s.client_name, s.site_engineer_id, s.created_at, s.business_book_id,
                (SELECT d.report_date FROM dpr d WHERE d.site_id=s.id ORDER BY d.report_date DESC LIMIT 1) AS last_dpr_date,
-               (SELECT d.approval_status FROM dpr d WHERE d.site_id=s.id ORDER BY d.report_date DESC LIMIT 1) AS last_status
+               (SELECT d.approval_status FROM dpr d WHERE d.site_id=s.id ORDER BY d.report_date DESC LIMIT 1) AS last_status,
+               (SELECT p.created_at FROM pms_tasks p JOIN dpr d ON p.attachment_url = ('dpr://' || d.id) WHERE d.site_id=s.id ORDER BY p.id DESC LIMIT 1) AS last_problem_date,
+               (SELECT d.week_plan_locked_at FROM dpr d WHERE d.site_id=s.id AND d.week_plan_locked_at IS NOT NULL ORDER BY d.id DESC LIMIT 1) AS last_buffer_date,
+               (SELECT d.loss_addressed_at FROM dpr d WHERE d.site_id=s.id AND d.loss_addressed=1 ORDER BY d.id DESC LIMIT 1) AS last_rag_date,
+               (SELECT sng.approved_at FROM snags sng WHERE sng.site_id=s.id AND sng.status='approved' ORDER BY sng.id DESC LIMIT 1) AS last_closure_date
           FROM sites s
          WHERE COALESCE(s.status, 'active') = 'active'
-         ORDER BY s.id DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => ({
-        id: r.id,
-        title: r.name,
-        subtitle: r.client_name || 'Active Site',
-        created_at: r.created_at,
-        owner_id: r.site_engineer_id || null,
-        stamps: {
+         ORDER BY s.id DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
+        const stamps = {
           s1_ready: r.last_dpr_date || null,
           s2_report: r.last_dpr_date || null,
-          s3_problem: null,
-          s4_buffer: null,
-          s5_rag: null,
-          s6_closure: null,
-        },
-        current_key: r.last_status === 'approved' ? 's4_buffer' : 's2_report',
-      }));
+          s3_problem: r.last_problem_date || null,
+          s4_buffer: r.last_buffer_date || null,
+          s5_rag: r.last_rag_date || null,
+          s6_closure: r.last_closure_date || null,
+        };
+        let current_key = 's2_report';
+        if (r.last_status === 'approved') {
+          if (!stamps.s4_buffer) current_key = 's4_buffer';
+          else if (!stamps.s5_rag) current_key = 's5_rag';
+          else if (!stamps.s6_closure) current_key = 's6_closure';
+          else current_key = null;
+        }
+        return {
+          id: r.id,
+          title: r.name,
+          subtitle: r.client_name || 'Active Site',
+          created_at: r.created_at,
+          owner_id: r.site_engineer_id || null,
+          stamps,
+          current_key,
+        };
+      });
     },
   },
 
