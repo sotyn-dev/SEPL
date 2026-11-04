@@ -3035,6 +3035,183 @@ router.patch('/:id/loss-addressed', requirePermission('dpr', 'approve'), (req, r
 //
 // Permission: same canSeeAll gate as the rest of /dpr — engineers
 // see only their own sites; admins/managers see everything.
+// ── Monthly DPR Register / Calendar for any Site Engineer ──
+router.get('/monthly-register', (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+  const canSeeAll = dprCanSeeAll(db, req.user);
+
+  // 1) Engineers pool
+  let engineers = db.prepare(`
+    SELECT u.id, u.name, u.email, GROUP_CONCAT(DISTINCT r.name) AS role_names
+      FROM users u
+      LEFT JOIN user_roles ur ON ur.user_id = u.id
+      LEFT JOIN roles r       ON r.id = ur.role_id
+     WHERE u.active = 1
+     GROUP BY u.id
+     HAVING SUM(CASE WHEN LOWER(COALESCE(r.name, '')) LIKE '%site eng%' OR LOWER(COALESCE(r.name, '')) LIKE '%engineer%' THEN 1 ELSE 0 END) > 0
+        OR u.id IN (SELECT DISTINCT submitted_by FROM dpr WHERE submitted_by IS NOT NULL)
+        OR u.id IN (SELECT DISTINCT site_engineer_id FROM sites WHERE site_engineer_id IS NOT NULL)
+     ORDER BY u.name
+  `).all();
+
+  if (!canSeeAll) {
+    const isSelfEng = engineers.some(e => e.id === uid);
+    if (isSelfEng) engineers = engineers.filter(e => e.id === uid);
+  }
+
+  // 2) Selected Engineer
+  let selectedId = parseInt(req.query.engineer_id, 10);
+  if (!selectedId || !Number.isFinite(selectedId)) {
+    if (!canSeeAll && engineers.some(e => e.id === uid)) {
+      selectedId = uid;
+    } else if (engineers.length > 0) {
+      selectedId = engineers[0].id;
+    } else {
+      selectedId = uid;
+    }
+  }
+
+  const engineer = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(selectedId);
+  if (!engineer) {
+    return res.status(404).json({ error: 'Engineer not found', engineers });
+  }
+
+  // 3) Month Range
+  const todayIso = istTodayIso();
+  let monthStr = String(req.query.month || '').trim().slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(monthStr)) {
+    monthStr = todayIso.slice(0, 7);
+  }
+  const [yearStr, mStr] = monthStr.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(mStr, 10);
+  const lastDay = new Date(year, month, 0).getDate();
+  const startDate = `${monthStr}-01`;
+  const endDate = `${monthStr}-${String(lastDay).padStart(2, '0')}`;
+  const monthName = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+  // 4) Assigned Sites
+  const sites = db.prepare(`
+    SELECT DISTINCT s.id, s.name, s.status, s.client_name
+    FROM sites s
+    WHERE s.site_engineer_id = ?
+    UNION
+    SELECT DISTINCT s.id, s.name, s.status, s.client_name
+    FROM sites s
+    JOIN purchase_orders po ON (po.id = s.po_id OR po.business_book_id = s.business_book_id)
+    WHERE (po.site_engineer_id = ?
+       OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
+       OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?)
+  `).all(selectedId, selectedId, `%,${selectedId},%`, `%,${selectedId},%`);
+
+  // 5) DPRs filed by this engineer in this month
+  const dprs = db.prepare(`
+    SELECT d.id, d.report_date, d.site_id, d.approval_status, d.submission_time, d.created_at,
+           d.grand_total_a, d.grand_total_b, d.profit_loss, d.overall_status, d.contractor_name, d.contractor_manpower,
+           s.name as site_name, s.client_name
+    FROM dpr d
+    LEFT JOIN sites s ON s.id = d.site_id
+    WHERE d.submitted_by = ?
+      AND d.report_date BETWEEN ? AND ?
+      AND COALESCE(d.is_planned_template, 0) = 0
+    ORDER BY d.report_date ASC, d.id ASC
+  `).all(selectedId, startDate, endDate);
+
+  const dprByDate = {};
+  for (const d of dprs) {
+    if (!dprByDate[d.report_date]) dprByDate[d.report_date] = [];
+    dprByDate[d.report_date].push(d);
+  }
+
+  // 6) Attendance in this month
+  const attRows = db.prepare(`
+    SELECT date, status, punch_in_time, punch_out_time, site_name, total_hours
+    FROM attendance
+    WHERE user_id = ? AND date BETWEEN ? AND ?
+  `).all(selectedId, startDate, endDate);
+
+  const attByDate = {};
+  for (const a of attRows) {
+    attByDate[a.date] = a;
+  }
+
+  // 7) Build Day-by-Day Calendar
+  const days = [];
+  let submittedDays = 0;
+  let missingWorkingDays = 0;
+  let sundays = 0;
+  let elapsedWorkingDays = 0;
+
+  for (let d = 1; d <= lastDay; d++) {
+    const dStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+    const dateObj = new Date(`${dStr}T00:00:00`);
+    const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+    const isSunday = dateObj.getDay() === 0;
+    const isToday = (dStr === todayIso);
+    const isFuture = (dStr > todayIso);
+
+    const dayDprs = dprByDate[dStr] || [];
+    const att = attByDate[dStr] || null;
+    const isSubmitted = dayDprs.length > 0;
+
+    let status = 'missed';
+    if (isSubmitted) {
+      status = 'submitted';
+      submittedDays++;
+      if (!isSunday) elapsedWorkingDays++;
+    } else if (isFuture) {
+      status = 'future';
+    } else if (isSunday) {
+      status = 'sunday';
+      sundays++;
+    } else {
+      status = 'missed';
+      missingWorkingDays++;
+      elapsedWorkingDays++;
+    }
+
+    days.push({
+      date: dStr,
+      day_number: d,
+      day_of_week: dayOfWeek,
+      is_sunday: isSunday,
+      is_today: isToday,
+      is_future: isFuture,
+      is_submitted: isSubmitted,
+      status,
+      dpr_count: dayDprs.length,
+      dprs: dayDprs,
+      attendance: att
+    });
+  }
+
+  const adherenceRate = elapsedWorkingDays > 0
+    ? Math.round((submittedDays / elapsedWorkingDays) * 100)
+    : (submittedDays > 0 ? 100 : 0);
+
+  res.json({
+    engineers,
+    selected_engineer: engineer,
+    month: monthStr,
+    month_name: monthName,
+    range: { start_date: startDate, end_date: endDate, total_days: lastDay },
+    assigned_sites: sites,
+    summary: {
+      total_days: lastDay,
+      submitted_days: submittedDays,
+      missing_working_days: missingWorkingDays,
+      sundays,
+      elapsed_working_days: elapsedWorkingDays,
+      adherence_rate: adherenceRate,
+      total_dprs: dprs.length,
+      submitted_dates: days.filter(d => d.is_submitted).map(d => d.day_number),
+      missed_working_dates: days.filter(d => !d.is_submitted && !d.is_sunday && !d.is_future).map(d => d.day_number)
+    },
+    days
+  });
+});
+
 router.get('/engineer-compliance', (req, res) => {
   const db = getDb();
   const uid = req.user.id;

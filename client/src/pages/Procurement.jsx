@@ -342,6 +342,7 @@ export default function Procurement() {
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   // TSK-0943: Comparison sheet with online data for approval of PO
   const [comparePoId, setComparePoId] = useState(null);
+  const [previewProof, setPreviewProof] = useState(null); // { url, title }
 
   // TSK-0378: Live Market Rates & Price Discovery for PO Creation & Editing
   const [marketModal, setMarketModal] = useState(false);
@@ -2444,10 +2445,15 @@ export default function Procurement() {
   // string — two users sharing a name both got the button, and a rename silently
   // took it away. The ids come from the same resolver as the server gate.
   const canApprovePo = (v) => {
-    if (v.po_approval !== 'pending_l1' && v.po_approval !== 'pending_l2') return false;
+    if (!['pending_l1', 'pending_l2', 'pending_coo', 'pending_cmd'].includes(v.po_approval)) return false;
     if (isAdmin()) return true;
-    const email = String(user?.email || '').toLowerCase(), uname = String(user?.username || '').toLowerCase();
-    if (email.startsWith('coo@') || uname.startsWith('coo@')) return true;
+    const email = String(user?.email || '').toLowerCase(), uname = String(user?.username || '').toLowerCase(), unameFull = String(user?.name || '').toLowerCase();
+    if (v.po_approval === 'pending_coo') {
+      if (email === 'coo@securedengineers.com' || email.startsWith('coo@') || uname.startsWith('coo@')) return true;
+    }
+    if (v.po_approval === 'pending_cmd') {
+      if (email === 'director@securedengineers.com' || email.startsWith('director@') || email.startsWith('cmd@') || uname.includes('ankur') || unameFull.includes('ankur')) return true;
+    }
     return (v.po_pending_approver_ids || []).includes(user?.id);
   };
   const approvePo = async (v) => {
@@ -2455,10 +2461,14 @@ export default function Procurement() {
       const res = await api.post(`/procurement/vendor-po/${v.id}/po-approve`);
       if (res.data?.auto_approved) {
         toast.success(`⚡ PO Auto-Approved: ${res.data.approval_note || 'All items within estimated cost'}`);
+      } else if (res.data?.po_approval === 'pending_coo') {
+        toast.warning('PO L1 approved → Forwarded to COO (coo@securedengineers.com) for Item Master Overrun approval (< ₹50K)');
+      } else if (res.data?.po_approval === 'pending_cmd') {
+        toast.warning('PO L1 approved → Forwarded to MD (director@securedengineers.com) for Item Master Overrun approval (≥ ₹50K)');
       } else if (res.data?.po_approval === 'pending_l2') {
         toast.success('PO L1 approved → Forwarded to L2 (MD) for cost overrun approval');
       } else {
-        toast.success('PO approved');
+        toast.success(res.data?.approval_note || 'PO approved');
       }
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
@@ -2617,6 +2627,9 @@ export default function Procurement() {
             m[`vendor${n}_rate`] = r[`vendor${n}_rate`];
             m[`vendor${n}_terms`] = r[`vendor${n}_terms`];
             m[`vendor${n}_credit_days`] = r[`vendor${n}_credit_days`];
+            m[`vendor${n}_proof`] = r[`vendor${n}_proof`];
+          } else if (!m[`vendor${n}_proof`] && r[`vendor${n}_proof`]) {
+            m[`vendor${n}_proof`] = r[`vendor${n}_proof`];
           }
         }
         if (r.final_rate) {
@@ -2624,6 +2637,9 @@ export default function Procurement() {
           m.final_vendor_name = r.final_vendor_name;
           m.final_terms = r.final_terms;
           m.final_credit_days = r.final_credit_days;
+          m.final_proof = r.final_proof;
+        } else if (!m.final_proof && r.final_proof) {
+          m.final_proof = r.final_proof;
         }
         // Suggestion columns — keep first non-empty across the merged rows.
         if (!m.pp_rate && r.pp_rate) m.pp_rate = r.pp_rate;
@@ -2744,9 +2760,9 @@ export default function Procurement() {
   const openFinalize = (row) => {
     // Default to the lowest non-zero vendor rate (best offer) when opening
     const quotes = [
-      { name: row.vendor1_name, rate: row.vendor1_rate, terms: row.vendor1_terms, days: row.vendor1_credit_days },
-      { name: row.vendor2_name, rate: row.vendor2_rate, terms: row.vendor2_terms, days: row.vendor2_credit_days },
-      { name: row.vendor3_name, rate: row.vendor3_rate, terms: row.vendor3_terms, days: row.vendor3_credit_days },
+      { name: row.vendor1_name, rate: row.vendor1_rate, terms: row.vendor1_terms, days: row.vendor1_credit_days, proof: row.vendor1_proof },
+      { name: row.vendor2_name, rate: row.vendor2_rate, terms: row.vendor2_terms, days: row.vendor2_credit_days, proof: row.vendor2_proof },
+      { name: row.vendor3_name, rate: row.vendor3_rate, terms: row.vendor3_terms, days: row.vendor3_credit_days, proof: row.vendor3_proof },
     ].filter(q => q.name && q.rate > 0).sort((a, b) => a.rate - b.rate);
     const best = quotes[0] || {};
     setFinalForm({
@@ -2755,11 +2771,15 @@ export default function Procurement() {
       final_vendor_name: row.final_vendor_name || best.name || '',
       final_terms: row.final_terms || best.terms || '',
       final_credit_days: row.final_credit_days || best.days || 0,
+      final_proof: row.final_proof || best.proof || null,
     });
     setFinalModal(row);
   };
   const submitFinalize = async (e) => {
     e.preventDefault();
+    if (!isAdmin() && !finalForm.final_proof) {
+      return toast.error('WhatsApp/Gmail screenshot proof is mandatory for the finalized vendor rate (TSK-0851)');
+    }
     // A merged row may carry multiple rate_ids (one per underlying indent_item
     // sharing the same item_master in the same indent). Finalize ALL of them
     // so the merged display stays consistent — every backing row picks the
@@ -4554,16 +4574,16 @@ export default function Procurement() {
                     <th className="px-2 py-2" rowSpan="2">Qty</th>
                     <th className="px-2 py-2" rowSpan="2" title="Purchase Price from the Order-to-Planning BOQ — suggestion only, doesn't change vendor rates">PP Rate<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(planning)</span></th>
                     <th className="px-2 py-2" rowSpan="2" title="AI-estimated MINIMUM market rate, auto-filled — suggestion only, doesn't change vendor rates">Mktg Rate<br /><span className="text-[9px] font-normal text-gray-400 normal-case">(AI · min mkt)</span></th>
-                    <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
-                    <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>
-                    <th className="px-2 py-2 text-center" colSpan="3">Vendor 3</th>
+                    <th className="px-2 py-2 text-center" colSpan="4">Vendor 1</th>
+                    <th className="px-2 py-2 text-center" colSpan="4">Vendor 2</th>
+                    <th className="px-2 py-2 text-center" colSpan="4">Vendor 3</th>
                     <th className="px-2 py-2" rowSpan="2">Status</th>
                     <th className="px-2 py-2" rowSpan="2">Final</th>
                   </tr>
                   <tr className="bg-gray-50 text-[10px]">
-                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th>
-                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th>
-                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th>
+                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th><th className="px-2 py-1">Proof</th>
+                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th><th className="px-2 py-1">Proof</th>
+                    <th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Terms</th><th className="px-2 py-1">Proof</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4678,6 +4698,52 @@ export default function Procurement() {
                                 )}
                               </div>
                             </td>
+                            <td className="px-1 py-1 text-center whitespace-nowrap" style={{ minWidth: '95px' }}>
+                              {r[`vendor${n}_proof`] ? (
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewProof({
+                                      url: r[`vendor${n}_proof`],
+                                      title: `Quotation Proof — Vendor ${n} (${r[`vendor${n}_name`] || 'Vendor'}) · Indent ${r.indent_number || ''}`
+                                    })}
+                                    className="text-[10px] text-blue-600 font-semibold hover:underline flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0"
+                                    title="View WhatsApp/Gmail Screenshot Proof"
+                                  >
+                                    📎 Proof
+                                  </button>
+                                  <label className="cursor-pointer text-gray-400 hover:text-gray-600 text-[10px]" title="Replace screenshot">
+                                    ↻
+                                    <input type="file" accept="image/*,.pdf" className="hidden" onChange={async (e) => {
+                                      if (e.target.files?.[0]) {
+                                        const fd = new FormData();
+                                        fd.append('file', e.target.files[0]);
+                                        try {
+                                          const { data } = await api.post('/procurement/item-rates/upload-proof', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                          await updateMergedRate(r, { [`vendor${n}_proof`]: data.file_path });
+                                          toast.success(`Vendor ${n} proof uploaded`);
+                                        } catch (err) { toast.error('Upload failed'); }
+                                      }
+                                    }} />
+                                  </label>
+                                </div>
+                              ) : (
+                                <label className="cursor-pointer text-[10px] text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5 inline-flex items-center gap-0.5 font-medium" title="Upload WhatsApp or Gmail Screenshot Proof (TSK-0851)">
+                                  📷 Upload
+                                  <input type="file" accept="image/*,.pdf" className="hidden" onChange={async (e) => {
+                                    if (e.target.files?.[0]) {
+                                      const fd = new FormData();
+                                      fd.append('file', e.target.files[0]);
+                                      try {
+                                        const { data } = await api.post('/procurement/item-rates/upload-proof', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                        await updateMergedRate(r, { [`vendor${n}_proof`]: data.file_path });
+                                        toast.success(`Vendor ${n} proof uploaded`);
+                                      } catch (err) { toast.error('Upload failed'); }
+                                    }
+                                  }} />
+                                </label>
+                              )}
+                            </td>
                           </Fragment>
                         ))}
                         <td className="px-2 py-2"><span className={`badge ${statColor}`}>{stat}</span></td>
@@ -4752,6 +4818,51 @@ export default function Procurement() {
                             <option value="Advance">Advance</option>
                             <option value="Credit">Credit</option>
                           </select>
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-gray-100 text-[10px] mt-1.5">
+                          {r[`vendor${n}_proof`] ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewProof({
+                                  url: r[`vendor${n}_proof`],
+                                  title: `Quotation Proof — Vendor ${n} (${r[`vendor${n}_name`] || 'Vendor'})`
+                                })}
+                                className="text-blue-600 font-semibold hover:underline cursor-pointer bg-transparent border-0 p-0"
+                              >
+                                📎 View Screenshot Proof
+                              </button>
+                              <label className="cursor-pointer text-gray-400 hover:text-gray-600">
+                                ↻
+                                <input type="file" accept="image/*,.pdf" className="hidden" onChange={async (e) => {
+                                  if (e.target.files?.[0]) {
+                                    const fd = new FormData();
+                                    fd.append('file', e.target.files[0]);
+                                    try {
+                                      const { data } = await api.post('/procurement/item-rates/upload-proof', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                      await updateMergedRate(r, { [`vendor${n}_proof`]: data.file_path });
+                                      toast.success(`Vendor ${n} proof uploaded`);
+                                    } catch (err) { toast.error('Upload failed'); }
+                                  }
+                                }} />
+                              </label>
+                            </div>
+                          ) : (
+                            <label className="cursor-pointer text-[10px] text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded px-2 py-0.5 inline-flex items-center gap-1 font-medium">
+                              📷 Upload Proof
+                              <input type="file" accept="image/*,.pdf" className="hidden" onChange={async (e) => {
+                                if (e.target.files?.[0]) {
+                                  const fd = new FormData();
+                                  fd.append('file', e.target.files[0]);
+                                  try {
+                                    const { data } = await api.post('/procurement/item-rates/upload-proof', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                    await updateMergedRate(r, { [`vendor${n}_proof`]: data.file_path });
+                                    toast.success(`Vendor ${n} proof uploaded`);
+                                  } catch (err) { toast.error('Upload failed'); }
+                                }
+                              }} />
+                            </label>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -5092,7 +5203,41 @@ export default function Procurement() {
                   <td>
                     {v.cancelled
                       ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                      : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                      : v.po_approval === 'pending_coo'
+                        ? <div className="flex flex-col gap-1 items-start">
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300" title={`Awaiting COO Approval: ${v.po_pending_approver}`}>
+                              Pending COO · ${v.po_pending_approver || 'coo@securedengineers.com'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setComparePoId(v.id)}
+                              className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition cursor-pointer flex items-center gap-0.5"
+                              title="Review rates vs online market data & 3 quotes before approval"
+                            >
+                              📊 Compare Online
+                            </button>
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason || 'TSK-0477 Item Master Overrun'}>
+                              ⚠️ Master Overrun {v.item_master_max_overrun_pct ? `(+${v.item_master_max_overrun_pct}%)` : ''}
+                            </span>
+                          </div>
+                        : v.po_approval === 'pending_cmd'
+                        ? <div className="flex flex-col gap-1 items-start">
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300" title={`Awaiting MD Approval: ${v.po_pending_approver}`}>
+                              Pending MD · ${v.po_pending_approver || 'director@securedengineers.com'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setComparePoId(v.id)}
+                              className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition cursor-pointer flex items-center gap-0.5"
+                              title="Review rates vs online market data & 3 quotes before approval"
+                            >
+                              📊 Compare Online
+                            </button>
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason || 'TSK-0477 Item Master Overrun'}>
+                              ⚠️ Master Overrun {v.item_master_max_overrun_pct ? `(+${v.item_master_max_overrun_pct}%)` : ''}
+                            </span>
+                          </div>
+                        : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
                         ? <div className="flex flex-col gap-1 items-start">
                             <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
                               Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}
@@ -5105,7 +5250,12 @@ export default function Procurement() {
                             >
                               📊 Compare Online
                             </button>
-                            {v.cost_status === 'cost_overrun' && (
+                            {v.has_item_master_overrun && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
+                                ⚠️ Master Overrun (+{v.item_master_max_overrun_pct}%)
+                              </span>
+                            )}
+                            {v.cost_status === 'cost_overrun' && !v.has_item_master_overrun && (
                               <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
                                 ⚠️ Overrun (+{v.max_overrun_pct}%)
                               </span>
@@ -5137,7 +5287,7 @@ export default function Procurement() {
                           approver (or admin / COO). */}
                       {!v.cancelled && canApprovePo(v) && (
                         <>
-                          <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve</button>
+                          <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_coo' ? 'COO' : v.po_approval === 'pending_cmd' ? 'MD' : v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve {v.po_approval === 'pending_coo' ? 'COO' : v.po_approval === 'pending_cmd' ? 'MD' : ''}</button>
                           <button onClick={() => rejectPo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 hover:bg-red-600 hover:text-white" title="Reject PO">✕</button>
                         </>
                       )}
@@ -5216,7 +5366,25 @@ export default function Procurement() {
                   </div>
                   {v.cancelled
                     ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                    : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                    : v.po_approval === 'pending_coo'
+                      ? <div className="flex flex-col gap-0.5 items-end">
+                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300" title={`Awaiting COO Approval: ${v.po_pending_approver}`}>
+                            Pending COO · ${v.po_pending_approver || 'coo@securedengineers.com'}
+                          </span>
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason || 'TSK-0477 Item Master Overrun'}>
+                            ⚠️ Master Overrun
+                          </span>
+                        </div>
+                      : v.po_approval === 'pending_cmd'
+                      ? <div className="flex flex-col gap-0.5 items-end">
+                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-300" title={`Awaiting MD Approval: ${v.po_pending_approver}`}>
+                            Pending MD · ${v.po_pending_approver || 'director@securedengineers.com'}
+                          </span>
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason || 'TSK-0477 Item Master Overrun'}>
+                            ⚠️ Master Overrun
+                          </span>
+                        </div>
+                      : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
                       ? <div className="flex flex-col gap-0.5 items-end">
                           <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
                             Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}
@@ -5288,7 +5456,7 @@ export default function Procurement() {
                 {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
                 {!v.cancelled && canApprovePo(v) && (
                   <div className="flex gap-2 mt-1">
-                    <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
+                    <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_coo' ? 'COO' : v.po_approval === 'pending_cmd' ? 'MD' : v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
                     <button onClick={() => rejectPo(v)} className="text-sm py-2 px-3 rounded bg-red-100 text-red-700 border border-red-300 font-semibold">Reject</button>
                   </div>
                 )}
@@ -7794,11 +7962,27 @@ export default function Procurement() {
           {/* Quote comparison for quick reference */}
           {finalModal && (
             <div className="bg-gray-50 rounded-lg p-3 text-xs space-y-1">
-              <p className="font-semibold text-gray-700">Vendor quotes for this item:</p>
+              <p className="font-semibold text-gray-700">Vendor quotes & proofs for this item:</p>
               {[1, 2, 3].map(n => finalModal[`vendor${n}_name`] && finalModal[`vendor${n}_rate`] > 0 && (
-                <div key={n} className="flex justify-between">
+                <div key={n} className="flex justify-between items-center py-0.5">
                   <span>{finalModal[`vendor${n}_name`]}</span>
-                  <span className="font-mono">Rs {finalModal[`vendor${n}_rate`]} {finalModal[`vendor${n}_terms`] ? `· ${finalModal[`vendor${n}_terms`]}` : ''}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono">Rs {finalModal[`vendor${n}_rate`]} {finalModal[`vendor${n}_terms`] ? `· ${finalModal[`vendor${n}_terms`]}` : ''}</span>
+                    {finalModal[`vendor${n}_proof`] ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewProof({
+                          url: finalModal[`vendor${n}_proof`],
+                          title: `Quotation Proof — ${finalModal[`vendor${n}_name`]}`
+                        })}
+                        className="text-[11px] text-blue-600 hover:underline flex items-center gap-0.5 font-medium cursor-pointer bg-transparent border-0 p-0"
+                      >
+                        📎 Proof
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-red-500 font-medium">⚠️ No proof</span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -7830,6 +8014,7 @@ export default function Procurement() {
                     final_rate: nMatch ? +finalModal[`vendor${nMatch}_rate`] || 0 : f.final_rate,
                     final_terms: nMatch ? finalModal[`vendor${nMatch}_terms`] || '' : f.final_terms,
                     final_credit_days: nMatch ? +finalModal[`vendor${nMatch}_credit_days`] || 0 : f.final_credit_days,
+                    final_proof: nMatch ? finalModal[`vendor${nMatch}_proof`] || null : f.final_proof,
                   }));
                 }}
               >
@@ -7858,6 +8043,39 @@ export default function Procurement() {
               </select>
             </div>
             <div><label className="label">Credit Days (if Credit)</label><input className="input" type="number" value={finalForm.final_credit_days || 0} onChange={e => setFinalForm(f => ({ ...f, final_credit_days: +e.target.value }))} disabled={finalForm.final_terms !== 'Credit'} /></div>
+            <div className="sm:col-span-2">
+              <label className="label">Rate Proof (WhatsApp / Gmail Screenshot)</label>
+              <div className="flex items-center gap-2 mt-1">
+                {finalForm.final_proof ? (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewProof({
+                      url: finalForm.final_proof,
+                      title: `Final Quotation Proof — ${finalForm.final_vendor_name || 'Selected Vendor'}`
+                    })}
+                    className="text-xs text-blue-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0"
+                  >
+                    📎 View Attached Proof
+                  </button>
+                ) : (
+                  <span className="text-xs text-amber-700 font-medium">⚠️ No proof attached (mandatory for non-admins)</span>
+                )}
+                <label className="cursor-pointer text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded px-2 py-1 font-medium">
+                  {finalForm.final_proof ? '↻ Replace Proof' : '📷 Upload Screenshot Proof'}
+                  <input type="file" accept="image/*,.pdf" className="hidden" onChange={async (e) => {
+                    if (e.target.files?.[0]) {
+                      const fd = new FormData();
+                      fd.append('file', e.target.files[0]);
+                      try {
+                        const { data } = await api.post('/procurement/item-rates/upload-proof', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                        setFinalForm(f => ({ ...f, final_proof: data.file_path }));
+                        toast.success('Screenshot proof attached');
+                      } catch (err) { toast.error('Upload failed'); }
+                    }
+                  }} />
+                </label>
+              </div>
+            </div>
           </div>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <button type="button" onClick={() => { setFinalModal(null); setFinalForm({}); }} className="btn btn-secondary">Cancel</button>
@@ -8611,6 +8829,54 @@ export default function Procurement() {
         item={marketItem}
         onApplyRate={handleApplyMarketRateToPo}
       />
+
+      {/* TSK-0851: In-app Quotation Proof Lightbox Modal */}
+      <Modal
+        isOpen={Boolean(previewProof)}
+        onClose={() => setPreviewProof(null)}
+        title={previewProof?.title || 'Quotation Proof Preview'}
+        wide
+        zIndex="z-[70]"
+      >
+        <div className="flex flex-col items-center justify-center p-3 bg-gray-50 rounded-lg min-h-[320px]">
+          {previewProof?.url && (previewProof.url.toLowerCase().split('?')[0].endsWith('.pdf') ? (
+            <iframe
+              src={previewProof.url}
+              title="Quotation Proof PDF"
+              className="w-full h-[75vh] border rounded shadow-sm bg-white"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center w-full">
+              <img
+                src={previewProof?.url}
+                alt="Quotation Proof"
+                className="max-h-[75vh] max-w-full object-contain rounded shadow border border-gray-200 bg-white"
+              />
+            </div>
+          ))}
+          <div className="flex flex-wrap justify-between items-center w-full mt-4 pt-3 border-t border-gray-200 text-xs text-gray-600 gap-2">
+            <span>Direct in-app preview · WhatsApp / Gmail Proof</span>
+            <div className="flex items-center gap-3">
+              <a
+                href={previewProof?.url}
+                target="_blank"
+                rel="noreferrer"
+                download
+                className="text-blue-600 hover:text-blue-800 underline font-medium"
+              >
+                ⬇ Download / Open Full
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewProof(null)}
+                className="btn btn-secondary text-xs py-1 px-4"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

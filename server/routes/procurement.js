@@ -3785,20 +3785,40 @@ router.get('/vendor-po', (req, res) => {
 
   const poL1 = poApproversFor(db, 1);
   const poL2 = poApproversFor(db, 2);
+  const cooUser = db.prepare("SELECT id, name, email FROM users WHERE LOWER(email) = 'coo@securedengineers.com' OR role = 'coo' LIMIT 1").get();
+  const mdUser = db.prepare("SELECT id, name, email FROM users WHERE LOWER(email) = 'director@securedengineers.com' OR LOWER(email) LIKE 'cmd@%' OR LOWER(name) LIKE '%ankur%' LIMIT 1").get();
+  const cooStandins = [
+    ...(cooUser ? [cooUser] : []),
+    ...approvalGates.poStandinUsers(db)
+  ];
+  const ankurUser = resolvePoUserByName(db, 'Ankur Kaplesh') || mdUser;
+  const cmdApprovers = [
+    ...(mdUser ? [mdUser] : []),
+    ...(ankurUser ? [ankurUser] : []),
+    ...poL2
+  ];
   const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
-                     pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2] };
+                     pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2],
+                     pending_coo: cooUser ? `${cooUser.name} (${cooUser.email})` : (cooStandins.map(a => a.name).join(', ') || 'COO (coo@securedengineers.com)'),
+                     pending_cmd: mdUser ? `${mdUser.name} (${mdUser.email})` : 'MD (director@securedengineers.com · Ankur Kaplesh)' };
   for (const r of rows) {
-    r.po_pending_approver = (r.po_approval === 'pending_l1' || r.po_approval === 'pending_l2')
-      ? poNameOf[r.po_approval] : null;
-    r.po_l1_approver_ids = poL1.map(a => a.id);
-    r.po_l2_approver_ids = poL2.map(a => a.id);
-    r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
-                              : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
+    if (r.po_approval === 'pending_coo') {
+      r.po_pending_approver = poNameOf.pending_coo;
+      r.po_pending_approver_ids = cooStandins.map(a => a.id);
+    } else if (r.po_approval === 'pending_cmd') {
+      r.po_pending_approver = poNameOf.pending_cmd;
+      r.po_pending_approver_ids = cmdApprovers.map(a => a.id);
+    } else {
+      r.po_pending_approver = (r.po_approval === 'pending_l1' || r.po_approval === 'pending_l2')
+        ? poNameOf[r.po_approval] : null;
+      r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
+                                : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
+    }
     const stored = +r.total_amount || 0;
     const live = +r.display_total || 0;
     r.total_amount_drift = Math.round(Math.abs(stored - live));
 
-    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+    // TSK-0824 & TSK-0477: Cost Estimate & Item Master Overrun evaluation
     try {
       const evalRes = evaluatePoCostEstimate(db, r.id);
       r.cost_status = evalRes.cost_status;
@@ -3808,6 +3828,20 @@ router.get('/vendor-po', (req, res) => {
       r.total_estimated_amount = evalRes.total_estimated_amount;
       r.total_variance_pct = evalRes.total_variance_pct;
       r.cost_reason = evalRes.reason;
+      r.has_item_master_overrun = evalRes.has_item_master_overrun;
+      r.item_master_overrun_count = evalRes.item_master_overrun_count;
+      r.item_master_max_overrun_pct = evalRes.item_master_max_overrun_pct;
+      r.required_overrun_gate = evalRes.required_overrun_gate;
+      r.required_overrun_label = evalRes.required_overrun_label;
+      if (evalRes.has_item_master_overrun && r.po_approval !== 'approved' && !r.cancelled) {
+        if (evalRes.required_overrun_gate === 'coo') {
+          r.po_pending_approver = poNameOf.pending_coo;
+          r.po_pending_approver_ids = cooStandins.map(a => a.id);
+        } else if (evalRes.required_overrun_gate === 'cmd') {
+          r.po_pending_approver = poNameOf.pending_cmd;
+          r.po_pending_approver_ids = cmdApprovers.map(a => a.id);
+        }
+      }
     } catch (_) {
       r.cost_status = 'unknown';
     }
@@ -4986,9 +5020,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         const spec = i.specification ? String(i.specification).trim() : null;
         insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr, spec);
       }
-      // Push the actual ordered rate into the Item Master (mam 2026-07-21:
-      // "in items only one … from po update rate as per current").
-      updateItemMasterFromPoLines(db, lines, req.user.id, req.user.name);
+      // TSK-0477: Item Master rate is NOT overwritten while PO is pending review/approval.
+      // Master rate update is deferred until final approval (syncApprovedPoItemPrices).
       if (indent_id) db.prepare('UPDATE indents SET status=? WHERE id=?').run('po_sent', indent_id);
       return vpoId;
     });
@@ -5038,36 +5071,113 @@ const legacyPoApprover = (level) => (db) => resolvePoUserByName(db, PO_APPROVERS
 // code had a second hardcoded copy (PO_NEXT) driving the display, so the chip
 // could name someone the gate would refuse.
 const poApproversFor = (db, level) => gateApproverList(db, poGateKey(level), legacyPoApprover(level));
-function canApprovePoLevel(db, userId, level) {
-  const u = db.prepare('SELECT role, email FROM users WHERE id=?').get(userId);
-  if (u?.role === 'admin') return true;
-  // Stand-in (role mailbox, e.g. coo@…) may act at either level. Configurable in
-  // ⚙ Workflow Settings; defaults to the old hardcoded 'coo@' EMAIL match when
-  // unset — so this is a no-op on deploy. Username is no longer consulted (no
-  // real username is an email; that branch matched nobody).
-  if (approvalGates.isPoStandin(db, u?.email)) return true;
-  return poApproversFor(db, level).some(a => a.id === userId);
-}
-const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);
 
-// Approve the current pending level (L1 → L2 → approved).
+// TSK-0477: Sync approved PO item prices to Item Master ONLY upon final approval
+function syncApprovedPoItemPrices(db, poId, userId, userName) {
+  try {
+    const lines = db.prepare(`
+      SELECT vpi.indent_item_id, vpi.rate, vpi.quantity, vpi.weight_per_meter
+      FROM vendor_po_items vpi
+      WHERE vpi.vendor_po_id = ?
+    `).all(+poId);
+    if (lines && lines.length) {
+      updateItemMasterFromPoLines(db, lines, userId, userName);
+    }
+  } catch (e) {
+    console.error('[vendor-po] syncApprovedPoItemPrices error:', e.message);
+  }
+}
+
+function canApprovePoLevel(db, userId, statusOrLevel) {
+  const u = db.prepare('SELECT id, name, role, email FROM users WHERE id=?').get(userId);
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+
+  const email = String(u.email || '').toLowerCase().trim();
+  const name = String(u.name || '').toLowerCase().trim();
+
+  // TSK-0477: COO Gate (< ₹50K Overrun) - COO person (coo@securedengineers.com)
+  if (statusOrLevel === 'pending_coo' || statusOrLevel === 'coo') {
+    if (email === 'coo@securedengineers.com' || email.startsWith('coo@') || u.role === 'coo') return true;
+    if (approvalGates.isPoStandin(db, u.email)) return true;
+    return false;
+  }
+
+  // TSK-0477: CMD / MD Gate (≥ ₹50K Overrun) - MD person (director@securedengineers.com · Ankur Kaplesh)
+  if (statusOrLevel === 'pending_cmd' || statusOrLevel === 'cmd') {
+    if (email === 'director@securedengineers.com' || email.startsWith('director@') || email.startsWith('cmd@') || name.includes('ankur') || u.role === 'cmd' || u.role === 'director') return true;
+    return false;
+  }
+
+  // PO L1 (Procurement Lead / Nitin Jain)
+  if (statusOrLevel === 1 || statusOrLevel === 'pending_l1') {
+    if (approvalGates.isPoStandin(db, u.email)) return true;
+    return poApproversFor(db, 1).some(a => a.id === userId);
+  }
+
+  // PO L2 (MD / Ankur Kaplesh)
+  if (statusOrLevel === 2 || statusOrLevel === 'pending_l2') {
+    if (approvalGates.isPoStandin(db, u.email)) return true;
+    return poApproversFor(db, 2).some(a => a.id === userId);
+  }
+
+  return false;
+}
+const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : s === 'pending_coo' ? 'coo' : s === 'pending_cmd' ? 'cmd' : null);
+
+// Approve the current pending level (L1 → COO/CMD/L2 → approved).
 router.post('/vendor-po/:id/po-approve', (req, res) => {
   const db = getDb(); const id = +req.params.id;
-  const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
+  const po = db.prepare('SELECT id, po_approval, total_amount FROM vendor_pos WHERE id=?').get(id);
   if (!po) return res.status(404).json({ error: 'PO not found' });
-  const level = poLevelOf(po.po_approval);
-  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
-  if (!canApprovePoLevel(db, req.user.id, level)) {
-    // Named from the SAME resolver the gate uses, so the message can never point
-    // at someone the gate would reject.
-    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
-    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can approve this step. Set in ⚙ Workflow Settings.` });
+  const status = po.po_approval;
+  if (!['pending_l1', 'pending_l2', 'pending_coo', 'pending_cmd'].includes(status)) {
+    return res.status(400).json({ error: 'This PO is not pending approval' });
   }
-  if (level === 1) {
-    db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+  if (!canApprovePoLevel(db, req.user.id, status)) {
+    let who = 'nobody named';
+    if (status === 'pending_coo') {
+      who = 'COO (coo@securedengineers.com)';
+    } else if (status === 'pending_cmd') {
+      who = 'MD (director@securedengineers.com · Ankur Kaplesh)';
+    } else {
+      const level = status === 'pending_l1' ? 1 : 2;
+      who = poApproversFor(db, level).map(a => a.name).join(', ') || `PO L${level}`;
+    }
+    return res.status(403).json({ error: `Only ${who} or an admin can approve this step.` });
+  }
+
+  if (status === 'pending_l1') {
+    db.prepare("UPDATE vendor_pos SET po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+
+    // Evaluate PO for TSK-0477 (Item Master sheet overrun) and TSK-0824 (General cost estimate)
+    const evalRes = evaluatePoCostEstimate(db, id);
+
+    if (evalRes.has_item_master_overrun) {
+      // TSK-0477: Overrun against Item Master Sheet
+      // < 50K -> COO approval mandatory
+      // >= 50K -> CMD approval mandatory
+      const totalAmt = +po.total_amount || evalRes.total_actual_amount || 0;
+      const isUnder50k = totalAmt < 50000;
+      const nextStatus = isUnder50k ? 'pending_coo' : 'pending_cmd';
+      const overrunGateLabel = isUnder50k ? 'COO Approval (< ₹50K)' : 'CMD Approval (≥ ₹50K)';
+      const note = `TSK-0477: ${evalRes.item_master_overrun_count} item(s) exceed Item Master Sheet rate (up to +${evalRes.item_master_max_overrun_pct}%) on PO of ₹${totalAmt.toLocaleString('en-IN')} — Mandatory ${overrunGateLabel} Required`;
+
+      db.prepare("UPDATE vendor_pos SET po_approval=?, po_approval_note=? WHERE id=?").run(nextStatus, note, id);
+
+      return res.json({
+        ok: true,
+        po_approval: nextStatus,
+        auto_approved: false,
+        approval_note: note,
+        evaluation: evalRes,
+      });
+    }
+
+    // No item master overrun -> check standard auto-approval (TSK-0824)
     const autoRes = autoApprovePoIfEligible(db, id, req.user);
     if (autoRes.auto_approved) {
+      syncApprovedPoItemPrices(db, id, req.user.id, req.user.name);
       return res.json({
         ok: true,
         po_approval: 'approved',
@@ -5076,14 +5186,29 @@ router.post('/vendor-po/:id/po-approve', (req, res) => {
         evaluation: autoRes.evaluation,
       });
     }
+
+    db.prepare("UPDATE vendor_pos SET po_approval='pending_l2' WHERE id=?").run(id);
     return res.json({
       ok: true,
       po_approval: 'pending_l2',
       auto_approved: false,
       evaluation: autoRes.evaluation,
     });
+  } else if (status === 'pending_coo') {
+    const note = `Approved by COO (Item Master Overrun < ₹50K)`;
+    db.prepare("UPDATE vendor_pos SET po_approval='approved', po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP, po_auto_approved=0, po_approval_note=? WHERE id=?")
+      .run(req.user.id, note, id);
+    syncApprovedPoItemPrices(db, id, req.user.id, req.user.name);
+    return res.json({ ok: true, po_approval: 'approved', auto_approved: false, approval_note: note });
+  } else if (status === 'pending_cmd') {
+    const note = `Approved by CMD (Item Master Overrun ≥ ₹50K)`;
+    db.prepare("UPDATE vendor_pos SET po_approval='approved', po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP, po_auto_approved=0, po_approval_note=? WHERE id=?")
+      .run(req.user.id, note, id);
+    syncApprovedPoItemPrices(db, id, req.user.id, req.user.name);
+    return res.json({ ok: true, po_approval: 'approved', auto_approved: false, approval_note: note });
   } else {
     db.prepare("UPDATE vendor_pos SET po_approval='approved', po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP, po_auto_approved=0 WHERE id=?").run(req.user.id, id);
+    syncApprovedPoItemPrices(db, id, req.user.id, req.user.name);
     return res.json({ ok: true, po_approval: 'approved', auto_approved: false });
   }
 });
@@ -5093,11 +5218,19 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
   const db = getDb(); const id = +req.params.id;
   const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
   if (!po) return res.status(404).json({ error: 'PO not found' });
-  const level = poLevelOf(po.po_approval);
-  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
-  if (!canApprovePoLevel(db, req.user.id, level)) {
-    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
-    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can reject this step. Set in ⚙ Workflow Settings.` });
+  const status = po.po_approval;
+  if (!['pending_l1', 'pending_l2', 'pending_coo', 'pending_cmd'].includes(status)) {
+    return res.status(400).json({ error: 'This PO is not pending approval' });
+  }
+  if (!canApprovePoLevel(db, req.user.id, status)) {
+    let who = 'nobody named';
+    if (status === 'pending_coo') who = 'COO (coo@securedengineers.com)';
+    else if (status === 'pending_cmd') who = 'MD (director@securedengineers.com · Ankur Kaplesh)';
+    else {
+      const level = status === 'pending_l1' ? 1 : 2;
+      who = poApproversFor(db, level).map(a => a.name).join(', ') || `PO L${level}`;
+    }
+    return res.status(403).json({ error: `Only ${who} or an admin can reject this step. Set in ⚙ Workflow Settings.` });
   }
   const reason = String(req.body?.reason || '').trim();
   if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });
@@ -5143,7 +5276,7 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
              ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
              ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
              ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
-             ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
+             ir.vendor1_proof, ir.vendor2_proof, ir.vendor3_proof, ir.final_proof, ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
              ir.marketing_rate
         FROM vendor_po_items vpi
         LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
@@ -5170,7 +5303,7 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
                ir.vendor1_name, ir.vendor1_rate, ir.vendor1_terms, ir.vendor1_credit_days,
                ir.vendor2_name, ir.vendor2_rate, ir.vendor2_terms, ir.vendor2_credit_days,
                ir.vendor3_name, ir.vendor3_rate, ir.vendor3_terms, ir.vendor3_credit_days,
-               ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
+               ir.vendor1_proof, ir.vendor2_proof, ir.vendor3_proof, ir.final_proof, ir.final_vendor_name, ir.final_rate, ir.final_terms, ir.final_credit_days,
                ir.marketing_rate
           FROM indent_items ii
           LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -5268,9 +5401,9 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
 
     // Quotes collection summary
     const quotesList = [
-      { num: 1, name: it.vendor1_name, rate: +it.vendor1_rate || 0, terms: it.vendor1_terms, credit_days: it.vendor1_credit_days },
-      { num: 2, name: it.vendor2_name, rate: +it.vendor2_rate || 0, terms: it.vendor2_terms, credit_days: it.vendor2_credit_days },
-      { num: 3, name: it.vendor3_name, rate: +it.vendor3_rate || 0, terms: it.vendor3_terms, credit_days: it.vendor3_credit_days }
+      { num: 1, name: it.vendor1_name, rate: +it.vendor1_rate || 0, terms: it.vendor1_terms, credit_days: it.vendor1_credit_days, proof: it.vendor1_proof },
+      { num: 2, name: it.vendor2_name, rate: +it.vendor2_rate || 0, terms: it.vendor2_terms, credit_days: it.vendor2_credit_days, proof: it.vendor2_proof },
+      { num: 3, name: it.vendor3_name, rate: +it.vendor3_rate || 0, terms: it.vendor3_terms, credit_days: it.vendor3_credit_days, proof: it.vendor3_proof }
     ].filter(q => q.rate > 0 && String(q.name || '').trim());
 
     const minQuoteRate = quotesList.length > 0 ? Math.min(...quotesList.map(q => q.rate)) : null;
@@ -5304,14 +5437,18 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
         vendor1_name: it.vendor1_name,
         vendor1_rate: it.vendor1_rate,
         vendor1_terms: it.vendor1_terms,
+        vendor1_proof: it.vendor1_proof,
         vendor2_name: it.vendor2_name,
         vendor2_rate: it.vendor2_rate,
         vendor2_terms: it.vendor2_terms,
+        vendor2_proof: it.vendor2_proof,
         vendor3_name: it.vendor3_name,
         vendor3_rate: it.vendor3_rate,
         vendor3_terms: it.vendor3_terms,
+        vendor3_proof: it.vendor3_proof,
         final_vendor_name: it.final_vendor_name,
         final_rate: it.final_rate,
+        final_proof: it.final_proof,
         min_quote_rate: minQuoteRate,
         all_quotes: quotesList
       },
@@ -5377,7 +5514,16 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
 
   const level = poLevelOf(po.po_approval);
   const canApprove = level ? canApprovePoLevel(db, req.user.id, level) : false;
-  const approvers = level ? poApproversFor(db, level).map(a => a.name) : [];
+  let approvers = [];
+  if (level === 'coo') {
+    const coo = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'coo@securedengineers.com' OR role = 'coo' LIMIT 1").get();
+    approvers = [coo ? `${coo.name} (${coo.email})` : 'COO (coo@securedengineers.com)'];
+  } else if (level === 'cmd') {
+    const md = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'director@securedengineers.com' OR LOWER(name) LIKE '%ankur%' LIMIT 1").get();
+    approvers = [md ? `${md.name} (${md.email})` : 'MD (director@securedengineers.com)'];
+  } else if (level) {
+    approvers = poApproversFor(db, level).map(a => a.name);
+  }
 
   res.json({
     po,
@@ -8279,10 +8425,10 @@ router.get('/item-rates', (req, res) => {
             i.site_name, i.raised_by_name, i.status as indent_status,
             bb.lead_no,
             r.id as rate_id,
-            r.vendor1_name, r.vendor1_rate, r.vendor1_terms, r.vendor1_credit_days,
-            r.vendor2_name, r.vendor2_rate, r.vendor2_terms, r.vendor2_credit_days,
-            r.vendor3_name, r.vendor3_rate, r.vendor3_terms, r.vendor3_credit_days,
-            r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days,
+            r.vendor1_name, r.vendor1_rate, r.vendor1_terms, r.vendor1_credit_days, r.vendor1_proof,
+            r.vendor2_name, r.vendor2_rate, r.vendor2_terms, r.vendor2_credit_days, r.vendor2_proof,
+            r.vendor3_name, r.vendor3_rate, r.vendor3_terms, r.vendor3_credit_days, r.vendor3_proof,
+            r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.final_proof,
             r.status as rate_status, r.finalized_at, fu.name as finalized_by_name
      FROM indent_items ii
      JOIN indents i ON ii.indent_id = i.id
@@ -8321,6 +8467,25 @@ router.get('/item-rates', (req, res) => {
   res.json(rows);
 });
 
+// TSK-0851: Upload WhatsApp / Gmail screenshot proof for 3 vendor rates
+const proofStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, `rate-proof-${unique}${ext}`);
+  }
+});
+const proofUpload = multer({
+  storage: proofStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
+router.post('/item-rates/upload-proof', needsApprove, proofUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No screenshot proof file provided' });
+  const relPath = '/uploads/' + path.basename(req.file.path);
+  res.json({ ok: true, file_path: relPath, original_name: req.file.originalname });
+});
+
 // Upsert a rate row for an indent item. Any of the 3 vendors (or the
 // finalization fields) may be updated in one call.
 router.post('/item-rates', needsApprove, (req, res) => {
@@ -8335,9 +8500,10 @@ router.post('/item-rates', needsApprove, (req, res) => {
   if (block) return res.status(block.status).json({ error: block.error });
 
   const existing = db.prepare('SELECT id FROM indent_item_rates WHERE indent_item_id=?').get(iiId);
-  const fields = ['vendor1_name','vendor1_rate','vendor1_terms','vendor1_credit_days',
-                  'vendor2_name','vendor2_rate','vendor2_terms','vendor2_credit_days',
-                  'vendor3_name','vendor3_rate','vendor3_terms','vendor3_credit_days'];
+  const fields = ['vendor1_name','vendor1_rate','vendor1_terms','vendor1_credit_days','vendor1_proof',
+                  'vendor2_name','vendor2_rate','vendor2_terms','vendor2_credit_days','vendor2_proof',
+                  'vendor3_name','vendor3_rate','vendor3_terms','vendor3_credit_days','vendor3_proof',
+                  'final_proof'];
   // Mark status 'quoted' once any vendor rate is set
   const anyRate = [b.vendor1_rate, b.vendor2_rate, b.vendor3_rate].some(v => Number(v) > 0);
 
@@ -8487,14 +8653,27 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   // BOTH a name and a rate > 0. Enforced here too so a direct API call / the
   // bulk-fill path can't bypass the button gate.
   const q = db.prepare(
-    `SELECT vendor1_name, vendor1_rate, vendor2_name, vendor2_rate, vendor3_name, vendor3_rate
+    `SELECT vendor1_name, vendor1_rate, vendor1_proof,
+            vendor2_name, vendor2_rate, vendor2_proof,
+            vendor3_name, vendor3_rate, vendor3_proof
        FROM indent_item_rates WHERE id=?`
   ).get(req.params.id);
-  const threeFilled = q && [1, 2, 3].every(n => +q[`vendor${n}_rate`] > 0 && String(q[`vendor${n}_name`] || '').trim());
   if (!q) return res.status(404).json({ error: 'Rate row not found' });
-  // Only the authenticated admin role may finalize without three quotations.
-  if (req.user.role !== 'admin' && !threeFilled) {
-    return res.status(400).json({ error: 'All 3 vendor quotes (name + rate) must be filled before you can finalize the rate.' });
+  const threeFilled = [1, 2, 3].every(n => +q[`vendor${n}_rate`] > 0 && String(q[`vendor${n}_name`] || '').trim());
+
+  // TSK-0851: WhatsApp / Gmail screenshot proof check
+  const winningProof = (final_vendor_name === q.vendor1_name ? q.vendor1_proof :
+                        final_vendor_name === q.vendor2_name ? q.vendor2_proof :
+                        final_vendor_name === q.vendor3_name ? q.vendor3_proof : null) || b.final_proof;
+
+  // Only the authenticated admin role may finalize without three quotations and proof
+  if (req.user.role !== 'admin') {
+    if (!threeFilled) {
+      return res.status(400).json({ error: 'All 3 vendor quotes (name + rate) must be filled before you can finalize the rate.' });
+    }
+    if (!winningProof) {
+      return res.status(400).json({ error: 'TSK-0851: WhatsApp/Gmail screenshot proof is mandatory for the finalized vendor rate.' });
+    }
   }
 
   // Same gate as the upsert — block finalization if the parent indent
@@ -8503,10 +8682,10 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   if (block) return res.status(block.status).json({ error: block.error });
   db.prepare(
     `UPDATE indent_item_rates
-     SET final_rate=?, final_vendor_name=?, final_terms=?, final_credit_days=?,
+     SET final_rate=?, final_vendor_name=?, final_terms=?, final_credit_days=?, final_proof=?,
          status='finalized', finalized_by=?, finalized_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
-  ).run(+final_rate, final_vendor_name, final_terms || null, +final_credit_days || 0, req.user.id, req.params.id);
+  ).run(+final_rate, final_vendor_name, final_terms || null, +final_credit_days || 0, winningProof || null, req.user.id, req.params.id);
 
   // Push the finalized rate into the Item Master so its price reflects the
   // current final price the moment you finalize (mam 2026-07-21). Works for ALL
@@ -9302,10 +9481,10 @@ function ratesItemRows(db, where, params, tail) {
            -- Order Planning table, which is where the dates used to be set).
            (SELECT MIN(opi.planned_end) FROM order_planning_items opi
              WHERE opi.po_item_id = pi.id) AS need_till,
-           rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
-           rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
-           r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,
-           r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
+           rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor1_proof AS rc_v1p, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2, rc.vendor2_proof AS rc_v2p,
+           rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.vendor3_proof AS rc_v3p, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
+           r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor1_proof AS ir_v1p, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2, r.vendor2_proof AS ir_v2p,
+           r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.vendor3_proof AS ir_v3p, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
       ${base.replace('WHERE', `LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
       LEFT JOIN indent_item_rates r ON r.id = (
             SELECT r2.id FROM indent_item_rates r2
@@ -9318,9 +9497,9 @@ function ratesItemRows(db, where, params, tail) {
     // Rate source: the item's RATE CONTRACT wins; else the latest 3-vendor
     // row from the indent flow (a rate fixed either way serves the item).
     const useRc = it.rc_id != null;
-    it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1;
-    it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2;
-    it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3;
+    it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1; it.vendor1_proof = useRc ? it.rc_v1p : it.ir_v1p;
+    it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2; it.vendor2_proof = useRc ? it.rc_v2p : it.ir_v2p;
+    it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3; it.vendor3_proof = useRc ? it.rc_v3p : it.ir_v3p;
     it.final_rate = useRc ? it.rc_final : it.ir_final;
     it.final_vendor_name = useRc ? it.rc_fvn : it.ir_fvn;
     it.finalized_at = useRc ? it.rc_fat : it.ir_fat;
@@ -9398,19 +9577,23 @@ router.put('/rates-items/quotes/:itemMasterId', requirePermission('procurement',
   const txt = (v) => (v && String(v).trim() ? String(v).trim().slice(0, 120) : null);
   const finalRate = num(b.final_rate);
   db.prepare(`INSERT INTO rate_contracts
-      (item_master_id, vendor1_name, vendor1_rate, vendor2_name, vendor2_rate, vendor3_name, vendor3_rate,
+      (item_master_id, vendor1_name, vendor1_rate, vendor1_proof,
+       vendor2_name, vendor2_rate, vendor2_proof,
+       vendor3_name, vendor3_rate, vendor3_proof,
        final_rate, final_vendor_name, finalized_at, updated_by, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP END, ?, CURRENT_TIMESTAMP)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP END, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(item_master_id) DO UPDATE SET
-        vendor1_name=excluded.vendor1_name, vendor1_rate=excluded.vendor1_rate,
-        vendor2_name=excluded.vendor2_name, vendor2_rate=excluded.vendor2_rate,
-        vendor3_name=excluded.vendor3_name, vendor3_rate=excluded.vendor3_rate,
+        vendor1_name=excluded.vendor1_name, vendor1_rate=excluded.vendor1_rate, vendor1_proof=excluded.vendor1_proof,
+        vendor2_name=excluded.vendor2_name, vendor2_rate=excluded.vendor2_rate, vendor2_proof=excluded.vendor2_proof,
+        vendor3_name=excluded.vendor3_name, vendor3_rate=excluded.vendor3_rate, vendor3_proof=excluded.vendor3_proof,
         final_rate=excluded.final_rate, final_vendor_name=excluded.final_vendor_name,
         finalized_at=CASE WHEN excluded.final_rate IS NOT NULL
                           THEN COALESCE(rate_contracts.finalized_at, CURRENT_TIMESTAMP) END,
         updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
-    .run(mid, txt(b.vendor1_name), num(b.vendor1_rate), txt(b.vendor2_name), num(b.vendor2_rate),
-         txt(b.vendor3_name), num(b.vendor3_rate), finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
+    .run(mid, txt(b.vendor1_name), num(b.vendor1_rate), txt(b.vendor1_proof),
+         txt(b.vendor2_name), num(b.vendor2_rate), txt(b.vendor2_proof),
+         txt(b.vendor3_name), num(b.vendor3_rate), txt(b.vendor3_proof),
+         finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
   res.json({ ok: true, locked: finalRate != null });
 });
 

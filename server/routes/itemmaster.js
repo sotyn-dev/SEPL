@@ -1,8 +1,15 @@
 const express = require('express');
+const multer = require('multer');
+const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 }
+});
 
 const ALLOWED_SOURCES = ['PO', 'Quote', 'Manual', 'Online'];
 
@@ -228,6 +235,165 @@ router.get('/dropdown', (req, res) => {
     const pending = i.approval_status === 'pending';
     return { ...i, display_name: pending ? `${base} (Pending approval)` : base, age_status: ageStatus(i.age_days) };
   }));
+});
+
+// GET /template.xlsx — downloadable Excel template for bulk import
+router.get('/template.xlsx', (req, res) => {
+  const wb = XLSX.utils.book_new();
+  const headers = [
+    'Item Code', 'Department', 'Item Name', 'Specification', 'Size',
+    'UOM', 'GST', 'Type', 'Make', 'Rate', 'Vendor Name',
+    'Source Type', 'Bill/PO Number', 'Bill/PO Date'
+  ];
+  const sampleRows = [
+    [
+      'FF0100', 'FF', 'HYDRANT VALVE', 'SS BODY, 63MM INSTANTANEOUS', '63MM',
+      'PCS', '18%', 'PO', 'AGNI', 2500, 'Agni Devices Ltd',
+      'PO', 'SEPL/PO/2026/042', '2026-04-15'
+    ],
+    [
+      '', 'ELE', 'SMOKE DETECTOR', 'OPTICAL PHOTOELECTRIC', 'STANDARD',
+      'NOS', '18%', 'PO', 'SCHNEIDER', 1250, 'Schneider Electric India',
+      'Quote', 'SEPL/QT/2026/101', '2026-05-10'
+    ]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+  ws['!cols'] = [
+    { wch: 14 }, { wch: 14 }, { wch: 28 }, { wch: 32 }, { wch: 14 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 26 },
+    { wch: 14 }, { wch: 20 }, { wch: 14 }
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
+
+  const instructions = [
+    ['SEPL ERP — Item Master Bulk Import Guidelines'],
+    [''],
+    ['Column', 'Description', 'Allowed / Example Values'],
+    ['Item Code', 'Unique code. Leave blank to auto-generate from Department (e.g. FF0001)', 'FF0100, ELE0045, or blank'],
+    ['Department', 'Short code or name of department', 'FF, ELE, PLB, HVAC, CIVIL, SOLAR, UT'],
+    ['Item Name', 'Mandatory. Full descriptive name of the item', 'HYDRANT VALVE, DIESEL PUMP'],
+    ['Specification', 'Technical spec, material grade, pressure rating, etc.', 'SS 304, PN16, 220V Single Phase'],
+    ['Size', 'Dimensions, diameter, length or capacity', '63MM, 25MM, 100NB, 1.5HP'],
+    ['UOM', 'Unit of measurement (defaults to PCS)', 'PCS, NOS, MTR, KG, SET, LTR, PKT'],
+    ['GST', 'GST tax slab (defaults to 18%)', '18%, 12%, 5%, 28%, 0%'],
+    ['Type', 'Item classification (defaults to PO)', 'PO, FOC, RGP'],
+    ['Make', 'Brand or manufacturer', 'AGNI, NEWAGE, TATA, SCHNEIDER'],
+    ['Rate', 'Unit rate / price without currency symbol', '2500, 1250.50'],
+    ['Vendor Name', 'Matched against Vendors Master (case-insensitive)', 'Agni Devices Ltd'],
+    ['Source Type', 'Source of the rate', 'PO, Quote, Manual, Online, Bill'],
+    ['Bill/PO Number', 'Reference PO or Bill / Invoice number', 'SEPL/PO/2026/042'],
+    ['Bill/PO Date', 'Date of PO / invoice for rate aging tracking', 'YYYY-MM-DD or DD/MM/YYYY']
+  ];
+  const wsGuide = XLSX.utils.aoa_to_sheet(instructions);
+  wsGuide['!cols'] = [{ wch: 18 }, { wch: 45 }, { wch: 35 }];
+  XLSX.utils.book_append_sheet(wb, wsGuide, 'Instructions');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', 'attachment; filename="item-master-template.xlsx"');
+  res.send(buf);
+});
+
+// POST /parse-file — parses uploaded Excel (.xlsx, .xls) or CSV file and returns cleaned preview rows
+router.post('/parse-file', requirePermission('item_master', 'create'), uploadMemory.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Please choose an Excel (.xlsx, .xls) or CSV file' });
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    if (!wb.SheetNames || !wb.SheetNames.length) {
+      return res.status(400).json({ error: 'No worksheets found in spreadsheet' });
+    }
+    const sheetName = wb.SheetNames.find(n => /item/i.test(n)) || wb.SheetNames[0];
+    const ws = wb.Sheets[sheetName];
+    if (!ws) return res.status(400).json({ error: 'Spreadsheet sheet is empty' });
+
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (!aoa.length) return res.status(400).json({ error: 'Spreadsheet is empty' });
+
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(10, aoa.length); i++) {
+      const row = (aoa[i] || []).map(c => String(c || '').toLowerCase().trim());
+      if (row.some(c => c.includes('item') || c.includes('name') || c.includes('code') || c.includes('rate') || c.includes('price') || c.includes('dept'))) {
+        headerIdx = i; break;
+      }
+    }
+    if (headerIdx === -1) headerIdx = 0;
+
+    const headers = (aoa[headerIdx] || []).map(h => String(h || '').trim());
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const pick = (row, wantedList, blacklist = []) => {
+      const rowKeys = Object.keys(row);
+      const normWanted = wantedList.map(w => norm(w));
+      const normBlacklist = blacklist.map(b => norm(b));
+
+      // Pass 1: exact match
+      for (const w of normWanted) {
+        const hit = rowKeys.find(rk => norm(rk) === w);
+        if (hit && row[hit] != null && String(row[hit]).trim() !== '') return String(row[hit]).trim();
+      }
+
+      // Pass 2: substring match avoiding blacklisted terms
+      for (const w of normWanted) {
+        const hit = rowKeys.find(rk => {
+          const nrk = norm(rk);
+          if (normBlacklist.some(b => nrk.includes(b))) return false;
+          return nrk === w || nrk.startsWith(w) || nrk.endsWith(w) || (w.length > 3 && nrk.includes(w));
+        });
+        if (hit && row[hit] != null && String(row[hit]).trim() !== '') return String(row[hit]).trim();
+      }
+      return '';
+    };
+
+    const parseDateVal = (val) => {
+      if (!val) return '';
+      if (val instanceof Date && !isNaN(val)) return val.toISOString().split('T')[0];
+      const s = String(val).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+      if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      return s;
+    };
+
+    const items = [];
+    for (let i = headerIdx + 1; i < aoa.length; i++) {
+      const r = aoa[i];
+      if (!r || !Array.isArray(r) || r.every(c => c === '' || c == null)) continue;
+      const rowObj = {};
+      headers.forEach((h, idx) => { if (h) rowObj[h] = r[idx]; });
+
+      const itemName = pick(rowObj, ['itemname', 'itemdescription', 'description', 'particulars', 'productname', 'materialname', 'name'], ['code', 'dept', 'vendor', 'party', 'supplier', 'rate', 'price', 'cost', 'make', 'brand', 'uom', 'unit', 'gst', 'tax', 'date']);
+      if (!itemName) continue;
+      if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(itemName)) continue;
+
+      const rawPrice = pick(rowObj, ['rate', 'price', 'currentprice', 'unitprice', 'cost', 'unitrate', 'rateinr', 'priceinr'], ['tax', 'gst']);
+      const cleanPrice = parseFloat(String(rawPrice || '').replace(/,/g, '')) || 0;
+
+      items.push({
+        item_code: pick(rowObj, ['itemcode', 'code', 'productcode', 'partnumber', 'partno', 'itemno'], ['name', 'dept', 'rate', 'price', 'desc']),
+        department: pick(rowObj, ['department', 'dept', 'category'], ['code', 'name', 'rate', 'price']),
+        item_name: itemName,
+        specification: pick(rowObj, ['specification', 'spec', 'specs', 'technicalspec', 'details'], ['name', 'code', 'rate']),
+        size: pick(rowObj, ['size', 'dimensions', 'dimension', 'capacity'], ['name', 'code', 'rate']),
+        uom: pick(rowObj, ['uom', 'unit', 'unitofmeasurement'], ['price', 'rate', 'cost']) || 'PCS',
+        gst: pick(rowObj, ['gst', 'gstpercent', 'tax', 'taxrate'], []),
+        type: pick(rowObj, ['type', 'itemtype', 'classification'], ['sourcetype']),
+        make: pick(rowObj, ['make', 'brand', 'manufacturer'], []),
+        current_price: cleanPrice,
+        vendor_name: pick(rowObj, ['vendorname', 'vendor', 'supplier', 'suppliername', 'party'], []),
+        source_type: pick(rowObj, ['sourcetype', 'source', 'ratesource'], []) || 'Manual',
+        bill_po_number: pick(rowObj, ['billponumber', 'billno', 'pono', 'billnumber', 'ponumber', 'invoiceno', 'invoicenumber'], ['date']),
+        bill_po_date: parseDateVal(pick(rowObj, ['billpodate', 'billdate', 'podate', 'invoicedate', 'date'], ['number', 'no']))
+      });
+    }
+
+    res.json({
+      items,
+      total: items.length,
+      fileName: req.file.originalname,
+      sheetName
+    });
+  } catch (err) {
+    res.status(400).json({ error: 'Could not read file: ' + err.message });
+  }
 });
 
 // Single item — same shape as list, including age.
@@ -481,54 +647,136 @@ router.delete('/:id', requirePermission('item_master', 'delete'), (req, res) => 
 router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
   if (!items.length) return res.status(400).json({ error: 'No data' });
+  const updateExisting = req.body?.update_existing === true || req.body?.updateExisting === true;
   const db = getDb();
   // Resolve vendor name → id at import time so the CSV can carry a name.
   const vendorByName = new Map(
     db.prepare('SELECT id, LOWER(TRIM(name)) AS k FROM vendors').all().map(r => [r.k, r.id])
   );
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO item_master
+    INSERT INTO item_master
       (item_code, department, item_name, specification, size, uom, gst, type, make,
        current_price, vendor_id, source_type, bill_po_number, bill_po_date,
-       priced_at, priced_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       priced_at, priced_by, approval_status, approved_by, approved_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const update = db.prepare(`
+    UPDATE item_master SET
+      department = CASE WHEN ? != '' THEN ? ELSE department END,
+      item_name = CASE WHEN ? != '' THEN ? ELSE item_name END,
+      specification = CASE WHEN ? != '' THEN ? ELSE specification END,
+      size = CASE WHEN ? != '' THEN ? ELSE size END,
+      uom = CASE WHEN ? != '' THEN ? ELSE uom END,
+      gst = CASE WHEN ? != '' THEN ? ELSE gst END,
+      type = CASE WHEN ? != '' THEN ? ELSE type END,
+      make = CASE WHEN ? != '' THEN ? ELSE make END,
+      current_price = CASE WHEN ? > 0 THEN ? ELSE current_price END,
+      vendor_id = CASE WHEN ? IS NOT NULL THEN ? ELSE vendor_id END,
+      source_type = CASE WHEN ? IS NOT NULL THEN ? ELSE source_type END,
+      bill_po_number = CASE WHEN ? IS NOT NULL THEN ? ELSE bill_po_number END,
+      bill_po_date = CASE WHEN ? IS NOT NULL THEN ? ELSE bill_po_date END,
+      priced_at = CASE WHEN ? > 0 THEN ? ELSE priced_at END,
+      priced_by = CASE WHEN ? > 0 THEN ? ELSE priced_by END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  const findExisting = db.prepare('SELECT * FROM item_master WHERE item_code = ?');
   const { nextSequence } = require('../db/nextSequence');
-  let added = 0, skipped = 0;
+  const isAdmin = req.user.role === 'admin';
+  let added = 0, updated = 0, skipped = 0;
   const errors = [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (!it.item_name || !String(it.item_name).trim()) { errors.push(`Row ${i + 1}: Item name required`); continue; }
-    try {
-      const vendorId = it.vendor_id != null
-        ? +it.vendor_id || null
-        : (it.vendor_name ? vendorByName.get(String(it.vendor_name).trim().toLowerCase()) || null : null);
-      const source = ALLOWED_SOURCES.includes(it.source_type) ? it.source_type : (it.source_type ? null : 'Manual');
-      const price = +it.current_price || 0;
-      // item_code is UNIQUE. A row with no code used to insert as '' — fine
-      // for the FIRST such row, but item_code TEXT UNIQUE treats a repeated
-      // '' as a duplicate, so INSERT OR IGNORE silently dropped every row
-      // after the first one with a blank code, while `added` still counted
-      // it. Generate a real code the same way the single-item add route
-      // does, so every row actually lands.
-      let code = it.item_code && String(it.item_code).trim();
-      if (!code) {
-        const dept = (it.department || 'GEN').toUpperCase().substring(0, 3);
-        code = nextSequence(db, 'item_master', 'item_code', dept, { startFrom: 0, pad: 4 });
+
+  const runBulk = db.transaction(() => {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it.item_name || !String(it.item_name).trim()) {
+        errors.push(`Row ${i + 1}: Item name required`);
+        skipped++;
+        continue;
       }
-      const r = insert.run(
-        code, it.department || '', String(it.item_name).trim(),
-        it.specification || '', it.size || '', it.uom || 'PCS',
-        it.gst || '18%', it.type || 'PO', it.make || '',
-        price, vendorId, source, it.bill_po_number || null, it.bill_po_date || null,
-        price > 0 ? new Date().toISOString() : null,
-        price > 0 ? req.user.id : null,
-      );
-      if (r.changes > 0) added++;
-      else { skipped++; errors.push(`Row ${i + 1}: "${it.item_name}" — code "${code}" already exists, skipped`); }
-    } catch (err) { errors.push(`Row ${i + 1}: ${err.message}`); }
+      if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(String(it.item_name))) {
+        errors.push(`Row ${i + 1}: Corrupted binary data in item name (upload as .xlsx or .csv)`);
+        skipped++;
+        continue;
+      }
+      try {
+        const vendorId = it.vendor_id != null
+          ? +it.vendor_id || null
+          : (it.vendor_name ? vendorByName.get(String(it.vendor_name).trim().toLowerCase()) || null : null);
+        const source = ALLOWED_SOURCES.includes(it.source_type) ? it.source_type : (it.source_type ? null : 'Manual');
+        const price = +it.current_price || 0;
+        let code = it.item_code && String(it.item_code).trim();
+        const existing = code ? findExisting.get(code) : null;
+
+        if (existing) {
+          if (updateExisting) {
+            if (price > 0 && price !== existing.current_price) {
+              snapshotCurrentPrice(db, existing, req.user);
+            }
+            const dept = it.department || '';
+            const name = String(it.item_name).trim();
+            const spec = it.specification || '';
+            const size = it.size || '';
+            const uom = it.uom || 'PCS';
+            const gst = it.gst || '18%';
+            const type = it.type || 'PO';
+            const make = it.make || '';
+            update.run(
+              dept, dept,
+              name, name,
+              spec, spec,
+              size, size,
+              uom, uom,
+              gst, gst,
+              type, type,
+              make, make,
+              price, price,
+              vendorId, vendorId,
+              source, source,
+              it.bill_po_number || null, it.bill_po_number || null,
+              it.bill_po_date || null, it.bill_po_date || null,
+              price, price > 0 ? new Date().toISOString() : null,
+              price, price > 0 ? req.user.id : null,
+              existing.id
+            );
+            updated++;
+          } else {
+            skipped++;
+            errors.push(`Row ${i + 1}: "${it.item_name}" — code "${code}" already exists, skipped`);
+          }
+        } else {
+          if (!code) {
+            const dept = (it.department || 'GEN').toUpperCase().substring(0, 3);
+            code = nextSequence(db, 'item_master', 'item_code', dept, { startFrom: 0, pad: 4 });
+          }
+          const r = insert.run(
+            code, it.department || '', String(it.item_name).trim(),
+            it.specification || '', it.size || '', it.uom || 'PCS',
+            it.gst || '18%', it.type || 'PO', it.make || '',
+            price, vendorId, source, it.bill_po_number || null, it.bill_po_date || null,
+            price > 0 ? new Date().toISOString() : null,
+            price > 0 ? req.user.id : null,
+            isAdmin ? 'approved' : 'pending',
+            isAdmin ? req.user.id : null,
+            isAdmin ? new Date().toISOString() : null
+          );
+          if (r.changes > 0) added++;
+          else { skipped++; errors.push(`Row ${i + 1}: "${it.item_name}" — code "${code}" already exists, skipped`); }
+        }
+      } catch (err) {
+        skipped++;
+        errors.push(`Row ${i + 1}: ${err.message}`);
+      }
+    }
+  });
+
+  try {
+    runBulk();
+  } catch (txErr) {
+    return res.status(500).json({ error: 'Database bulk transaction failed: ' + txErr.message });
   }
-  res.json({ added, skipped, errors, total: items.length });
+
+  res.json({ added, updated, skipped, errors, total: items.length });
 });
 
 module.exports = router;

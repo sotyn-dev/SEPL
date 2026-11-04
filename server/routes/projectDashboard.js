@@ -80,7 +80,7 @@ router.get('/projects', (req, res) => {
       const vpos = getProjectVpos(db, p);
       const totalPoSpend = round2(vpos.reduce((sum, v) => sum + (Number(v.total_amount) || 0), 0));
       const approvedPos = vpos.filter(v => v.po_approval === 'approved');
-      const pendingApprovalPos = vpos.filter(v => ['pending_l1', 'pending_l2'].includes(v.po_approval));
+      const pendingApprovalPos = vpos.filter(v => ['pending_l1', 'pending_l2', 'pending_coo', 'pending_cmd'].includes(v.po_approval));
       const grnCompletedPos = vpos.filter(v => Number(v.grn_count) > 0);
       const overdueDeliveries = vpos.filter(v =>
         v.expected_receipt_date &&
@@ -237,7 +237,7 @@ router.get('/project/:id', (req, res) => {
     const totalPaid = round2(vpos.reduce((sum, v) => sum + (Number(v.paid_amount) || 0), 0));
 
     const approvedPos = vposWithDetails.filter(v => v.po_approval === 'approved');
-    const pendingApprovalPos = vposWithDetails.filter(v => ['pending_l1', 'pending_l2'].includes(v.po_approval));
+    const pendingApprovalPos = vposWithDetails.filter(v => ['pending_l1', 'pending_l2', 'pending_coo', 'pending_cmd'].includes(v.po_approval));
     const grnCompletedPos = vposWithDetails.filter(v => Number(v.grn_count) > 0);
     const overduePos = vposWithDetails.filter(v => v.is_overdue);
 

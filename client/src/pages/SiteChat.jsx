@@ -412,6 +412,7 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
 // already the filtered/paginated page from the server, not the full list, so
 // there's no client-side .filter() left here — just render + scroll-to-load-more.
 const GroupList = memo(function GroupList({ groups, chatFilter = 'all', q, selId, userAvatars, canCreate, archived, hasMore, loadingMore, onLoadMore, onSelect }) {
+  const { user } = useAuth();
   const onScroll = (e) => {
     const el = e.currentTarget;
     if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
@@ -463,7 +464,7 @@ const GroupList = memo(function GroupList({ groups, chatFilter = 'all', q, selId
                   {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.is_dm ? 'Direct message' : `${g.members} member${g.members === 1 ? '' : 's'}`}</span>}</div>
+                  <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? (g.dm_uid === user?.id ? 'You: ' : g.last.sender_name.split(' ')[0] + ': ') : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.is_dm ? (g.dm_uid === user?.id ? 'Message yourself · Notes' : 'Direct message') : `${g.members} member${g.members === 1 ? '' : 's'}`}</span>}</div>
                   {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
                 </div>
               </div>
@@ -1639,12 +1640,14 @@ export default function SiteChat() {
             <>
               <div className="px-3 py-1 flex items-center gap-2 text-white md:py-2" style={{ background: HEADER }}>
                 <button onClick={() => setSel(null)} className="sm:hidden -ml-1 p-1 rounded hover:bg-white/15" title="Back" aria-label="Back to chats"><FiArrowLeft size={22} /></button>
-                <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
+                <Avatar url={sel.is_dm ? (userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] || userAvatars[user?.id]) : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
                   <>
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-sm truncate">{sel.name}</div>
-                      <div className="text-[11px] text-white/80 truncate">Direct message</div>
+                      <div className="text-[11px] text-white/80 truncate">
+                        {members.length === 1 && members[0].user_id === user?.id ? 'Message yourself · Notes & drafts' : 'Direct message'}
+                      </div>
                     </div>
                     {(() => {
                       const oid = members.find(m => m.user_id !== user?.id)?.user_id; return oid ? (
@@ -1849,13 +1852,34 @@ export default function SiteChat() {
           <p className="text-xs text-gray-500">Pick a person to message directly — a private 1-on-1 chat.</p>
           <input className="input" placeholder="Search people…" value={dmSearch} onChange={e => setDmSearch(e.target.value)} autoFocus />
           <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
-            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
+            {(!dmSearch || `${user?.name || ''} you notes self ${user?.username || ''} ${user?.email || ''}`.toLowerCase().includes(dmSearch.toLowerCase())) && (
+              <button
+                key="self-dm"
+                onClick={() => startDm(user?.id, `${user?.name} (You)`)}
+                className="w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-blue-50/70 hover:bg-blue-100/70 border border-blue-200 transition-colors mb-1"
+              >
+                <div className="relative shrink-0">
+                  <Avatar url={userAvatars[user?.id]} name={user?.name} size={30} />
+                  <span className="absolute -bottom-1 -right-1 bg-blue-600 text-white rounded-full px-1 text-[9px] font-bold leading-none py-0.5">
+                    You
+                  </span>
+                </div>
+                <div className="truncate flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-gray-900 truncate">{user?.name}</span>
+                    <span className="text-[10px] bg-blue-600 text-white font-bold px-1.5 py-0.2 rounded-full shrink-0">You</span>
+                  </div>
+                  <div className="text-[11px] text-gray-500 truncate">Message yourself · Notes, links, files & drafts</div>
+                </div>
+              </button>
+            )}
+            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''} ${u.email || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
               <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-blue-50">
                 <Avatar url={userAvatars[u.id]} name={u.name} size={28} />
                 <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
               </button>
             ))}
-            {allUsers.filter(u => u.id !== user?.id).length === 0 && <div className="text-center text-gray-400 text-xs py-4">No other users found</div>}
+            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''} ${u.email || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).length === 0 && (!dmSearch || !`${user?.name || ''} you notes self ${user?.username || ''} ${user?.email || ''}`.toLowerCase().includes(dmSearch.toLowerCase())) && <div className="text-center text-gray-400 text-xs py-4">No users found</div>}
           </div>
         </div>
       </Modal>
@@ -1973,7 +1997,7 @@ export default function SiteChat() {
             <label className="label">Add members <span className="text-gray-400 font-normal normal-case">({newSel.length} selected · you're added automatically)</span></label>
             <input className="input mb-1" placeholder="Search people…" value={newSearch} onChange={e => setNewSearch(e.target.value)} />
             <div className="space-y-0.5 max-h-52 overflow-y-auto border rounded p-1">
-              {allUsers.filter(u => u.id !== user?.id && (!newSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(newSearch.toLowerCase()))).map(u => {
+              {allUsers.filter(u => u.id !== user?.id && (!newSearch || `${u.name} ${u.username || ''} ${u.email || ''}`.toLowerCase().includes(newSearch.toLowerCase()))).map(u => {
                 const on = newSel.includes(u.id);
                 return (
                   <label key={u.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
@@ -2054,7 +2078,7 @@ export default function SiteChat() {
                 <div className="font-semibold text-gray-700 mb-1">Add member</div>
                 <input className="input mb-1" placeholder="Search people…" value={memSearch} onChange={e => setMemSearch(e.target.value)} />
                 <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                  {allUsers.filter(u => !members.some(m => m.user_id === u.id) && (!memSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(memSearch.toLowerCase()))).map(u => (
+                  {allUsers.filter(u => !members.some(m => m.user_id === u.id) && (!memSearch || `${u.name} ${u.username || ''} ${u.email || ''}`.toLowerCase().includes(memSearch.toLowerCase()))).map(u => (
                     <div key={u.id} className="flex items-center justify-between px-2 py-1 border-b">
                       <span>{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
                       <button onClick={() => addMember(u.id)} className="text-xs font-semibold text-blue-700 hover:bg-blue-50 rounded px-2 py-0.5">+ Add</button>

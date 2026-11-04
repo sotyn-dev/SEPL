@@ -98,8 +98,13 @@ function enrichGroups(db, uid, groups, { withMembers = true } = {}) {
     for (const id of dmIds) {
       const mem = byG[id] || [];
       const others = mem.filter(m => m.user_id !== uid);
-      dmTitle[id] = (others.length ? others : mem).map(o => o.user_name).filter(Boolean).join(', ') || 'Direct message';
-      dmUid[id] = (others[0] || mem[0])?.user_id || null;
+      if (others.length === 0 && mem.length === 1 && mem[0].user_id === uid) {
+        dmTitle[id] = `${mem[0].user_name} (You)`;
+        dmUid[id] = uid;
+      } else {
+        dmTitle[id] = (others.length ? others : mem).map(o => o.user_name).filter(Boolean).join(', ') || 'Direct message';
+        dmUid[id] = (others[0] || mem[0])?.user_id || null;
+      }
     }
   }
   const gids = groups.map(g => g.id);
@@ -296,8 +301,15 @@ router.post('/groups', requirePermission('site_chat', 'create'), (req, res) => {
 // Shared by POST /dm and POST /forward so "message someone new" and "forward to
 // someone new" can never drift into two different behaviours.
 function ensureDm(db, me, myName, other) {
-  if (!other || other === me) throw new Error('Pick a different person to message');
-  const existing = db.prepare(`
+  if (!other) throw new Error('Pick a person to message');
+  const isSelf = (other === me);
+  const existing = isSelf ? db.prepare(`
+    SELECT g.id FROM chat_groups g
+    WHERE g.is_dm=1
+      AND (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)=1
+      AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
+    LIMIT 1`).get(me)
+  : db.prepare(`
     SELECT g.id FROM chat_groups g
     WHERE g.is_dm=1
       AND (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)=2
@@ -305,6 +317,17 @@ function ensureDm(db, me, myName, other) {
       AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
     LIMIT 1`).get(me, other);
   if (existing) return existing.id;
+
+  if (isSelf) {
+    const selfName = `${myName || 'You'} (You)`;
+    const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)')
+      .run(selfName, me, myName).lastInsertRowid;
+    db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)')
+      .run(gid, me, myName, me);
+    emitChat(gid, 'changed', { groupId: gid });
+    return gid;
+  }
+
   const otherName = userName(other);
   const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)')
     .run(otherName || 'Direct message', me, myName).lastInsertRowid;
@@ -317,9 +340,9 @@ function ensureDm(db, me, myName, other) {
 router.post('/dm', (req, res) => {
   const db = getChatDb();
   const me = req.user.id, other = +req.body?.user_id;
-  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
+  if (!other) return res.status(400).json({ error: 'Pick a person to message' });
   const gid = ensureDm(db, me, req.user.name || '', other);
-  res.json({ id: gid, name: userName(other) });
+  res.json({ id: gid, name: other === me ? `${req.user.name || 'You'} (You)` : userName(other) });
 });
 
 // ─── FORWARD DIALOG ──────────────────────────────────────────────────────
@@ -369,13 +392,14 @@ router.get('/forward-targets', (req, res) => {
   const out = [];
   const coveredUsers = new Set();
   for (const g of groups) {
-    const peer = g.is_dm ? byId.get(dmPeer[g.id]) : null;
+    const isSelfDm = g.is_dm && !dmPeer[g.id];
+    const peer = g.is_dm ? (isSelfDm ? { id: me, name: `${req.user.name || 'You'} (You)`, department: 'Notes to self', role: 'You' } : byId.get(dmPeer[g.id])) : null;
     if (g.is_dm && !peer) continue;                     // peer deactivated — hide the DM
     if (peer) coveredUsers.add(peer.id);
     out.push(decorate('group', g.id, {
       targetType: 'group', targetId: g.id, groupId: g.id, isDm: !!g.is_dm,
       name: peer ? peer.name : g.name,
-      subtitle: peer ? [peer.department, peer.role].filter(Boolean).join(' · ') : `${g.members} members`,
+      subtitle: isSelfDm ? 'Message yourself · Notes' : (peer ? [peer.department, peer.role].filter(Boolean).join(' · ') : `${g.members} members`),
       phone: peer?.phone || null, email: peer?.email || null,
       avatarUserId: peer?.id || null, lastAt: g.last_at || null,
     }));
@@ -532,7 +556,14 @@ router.get('/:groupId', (req, res) => {
     } catch (_) {}
   }
   // DM header = the OTHER participant's name (per viewer), not the stored name.
-  if (group.is_dm) group.name = members.filter(m => m.user_id !== req.user.id).map(m => m.name).filter(Boolean).join(', ') || group.name;
+  if (group.is_dm) {
+    const others = members.filter(m => m.user_id !== req.user.id);
+    if (others.length === 0 && members.length === 1 && members[0].user_id === req.user.id) {
+      group.name = `${members[0].name} (You)`;
+    } else {
+      group.name = others.map(m => m.name).filter(Boolean).join(', ') || group.name;
+    }
+  }
   const readRows = db.prepare('SELECT user_id,last_read_id,updated_at FROM chat_reads WHERE group_id=?').all(g);
   const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
   const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
