@@ -31,6 +31,7 @@ export function buildPayrollExport(rows, month) {
     ['Weekly-off Sundays', r => r.sunday_count], ['Sundays Worked', r => r.sunday_worked],
     ['Sunday Worked Bonus (days)', r => r.sunday_worked_pay],
     ['CL / Paid Leave', r => r.paid_leaves], ['Holidays', r => r.holiday_days],
+    ['Holidays Worked', r => r.holiday_worked || 0], ['Holiday Worked Bonus (days)', r => r.holiday_worked_pay || 0],
     ['Paid Days', r => r.paid_days], ['Paid Days (Auto)', r => r.paid_days_auto],
     ['Paid Days Adjusted', r => yesNo(r.paid_days_overridden)],
     ['Half Days', r => r.half_days], ['Absent Days', r => r.absent_days],
@@ -859,6 +860,11 @@ export default function Payroll() {
                       ? 'Holidays counted when this month was finalised (frozen snapshot)'
                       : (holidays.length ? `Declared: ${holidays.map(h => `${h.date.slice(8)} ${h.name}`).join(', ')}` : 'No holidays declared this month — use the 🗓 Holidays button')}>
                       {r.holiday_days || 0}
+                      {r.holiday_worked > 0 && (
+                        <div className="text-[9px] font-normal text-emerald-600" title="Extra pay for working on Holiday(s)">
+                          +{r.holiday_worked_pay}d worked
+                        </div>
+                      )}
                     </td>
                     <td className="text-right font-semibold">
                       {r.paid_days}
@@ -910,7 +916,7 @@ export default function Payroll() {
                           title="Food allowance — added to net pay" />
                       ) : (r.food ? <span className="text-emerald-600">+{fmt(r.food)}</span> : '-')}
                     </td>
-                    <td className="text-right font-bold text-emerald-700">{fmtC(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-right font-bold text-emerald-700">{fmtC(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.holiday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.holiday_worked_pay}d Hol work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
                     <td className="text-center">
                       {r.locked ? (
                         <label className={`inline-flex items-center gap-1 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
@@ -990,6 +996,7 @@ export default function Payroll() {
                     <div className="font-semibold text-gray-800">{r.paid_days}</div>
                     <div className="text-[8px] text-gray-400">P {dayBreakdown(r).att}·Sun {dayBreakdown(r).sun}·CL {r.paid_leaves || 0}·Hol {r.holiday_days || 0}</div>
                     {r.sunday_worked > 0 && <div className="text-[8px] text-emerald-600">+{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked</div>}
+                    {r.holiday_worked > 0 && <div className="text-[8px] text-emerald-600">+{r.holiday_worked_pay}d for {r.holiday_worked} Hol worked</div>}
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">OT (&gt;9h)</div>
@@ -1252,12 +1259,12 @@ export default function Payroll() {
                 <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
                 <Stat label="Sundays" value={`${detail.sunday_count ?? 0}${detail.sunday_worked > 0 ? ` (+${detail.sunday_worked_pay}d)` : ''}`} color="text-blue-600" />
                 <Stat label="Paid CL/Leave" value={`${detail.paid_leaves}${detail.cl_overridden ? ' (Manual)' : ''}`} color="text-purple-600" />
-                <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
+                <Stat label="Holidays" value={`${detail.holiday_days || 0}${detail.holiday_worked > 0 ? ` (+${detail.holiday_worked_pay}d)` : ''}`} color="text-indigo-600" />
                 <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
               </div>
               <div className="bg-emerald-50/70 border border-emerald-200 rounded p-2.5 text-xs text-gray-700 mt-2">
                 <span className="font-semibold text-emerald-800">Paid Days Formula: </span>
-                {detail.present_days} (Attendance{detail.sunday_worked_pay > 0 ? `, incl. ${detail.sunday_worked_pay}d Sun bonus` : ''}) + {detail.sunday_count ?? 0} (Sundays){detail.paid_leaves ? ` + ${detail.paid_leaves} (Paid Leaves)` : ''}{detail.holiday_days ? ` + ${detail.holiday_days} (Holidays)` : ''} = <span className="font-bold text-emerald-700">{detail.paid_days} Paid Days</span>
+                {detail.present_days} (Attendance{detail.sunday_worked_pay > 0 ? `, incl. ${detail.sunday_worked_pay}d Sun bonus` : ''}{detail.holiday_worked_pay > 0 ? `, ${detail.holiday_worked_pay}d Hol bonus` : ''}) + {detail.sunday_count ?? 0} (Sundays){detail.paid_leaves ? ` + ${detail.paid_leaves} (Paid Leaves)` : ''}{detail.holiday_days ? ` + ${detail.holiday_days} (Holidays)` : ''} = <span className="font-bold text-emerald-700">{detail.paid_days} Paid Days</span>
                 {detail.cl_overridden && (
                   <span className="block text-[11px] text-purple-700 mt-0.5">
                     * Casual Leave was manually adjusted to {detail.paid_leaves} days (auto was {detail.paid_leaves_auto ?? 1}).

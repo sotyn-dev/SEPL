@@ -350,6 +350,7 @@ export default function SendSalaryEmailModal({
                 {singleTarget.half_days > 0 && <span className="text-orange-700"><strong>Half Days:</strong> {singleTarget.half_days} (-{singleTarget.half_days * 0.5}d)</span>}
                 {singleTarget.absent_days > 0 && <span className="text-red-700"><strong>Absent (LOP):</strong> {singleTarget.absent_days}</span>}
                 {singleTarget.sunday_worked > 0 && <span className="text-emerald-700"><strong>Sunday Worked:</strong> +{singleTarget.sunday_worked_pay}d bonus</span>}
+                {singleTarget.holiday_worked > 0 && <span className="text-emerald-700"><strong>Holiday Worked:</strong> +{singleTarget.holiday_worked_pay}d bonus</span>}
               </div>
 
               {/* Adjustments: OT, Food, Deductions, Net Pay */}

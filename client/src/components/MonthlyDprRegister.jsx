@@ -21,6 +21,29 @@ import {
 import { exportCsv } from '../utils/exportCsv';
 import { fmtINR } from './EngineerPerformance';
 
+// Clean engineer label for the select dropdown: prevents dumping all system roles and avoids duplicate parentheses
+const formatEngineerOption = (e) => {
+  if (!e) return '';
+  const name = String(e.name || '').trim();
+  // If name already contains a parenthesized designation e.g. "Munna Kumar Thakur (Site Engineer)"
+  if (/\(.*(engineer|eng|foreman|helper|incharge).*\)/i.test(name)) {
+    return name;
+  }
+  // If single clean role provided from backend
+  if (e.role_name && !e.role_name.includes(',')) {
+    return `${name} (${e.role_name})`;
+  }
+  // Otherwise pick only the relevant engineering role from role_names
+  const r = String(e.role_names || '').toLowerCase();
+  let tag = '';
+  if (r.includes('foreman')) tag = 'Foreman';
+  else if (/\b(jr|junior|trainee)\b/i.test(r)) tag = 'Jr. Site Eng';
+  else if (r.includes('billing')) tag = 'Billing Engineer';
+  else if (r.includes('site eng') || r.includes('engineer')) tag = 'Site Engineer';
+
+  return tag ? `${name} (${tag})` : name;
+};
+
 export default function MonthlyDprRegister() {
   const [engineers, setEngineers] = useState([]);
   const [selectedEngId, setSelectedEngId] = useState('');
@@ -132,7 +155,7 @@ export default function MonthlyDprRegister() {
               >
                 {engineers.map(e => (
                   <option key={e.id} value={e.id}>
-                    {e.name} {e.role_names ? `(${e.role_names})` : ''}
+                    {formatEngineerOption(e)}
                   </option>
                 ))}
               </select>

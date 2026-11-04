@@ -313,6 +313,7 @@ export default function SalarySlipPrint() {
           {data.paid_leaves ? ` • ${data.paid_leaves} paid leave(s)` : ''}
           {data.unpaid_leaves ? ` • ${data.unpaid_leaves} unpaid leave(s)` : ''}
           {data.sunday_worked ? ` • ${data.sunday_worked} Sunday(s) worked (extra +${data.sunday_worked_pay} day pay)` : ''}
+          {data.holiday_worked ? ` • ${data.holiday_worked} Holiday(s) worked (extra +${data.holiday_worked_pay} day pay)` : ''}
         </div>
 
         {/* Footer */}
