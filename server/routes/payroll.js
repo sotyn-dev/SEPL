@@ -50,6 +50,8 @@ function ensureHolidaysTable(db) {
   // Snapshot column for finalised months so locked history keeps its own
   // holiday count (ALTER is idempotent-guarded; older DBs get the column).
   try { db.exec(`ALTER TABLE payroll_runs ADD COLUMN holiday_days REAL DEFAULT 0`); } catch (_) { /* exists */ }
+  try { db.exec(`ALTER TABLE payroll_runs ADD COLUMN holiday_worked INTEGER DEFAULT 0`); } catch (_) { /* exists */ }
+  try { db.exec(`ALTER TABLE payroll_runs ADD COLUMN holiday_worked_pay REAL DEFAULT 0`); } catch (_) { /* exists */ }
   _holidaysReady = true;
 }
 function getHolidaysForMonth(db, month) {
@@ -208,6 +210,7 @@ function generateSalarySlipEmailContent(data, month, emp, isTest = false) {
   if (absentDays) attParts.push(`${absentDays} absent day(s)`);
   if (lateMarks) attParts.push(`${lateMarks} late arrival(s)`);
   if (sundayWorked) attParts.push(`${sundayWorked} Sunday(s) worked (+${data.sunday_worked_pay || 0}d bonus)`);
+  if (data.holiday_worked) attParts.push(`${data.holiday_worked} Holiday(s) worked (+${data.holiday_worked_pay || 0}d bonus)`);
   const attSummary = attParts.join(' • ');
 
   const html = `<!DOCTYPE html>
@@ -731,6 +734,8 @@ function calculateForEmployee(db, settings, employee, month) {
   let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
   let holidayDays = 0; // declared paid holidays (payroll_holidays) + admin 'holiday' marks
+  let holidayWorked = 0; // # of declared holidays worked with bonus
+  let holidayWorkedPay = 0; // extra day-equivalents credited for holiday work (e.g. +1 or +0.5)
   let latePenalty = 0; // accumulated Rs deduction for late punches over grace
   let missedPunchOutCount = 0; // number of times employee forgot to punch out this month (max 3 grace)
   const breakdown = []; // per-day for slip
@@ -883,7 +888,7 @@ function calculateForEmployee(db, settings, employee, month) {
       dayPay = 1; // base declared holiday pay
       holidayDays += 1;
       dayLabel = 'holiday_paid';
-      let holidayWorked = false;
+      let holidayWorkedToday = false;
       let holidayBonus = 0;
       let note = '';
       let dayOtHours = 0;
@@ -897,12 +902,15 @@ function calculateForEmployee(db, settings, employee, month) {
         hrs = round2(hrs);
       }
 
-      // If employee worked (punched in or has recorded hours) on the declared holiday
-      if (att && (att.punch_in_time || hrs > 0)) {
-        holidayWorked = true;
+      // If employee worked (punched in, recorded hours, or admin marked present) on the declared holiday
+      const hasWorkOnHoliday = !!(att && (att.punch_in_time || hrs > 0 || ((att.admin_marked || att.regularized_at) && ['present', 'late', 'half_day', 'short_day'].includes(String(att.status || '').toLowerCase()))));
+      if (hasWorkOnHoliday) {
+        holidayWorkedToday = true;
         dayLabel = 'holiday_worked';
+        const isAdminFull = !!(att && (att.admin_marked || att.regularized_at) && ['present', 'late'].includes(String(att.status || '').toLowerCase()));
+        const isAdminHalf = !!(att && (att.admin_marked || att.regularized_at) && ['half_day', 'short_day'].includes(String(att.status || '').toLowerCase()));
 
-        if (hrs >= 8) {
+        if (hrs >= 8 || (isAdminFull && hrs === 0)) {
           // 8 hours or above -> Full Day work credit (+1.0 day -> Total 2.0 days)
           holidayBonus = 1.0;
           dayPay = 2.0;
@@ -916,7 +924,7 @@ function calculateForEmployee(db, settings, employee, month) {
               note += ` (${dayOtHours}h OT credited)`;
             }
           }
-        } else if (hrs >= 4) {
+        } else if (hrs >= 4 || (isAdminHalf && hrs === 0)) {
           // 4 hours to < 8 hours -> Half Day work credit (+0.5 day -> Total 1.5 days)
           holidayBonus = 0.5;
           dayPay = 1.5;
@@ -935,6 +943,11 @@ function calculateForEmployee(db, settings, employee, month) {
         }
       }
 
+      if (holidayWorkedToday && holidayBonus > 0) {
+        holidayWorked += 1;
+        holidayWorkedPay = round2(holidayWorkedPay + holidayBonus);
+      }
+
       breakdown.push({
         date: dateStr,
         day: dayName(year, mm, day),
@@ -947,7 +960,7 @@ function calculateForEmployee(db, settings, employee, month) {
           punch_out: att.punch_out_time || null,
           hours: hrs,
           ot_hours: dayOtHours,
-          holiday_worked: holidayWorked,
+          holiday_worked: holidayWorkedToday,
           holiday_bonus: holidayBonus || undefined,
         } : {}),
       });
@@ -1519,7 +1532,8 @@ function calculateForEmployee(db, settings, employee, month) {
   const perHourRate = round2((baseSalary / 30) / (settings.ot_threshold_hours || 9));
   const otPay = round2(otHours * perHourRate * (settings.ot_rate_multiplier || 1));
 
-  const basePaidDays = Math.max(0, round2(effPaidDays - (sundayWorkedPay || 0)));
+  const totalExtraDays = round2((sundayWorkedPay || 0) + (holidayWorkedPay || 0));
+  const basePaidDays = Math.max(0, round2(effPaidDays - totalExtraDays));
   const isFullMonthActive = (!hasJoinDate || joinDate <= startDate) && (!effectiveExitDate || effectiveExitDate >= endDate);
 
   let grossEarned = 0;
@@ -1528,12 +1542,12 @@ function calculateForEmployee(db, settings, employee, month) {
     // Unexcused absent days deduct at (baseSalary / 30) per day.
     const unpaidDays = Math.max(0, totalDays - basePaidDays);
     const baseGross = unpaidDays === 0 ? baseSalary : Math.max(0, baseSalary - (unpaidDays * (baseSalary / 30)));
-    grossEarned = round2(baseGross + (sundayWorkedPay * (baseSalary / 30)));
+    grossEarned = round2(baseGross + (totalExtraDays * (baseSalary / 30)));
   } else {
     // Partial month active (mid-month joiner or mid-month exit):
     // Paid based on earned days at (baseSalary / 30) per day, capped at baseSalary
     const baseGross = Math.min(baseSalary, basePaidDays * (baseSalary / 30));
-    grossEarned = round2(baseGross + (sundayWorkedPay * (baseSalary / 30)));
+    grossEarned = round2(baseGross + (totalExtraDays * (baseSalary / 30)));
   }
 
   // Salary breakdown — split the prorated gross into Basic / Conveyance /
@@ -1587,6 +1601,8 @@ function calculateForEmployee(db, settings, employee, month) {
     has_attendance: hasWorkedInMonth,
     has_leave: hasApprovedLeaveInMonth,
     holiday_days: round2(holidayDays),
+    holiday_worked: holidayWorked,
+    holiday_worked_pay: round2(holidayWorkedPay),
     missed_punch_out_count: missedPunchOutCount,
     missed_punch_out_grace: Math.min(missedPunchOutCount, 3),
     sunday_worked: sundayWorked,            // # of Sundays the person worked
@@ -1678,6 +1694,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     const month = req.query.month;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
+    ensureHolidaysTable(db);
     const settings = getSettings(db);
     const employees = getEligiblePayrollEmployees(db, month);
     // Active employees with NO salary set are silently excluded from payroll —
@@ -1707,6 +1724,9 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
           designation: emp.designation,
           status: emp.status || snap.status,
           sunday_count: snap.sundays,
+          holiday_days: snap.holiday_days || 0,
+          holiday_worked: snap.holiday_worked || 0,
+          holiday_worked_pay: snap.holiday_worked_pay || 0,
           locked: true,
           email: emp.personal_email || '',
           personal_email: emp.personal_email || '',
@@ -1742,6 +1762,7 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
     const month = req.query.month;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
+    ensureHolidaysTable(db);
     const settings = getSettings(db);
     const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
@@ -1766,6 +1787,9 @@ router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req
           ...live,
           ...snap,
           sunday_count: snap.sundays,
+          holiday_days: snap.holiday_days != null ? snap.holiday_days : (live.holiday_days || 0),
+          holiday_worked: snap.holiday_worked != null ? snap.holiday_worked : (live.holiday_worked || 0),
+          holiday_worked_pay: snap.holiday_worked_pay != null ? snap.holiday_worked_pay : (live.holiday_worked_pay || 0),
           locked: true,
           email: emp.personal_email || '',
           personal_email: emp.personal_email || '',
@@ -1837,9 +1861,9 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
       absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
       ot_hours, gross_earned, ot_pay, ot_eligible, ot_per_hour_rate, ot_threshold, net_before_ot, roster, deductions, net_pay,
       basic_pay, conveyance, hra, adhoc, misc, advance,
-      present_days, sunday_worked_pay, holiday_days,
+      present_days, sunday_worked_pay, holiday_days, holiday_worked, holiday_worked_pay,
       breakdown_json, status, finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
@@ -1849,7 +1873,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
           r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
           r.ot_hours, r.gross_earned, r.ot_pay, (emp.ot_eligible ? 1 : 0), r.ot_per_hour_rate, r.ot_threshold, r.net_before_ot, (emp.roster || 'general'), r.deductions, r.net_pay,
           r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc, r.advance,
-          r.present_days, r.sunday_worked_pay, r.holiday_days || 0,
+          r.present_days, r.sunday_worked_pay, r.holiday_days || 0, r.holiday_worked || 0, r.holiday_worked_pay || 0,
           JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
       }

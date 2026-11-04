@@ -751,6 +751,46 @@ test('inactive employee with zero attendance in month receives zero holiday pay,
   assert.equal(oct2.label, 'holiday_unpaid');
 });
 
+test("working on declared holiday earns double pay (+1.0d or +0.5d bonus cash added to gross earned and net pay)", () => {
+  const emp = { ...employee, salary: 30000, join_date: "2024-01-01" };
+  const holiday = { date: "2025-10-02", name: "Gandhi Jayanti" };
+  const allAtt = [];
+  for (let d = 1; d <= 31; d++) {
+    const dt = new Date(2025, 9, d);
+    if (dt.getDay() !== 0) {
+      allAtt.push({
+        date: "2025-10-" + String(d).padStart(2, "0"),
+        punch_in_time: "09:30",
+        punch_out_time: "18:30",
+        total_hours: 9
+      });
+    }
+  }
 
+  // Case 1: Worked on holiday 8.5h -> earns base salary + 1 extra day bonus (30,000 + 1,000 = 31,000)
+  const dbHolidayWorkedFull = fixture({ holidays: [holiday], attendance: allAtt });
+  const resFull = calculate(dbHolidayWorkedFull, settings, emp, "2025-10");
+  assert.equal(resFull.holiday_worked, 1, "Should record 1 holiday worked");
+  assert.equal(resFull.holiday_worked_pay, 1, "Should record +1.0d holiday worked bonus");
+  assert.equal(resFull.per_day_rate, 1000);
+  assert.equal(resFull.gross_earned, 31000, "Gross earned must include +1d pay for working on holiday (30,000 + 1,000)");
+  assert.equal(resFull.net_pay, 31000, "Net pay must reflect the +1d holiday work payout");
 
+  // Case 2: Worked on holiday 5h (half-day credit) -> earns base salary + 0.5 extra day bonus (30,000 + 500 = 30,500)
+  const attHalf = allAtt.map(a => a.date === "2025-10-02" ? { ...a, punch_in_time: "09:30", punch_out_time: "14:30", total_hours: 5 } : a);
+  const dbHolidayWorkedHalf = fixture({ holidays: [holiday], attendance: attHalf });
+  const resHalf = calculate(dbHolidayWorkedHalf, settings, emp, "2025-10");
+  assert.equal(resHalf.holiday_worked, 1);
+  assert.equal(resHalf.holiday_worked_pay, 0.5, "Should record +0.5d holiday worked bonus");
+  assert.equal(resHalf.gross_earned, 30500, "Gross earned must include +0.5d pay for working half-day on holiday (30,000 + 500)");
+  assert.equal(resHalf.net_pay, 30500);
 
+  // Case 3: Did not work on holiday -> regular base salary (30,000)
+  const attNoHoliday = allAtt.filter(a => a.date !== "2025-10-02");
+  const dbUnworkedHoliday = fixture({ holidays: [holiday], attendance: attNoHoliday });
+  const resUnworked = calculate(dbUnworkedHoliday, settings, emp, "2025-10");
+  assert.equal(resUnworked.holiday_worked, 0);
+  assert.equal(resUnworked.holiday_worked_pay, 0);
+  assert.equal(resUnworked.gross_earned, 30000, "Unworked holiday pays 100% normal base salary without extra cash");
+  assert.equal(resUnworked.net_pay, 30000);
+});

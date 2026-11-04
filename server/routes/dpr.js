@@ -3055,6 +3055,16 @@ router.get('/monthly-register', (req, res) => {
      ORDER BY u.name
   `).all();
 
+  // Clean engineer roles so a single engineering designation is returned instead of dumping all user roles
+  engineers.forEach(e => {
+    const d = String(e.role_names || '').toLowerCase();
+    let designation = 'Site Engineer';
+    if (d.includes('foreman')) designation = 'Foreman';
+    else if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d)) designation = 'Jr. Site Eng';
+    else if (d.includes('billing')) designation = 'Billing Engineer';
+    e.role_name = designation;
+  });
+
   if (!canSeeAll) {
     const isSelfEng = engineers.some(e => e.id === uid);
     if (isSelfEng) engineers = engineers.filter(e => e.id === uid);
