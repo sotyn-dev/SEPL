@@ -33,7 +33,7 @@ router.get('/pending-approvals', (req, res) => {
       count: safe("SELECT COUNT(*) c FROM indents WHERE status IN ('submitted','l1_approved','crm_approved')"),
       link: '/procurement?tab=indents' },
     { key: 'vendor_po', label: 'Vendor PO Approval', icon: '🧾',
-      count: safe("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval IN ('pending_l1','pending_l2')"),
+      count: safe("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval IN ('pending_l1','pending_l2','pending_coo','pending_cmd')"),
       link: '/procurement?tab=vendorpo' },
     { key: 'payment', label: 'Payment Approval', icon: '💸',
       // Director's inbox shows ONLY what is pending at L3 (MD) — current_step=3
@@ -72,7 +72,7 @@ router.get('/pending-approvals/:key', (req, res) => {
       // actual PO approval screen opens (mam 2026-06-26).
       items = all(`SELECT vp.id, vp.po_number AS title, COALESCE(v.name,'—') AS subtitle, vp.po_approval AS meta, vp.total_amount AS amount
                      FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
-                     WHERE vp.po_approval IN ('pending_l1','pending_l2') ORDER BY vp.created_at DESC LIMIT 200`)
+                     WHERE vp.po_approval IN ('pending_l1','pending_l2','pending_coo','pending_cmd') ORDER BY vp.created_at DESC LIMIT 200`)
         .map(r => ({ ...r, key: 'vendor_po', link: '/procurement?tab=vendorpo&subtab=pending', pdf: `/vendor-po/${r.id}/print` }));
       break;
     case 'payment':

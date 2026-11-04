@@ -3212,6 +3212,14 @@ function initializeDatabase() {
     // Suggestion-only AI "marketing rate" per indent item on the Vendor Rates
     // table (mam 2026-06-19) — does NOT affect the 3 vendor rates.
     ['indent_item_rates', 'marketing_rate REAL'],
+    // TSK-0851: Mandatory proof (WhatsApp/Gmail screenshot) for vendor rates
+    ['indent_item_rates', 'vendor1_proof TEXT'],
+    ['indent_item_rates', 'vendor2_proof TEXT'],
+    ['indent_item_rates', 'vendor3_proof TEXT'],
+    ['indent_item_rates', 'final_proof TEXT'],
+    ['rate_contracts', 'vendor1_proof TEXT'],
+    ['rate_contracts', 'vendor2_proof TEXT'],
+    ['rate_contracts', 'vendor3_proof TEXT'],
     // Vendor PO 2-level approval (mam 2026-06-19: "after PO make 2 approval
     // need L1 Nitin Jain, L2 Ankur Kaplesh"). New POs start 'pending_l1';
     // existing POs default to 'approved' so they're grandfathered, not parked.

@@ -14,6 +14,7 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [previewProof, setPreviewProof] = useState(null); // { url, title }
 
   const loadData = async () => {
     if (!poId) return;
@@ -143,6 +144,8 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                 }`}>
                   {po.po_approval === 'approved' ? '✓ Approved' :
                    po.po_approval === 'rejected' ? '✕ Rejected' :
+                   po.po_approval === 'pending_coo' ? 'Pending COO Approval (< ₹50K Overrun)' :
+                   po.po_approval === 'pending_cmd' ? 'Pending MD Approval (≥ ₹50K Overrun)' :
                    `Pending Approval (${po.po_approval === 'pending_l1' ? 'L1' : 'L2'})`}
                 </span>
                 {+po.po_auto_approved === 1 && (
@@ -310,6 +313,17 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                             ★ Lowest Quote
                           </span>
                         )}
+                        {it.quotes?.final_proof && (
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewProof({ url: it.quotes.final_proof, title: `Final Quotation Proof — ${po.vendor_name || 'Selected Vendor'}` })}
+                              className="inline-flex items-center gap-0.5 text-[9px] text-blue-600 hover:underline mt-0.5 font-medium cursor-pointer bg-transparent border-0 p-0"
+                            >
+                              📎 Rate Proof
+                            </button>
+                          </div>
+                        )}
                       </td>
 
                       {/* Indent Quote 1 */}
@@ -318,6 +332,15 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                           <div>
                             <div className="font-semibold text-gray-800">{inr(it.quotes.vendor1_rate)}</div>
                             <div className="text-[10px] text-gray-500 truncate max-w-[90px]" title={it.quotes.vendor1_name}>{it.quotes.vendor1_name}</div>
+                            {it.quotes?.vendor1_proof && (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewProof({ url: it.quotes.vendor1_proof, title: `Quotation Proof — ${it.quotes.vendor1_name || 'Vendor 1'}` })}
+                                className="inline-flex items-center gap-0.5 text-[9px] text-blue-600 hover:underline mt-0.5 font-medium cursor-pointer bg-transparent border-0 p-0"
+                              >
+                                📎 Proof
+                              </button>
+                            )}
                           </div>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
@@ -328,6 +351,15 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                           <div>
                             <div className="font-semibold text-gray-800">{inr(it.quotes.vendor2_rate)}</div>
                             <div className="text-[10px] text-gray-500 truncate max-w-[90px]" title={it.quotes.vendor2_name}>{it.quotes.vendor2_name}</div>
+                            {it.quotes?.vendor2_proof && (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewProof({ url: it.quotes.vendor2_proof, title: `Quotation Proof — ${it.quotes.vendor2_name || 'Vendor 2'}` })}
+                                className="inline-flex items-center gap-0.5 text-[9px] text-blue-600 hover:underline mt-0.5 font-medium cursor-pointer bg-transparent border-0 p-0"
+                              >
+                                📎 Proof
+                              </button>
+                            )}
                           </div>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
@@ -338,6 +370,15 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                           <div>
                             <div className="font-semibold text-gray-800">{inr(it.quotes.vendor3_rate)}</div>
                             <div className="text-[10px] text-gray-500 truncate max-w-[90px]" title={it.quotes.vendor3_name}>{it.quotes.vendor3_name}</div>
+                            {it.quotes?.vendor3_proof && (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewProof({ url: it.quotes.vendor3_proof, title: `Quotation Proof — ${it.quotes.vendor3_name || 'Vendor 3'}` })}
+                                className="inline-flex items-center gap-0.5 text-[9px] text-blue-600 hover:underline mt-0.5 font-medium cursor-pointer bg-transparent border-0 p-0"
+                              >
+                                📎 Proof
+                              </button>
+                            )}
                           </div>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
@@ -512,7 +553,7 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
                     disabled={actionLoading}
                     className="btn btn-success text-xs font-bold flex items-center gap-1.5 shadow"
                   >
-                    <FiCheck size={14} /> Approve PO ({approval.pending_level === 1 ? 'L1' : 'L2 · MD'})
+                    <FiCheck size={14} /> Approve PO ({po.po_approval === 'pending_coo' ? 'COO' : po.po_approval === 'pending_cmd' ? 'MD' : approval.pending_level === 1 ? 'L1' : 'L2 · MD'})
                   </button>
                 </>
               ) : (
@@ -529,6 +570,53 @@ export default function PoComparisonSheetModal({ isOpen, onClose, poId, onPoActi
           </div>
         </div>
       )}
+      {/* TSK-0851: In-app Quotation Proof Lightbox Modal */}
+      <Modal
+        isOpen={Boolean(previewProof)}
+        onClose={() => setPreviewProof(null)}
+        title={previewProof?.title || 'Quotation Proof Preview'}
+        wide
+        zIndex="z-[80]"
+      >
+        <div className="flex flex-col items-center justify-center p-3 bg-gray-50 rounded-lg min-h-[320px]">
+          {previewProof?.url && (previewProof.url.toLowerCase().split('?')[0].endsWith('.pdf') ? (
+            <iframe
+              src={previewProof.url}
+              title="Quotation Proof PDF"
+              className="w-full h-[75vh] border rounded shadow-sm bg-white"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center w-full">
+              <img
+                src={previewProof?.url}
+                alt="Quotation Proof"
+                className="max-h-[75vh] max-w-full object-contain rounded shadow border border-gray-200 bg-white"
+              />
+            </div>
+          ))}
+          <div className="flex flex-wrap justify-between items-center w-full mt-4 pt-3 border-t border-gray-200 text-xs text-gray-600 gap-2">
+            <span>Direct in-app preview · WhatsApp / Gmail Proof</span>
+            <div className="flex items-center gap-3">
+              <a
+                href={previewProof?.url}
+                target="_blank"
+                rel="noreferrer"
+                download
+                className="text-blue-600 hover:text-blue-800 underline font-medium"
+              >
+                ⬇ Download / Open Full
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewProof(null)}
+                className="btn btn-secondary text-xs py-1 px-4"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 }

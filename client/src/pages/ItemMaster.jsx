@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import NumberedTable from '../components/NumberedTable';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
@@ -87,6 +88,11 @@ export default function ItemMaster() {
   const [pendingCount, setPendingCount] = useState(0);
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
+  const [parsingFile, setParsingFile] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [updateExisting, setUpdateExisting] = useState(true);
+  const [importErrors, setImportErrors] = useState([]);
+  const [uploadedFileName, setUploadedFileName] = useState('');
   const [pipeModal, setPipeModal] = useState(false);
   const [pipeWeights, setPipeWeights] = useState([]);  // lookup for the item form dropdown
   const [lightbox, setLightbox] = useState(null);      // photo URL shown full-size on click
@@ -277,46 +283,347 @@ export default function ItemMaster() {
     toast.success(`Exported ${all.length} items`);
   };
 
+  const downloadExcelTemplate = () => {
+    try {
+      const wb = XLSX.utils.book_new();
+      const headers = [
+        'Item Code', 'Department', 'Item Name', 'Specification', 'Size',
+        'UOM', 'GST', 'Type', 'Make', 'Rate', 'Vendor Name',
+        'Source Type', 'Bill/PO Number', 'Bill/PO Date'
+      ];
+      const sampleRows = [
+        [
+          'FF0100', 'FF', 'HYDRANT VALVE', 'SS BODY, 63MM INSTANTANEOUS', '63MM',
+          'PCS', '18%', 'PO', 'AGNI', 2500, 'Agni Devices Ltd',
+          'PO', 'SEPL/PO/2026/042', '2026-04-15'
+        ],
+        [
+          '', 'ELE', 'SMOKE DETECTOR', 'OPTICAL PHOTOELECTRIC', 'STANDARD',
+          'NOS', '18%', 'PO', 'SCHNEIDER', 1250, 'Schneider Electric India',
+          'Quote', 'SEPL/QT/2026/101', '2026-05-10'
+        ]
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+      ws['!cols'] = [
+        { wch: 14 }, { wch: 14 }, { wch: 28 }, { wch: 32 }, { wch: 14 },
+        { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 26 },
+        { wch: 14 }, { wch: 20 }, { wch: 14 }
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, 'Item Master');
+
+      const instructions = [
+        ['SEPL ERP — Item Master Bulk Import Guidelines'],
+        [''],
+        ['Column', 'Description', 'Allowed / Example Values'],
+        ['Item Code', 'Unique code. Leave blank to auto-generate from Department (e.g. FF0001)', 'FF0100, ELE0045, or blank'],
+        ['Department', 'Short code or name of department', 'FF, ELE, PLB, HVAC, CIVIL, SOLAR, UT'],
+        ['Item Name', 'Mandatory. Full descriptive name of the item', 'HYDRANT VALVE, DIESEL PUMP'],
+        ['Specification', 'Technical spec, material grade, pressure rating, etc.', 'SS 304, PN16, 220V Single Phase'],
+        ['Size', 'Dimensions, diameter, length or capacity', '63MM, 25MM, 100NB, 1.5HP'],
+        ['UOM', 'Unit of measurement (defaults to PCS)', 'PCS, NOS, MTR, KG, SET, LTR, PKT'],
+        ['GST', 'GST tax slab (defaults to 18%)', '18%, 12%, 5%, 28%, 0%'],
+        ['Type', 'Item classification (defaults to PO)', 'PO, FOC, RGP'],
+        ['Make', 'Brand or manufacturer', 'AGNI, NEWAGE, TATA, SCHNEIDER'],
+        ['Rate', 'Unit rate / price without currency symbol', '2500, 1250.50'],
+        ['Vendor Name', 'Matched against Vendors Master (case-insensitive)', 'Agni Devices Ltd'],
+        ['Source Type', 'Source of the rate', 'PO, Quote, Manual, Online, Bill'],
+        ['Bill/PO Number', 'Reference PO or Bill / Invoice number', 'SEPL/PO/2026/042'],
+        ['Bill/PO Date', 'Date of PO / invoice for rate aging tracking', 'YYYY-MM-DD or DD/MM/YYYY']
+      ];
+      const wsGuide = XLSX.utils.aoa_to_sheet(instructions);
+      wsGuide['!cols'] = [{ wch: 18 }, { wch: 45 }, { wch: 35 }];
+      XLSX.utils.book_append_sheet(wb, wsGuide, 'Instructions');
+
+      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'item-master-template.xlsx';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('Excel template downloaded');
+    } catch {
+      toast.error('Could not generate Excel template');
+    }
+  };
+
   const downloadTemplate = () => {
     const headers = 'Item Code,Department,Item Name,Specification,Size,UOM,GST,Type,Make,Rate,Vendor Name,Source Type,Bill/PO Number,Bill/PO Date';
     const sample = 'FF0100,FF,HYDRANT VALVE,SS BODY,63MM,PCS,18%,PO,AGNI,2500,Agni Devices Ltd,PO,SEPL/PO/2026/042,2026-04-15';
     const csv = headers + '\n' + sample;
     const blob = new Blob([csv], { type: 'text/csv' }); const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'item-master-template.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
   const parseCSV = (text) => {
-    const lines = text.trim().split('\n');
+    if (!text || !text.trim()) return [];
+    const lines = text.trim().split(/\r?\n/);
     if (lines.length < 2) return [];
-    return lines.slice(1).map(line => {
-      const c = line.split(',').map(v => v.replace(/^"|"$/g, '').trim());
-      if (!c[2]) return null;
-      return {
-        item_code: c[0], department: c[1], item_name: c[2], specification: c[3], size: c[4],
-        uom: c[5] || 'PCS', gst: c[6] || '18%', type: c[7] || 'PO', make: c[8],
-        current_price: parseFloat(c[9]) || 0,
-        vendor_name: c[10] || '',
-        source_type: c[11] || 'Manual',
-        bill_po_number: c[12] || '',
-        bill_po_date: c[13] || '',
-      };
+
+    const parseLine = (line) => {
+      const result = [];
+      let cur = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (c === ',' && !inQuotes) {
+          result.push(cur.trim());
+          cur = '';
+        } else {
+          cur += c;
+        }
+      }
+      result.push(cur.trim());
+      return result;
+    };
+
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const firstRow = parseLine(lines[0]);
+    const hasHeader = firstRow.some(c => /item|name|code|dept|rate|price/i.test(c));
+    const headerCols = hasHeader ? firstRow.map(c => norm(c)) : null;
+    const dataLines = hasHeader ? lines.slice(1) : lines;
+
+    return dataLines.map(line => {
+      if (!line.trim()) return null;
+      const c = parseLine(line);
+      let item = {};
+      if (headerCols) {
+        const getCol = (wantedList, blacklist = []) => {
+          const normWanted = wantedList.map(w => norm(w));
+          const normBlacklist = blacklist.map(b => norm(b));
+          // Pass 1: exact match
+          for (const w of normWanted) {
+            const idx = headerCols.findIndex(hc => hc === w);
+            if (idx !== -1 && c[idx] != null && String(c[idx]).trim() !== '') return String(c[idx]).trim();
+          }
+          // Pass 2: substring without blacklisted terms
+          for (const w of normWanted) {
+            const idx = headerCols.findIndex(hc => {
+              if (normBlacklist.some(b => hc.includes(b))) return false;
+              return hc === w || hc.startsWith(w) || hc.endsWith(w) || (w.length > 3 && hc.includes(w));
+            });
+            if (idx !== -1 && c[idx] != null && String(c[idx]).trim() !== '') return String(c[idx]).trim();
+          }
+          return '';
+        };
+
+        const name = getCol(['itemname', 'itemdescription', 'description', 'particulars', 'productname', 'materialname', 'name'], ['code', 'dept', 'vendor', 'rate', 'price', 'cost', 'make', 'brand', 'uom', 'unit', 'gst', 'tax', 'date']);
+        if (!name) return null;
+        item = {
+          item_code: getCol(['itemcode', 'code', 'productcode', 'partnumber', 'partno', 'itemno'], ['name', 'dept', 'rate', 'price', 'desc']),
+          department: getCol(['department', 'dept', 'category'], ['code', 'name', 'rate', 'price']),
+          item_name: name,
+          specification: getCol(['specification', 'spec', 'specs', 'technicalspec', 'details'], ['name', 'code', 'rate']),
+          size: getCol(['size', 'dimensions', 'dimension', 'capacity'], ['name', 'code', 'rate']),
+          uom: getCol(['uom', 'unit', 'unitofmeasurement'], ['price', 'rate', 'cost']) || 'PCS',
+          gst: getCol(['gst', 'gstpercent', 'tax', 'taxrate'], []),
+          type: getCol(['type', 'itemtype', 'classification'], ['sourcetype']),
+          make: getCol(['make', 'brand', 'manufacturer'], []),
+          current_price: parseFloat(String(getCol(['rate', 'price', 'currentprice', 'unitprice', 'cost', 'unitrate'], ['tax', 'gst']) || 0).replace(/,/g, '')) || 0,
+          vendor_name: getCol(['vendorname', 'vendor', 'supplier', 'suppliername', 'party'], []),
+          source_type: getCol(['sourcetype', 'source', 'ratesource'], []) || 'Manual',
+          bill_po_number: getCol(['billponumber', 'billno', 'pono', 'billnumber', 'ponumber', 'invoiceno', 'invoicenumber'], ['date']),
+          bill_po_date: getCol(['billpodate', 'billdate', 'podate', 'invoicedate', 'date'], ['number', 'no']),
+        };
+      } else {
+        if (!c[2]) return null;
+        item = {
+          item_code: c[0] || '', department: c[1] || '', item_name: c[2], specification: c[3] || '', size: c[4] || '',
+          uom: c[5] || 'PCS', gst: c[6] || '18%', type: c[7] || 'PO', make: c[8] || '',
+          current_price: parseFloat(String(c[9] || 0).replace(/,/g, '')) || 0,
+          vendor_name: c[10] || '',
+          source_type: c[11] || 'Manual',
+          bill_po_number: c[12] || '',
+          bill_po_date: c[13] || '',
+        };
+      }
+      return item;
     }).filter(Boolean);
   };
 
-  const handleFile = (e) => {
-    const file = e.target.files[0]; if (!file) return;
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      return toast.error('File exceeds 20 MB limit');
+    }
+    setParsingFile(true);
+    setImportErrors([]);
+    const t = toast.loading(`Reading ${file.name}…`);
+
     const reader = new FileReader();
-    reader.onload = (ev) => { setBulkData(ev.target.result); setBulkPreview(parseCSV(ev.target.result)); };
-    reader.readAsText(file); e.target.value = '';
+    reader.onerror = () => {
+      toast.dismiss(t);
+      setParsingFile(false);
+      toast.error('Could not read file from disk');
+    };
+
+    reader.onload = (ev) => {
+      try {
+        const data = new Uint8Array(ev.target.result);
+        const wb = XLSX.read(data, { type: 'array', cellDates: true });
+        if (!wb.SheetNames || !wb.SheetNames.length) {
+          toast.dismiss(t);
+          setParsingFile(false);
+          return toast.error('Spreadsheet contains no sheets');
+        }
+        const sheetName = wb.SheetNames.find(n => /item/i.test(n)) || wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        if (!ws) {
+          toast.dismiss(t);
+          setParsingFile(false);
+          return toast.error('Selected sheet is empty');
+        }
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        if (!aoa.length) {
+          toast.dismiss(t);
+          setParsingFile(false);
+          return toast.error('Spreadsheet is empty');
+        }
+
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(10, aoa.length); i++) {
+          const row = (aoa[i] || []).map(c => String(c || '').toLowerCase().trim());
+          if (row.some(c => c.includes('item') || c.includes('name') || c.includes('code') || c.includes('rate') || c.includes('price') || c.includes('dept'))) {
+            headerIdx = i; break;
+          }
+        }
+        if (headerIdx === -1) headerIdx = 0;
+
+        const headers = (aoa[headerIdx] || []).map(h => String(h || '').trim());
+        const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        const pick = (row, wantedList, blacklist = []) => {
+          const rowKeys = Object.keys(row);
+          const normWanted = wantedList.map(w => norm(w));
+          const normBlacklist = blacklist.map(b => norm(b));
+
+          // Pass 1: exact match on normalized key
+          for (const w of normWanted) {
+            const hit = rowKeys.find(rk => norm(rk) === w);
+            if (hit && row[hit] != null && String(row[hit]).trim() !== '') return String(row[hit]).trim();
+          }
+
+          // Pass 2: substring match ensuring no blacklist collision
+          for (const w of normWanted) {
+            const hit = rowKeys.find(rk => {
+              const nrk = norm(rk);
+              if (normBlacklist.some(b => nrk.includes(b))) return false;
+              return nrk === w || nrk.startsWith(w) || nrk.endsWith(w) || (w.length > 3 && nrk.includes(w));
+            });
+            if (hit && row[hit] != null && String(row[hit]).trim() !== '') return String(row[hit]).trim();
+          }
+          return '';
+        };
+
+        const parseDateVal = (val) => {
+          if (!val) return '';
+          if (val instanceof Date && !isNaN(val)) return val.toISOString().split('T')[0];
+          const s = String(val).trim();
+          if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+          const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+          if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+          return s;
+        };
+
+        const items = [];
+        for (let i = headerIdx + 1; i < aoa.length; i++) {
+          const r = aoa[i];
+          if (!r || !Array.isArray(r) || r.every(c => c === '' || c == null)) continue;
+          const rowObj = {};
+          headers.forEach((h, idx) => { if (h) rowObj[h] = r[idx]; });
+
+          const itemName = pick(rowObj, ['itemname', 'itemdescription', 'description', 'particulars', 'productname', 'materialname', 'name'], ['code', 'dept', 'vendor', 'party', 'supplier', 'rate', 'price', 'cost', 'make', 'brand', 'uom', 'unit', 'gst', 'tax', 'date']);
+          if (!itemName) continue;
+          if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(itemName)) continue;
+
+          const rawPrice = pick(rowObj, ['rate', 'price', 'currentprice', 'unitprice', 'cost', 'unitrate', 'rateinr', 'priceinr'], ['tax', 'gst']);
+          const cleanPrice = parseFloat(String(rawPrice || '').replace(/,/g, '')) || 0;
+
+          items.push({
+            item_code: pick(rowObj, ['itemcode', 'code', 'productcode', 'partnumber', 'partno', 'itemno'], ['name', 'dept', 'rate', 'price', 'desc']),
+            department: pick(rowObj, ['department', 'dept', 'category'], ['code', 'name', 'rate', 'price']),
+            item_name: itemName,
+            specification: pick(rowObj, ['specification', 'spec', 'specs', 'technicalspec', 'details'], ['name', 'code', 'rate']),
+            size: pick(rowObj, ['size', 'dimensions', 'dimension', 'capacity'], ['name', 'code', 'rate']),
+            uom: pick(rowObj, ['uom', 'unit', 'unitofmeasurement'], ['price', 'rate', 'cost']) || 'PCS',
+            gst: pick(rowObj, ['gst', 'gstpercent', 'tax', 'taxrate'], []),
+            type: pick(rowObj, ['type', 'itemtype', 'classification'], ['sourcetype']),
+            make: pick(rowObj, ['make', 'brand', 'manufacturer'], []),
+            current_price: cleanPrice,
+            vendor_name: pick(rowObj, ['vendorname', 'vendor', 'supplier', 'suppliername', 'party'], []),
+            source_type: pick(rowObj, ['sourcetype', 'source', 'ratesource'], []) || 'Manual',
+            bill_po_number: pick(rowObj, ['billponumber', 'billno', 'pono', 'billnumber', 'ponumber', 'invoiceno', 'invoicenumber'], ['date']),
+            bill_po_date: parseDateVal(pick(rowObj, ['billpodate', 'billdate', 'podate', 'invoicedate', 'date'], ['number', 'no']))
+          });
+        }
+
+        toast.dismiss(t);
+        setParsingFile(false);
+        if (items.length === 0) {
+          toast.error('No valid items found. Ensure an "Item Name" column is present.');
+          setBulkPreview([]);
+          setUploadedFileName('');
+        } else {
+          setBulkPreview(items);
+          setUploadedFileName(file.name);
+          setBulkData('');
+          toast.success(`Found ${items.length} item${items.length === 1 ? '' : 's'} in ${file.name}`);
+        }
+      } catch (err) {
+        toast.dismiss(t);
+        setParsingFile(false);
+        toast.error('Error parsing spreadsheet: ' + err.message);
+      }
+    };
+
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
   };
 
   const bulkImport = async () => {
-    if (bulkPreview.length === 0) return toast.error('No valid data');
+    if (bulkPreview.length === 0) return toast.error('No valid items to import');
+    setImporting(true);
+    setImportErrors([]);
+    const t = toast.loading(`Importing ${bulkPreview.length} items…`);
     try {
-      const res = await api.post('/item-master/bulk', { items: bulkPreview });
-      toast.success(`Added ${res.data.added} of ${res.data.total} items`);
-      setBulkModal(false); setBulkData(''); setBulkPreview([]); load();
-    } catch { toast.error('Import failed'); }
+      const res = await api.post('/item-master/bulk', {
+        items: bulkPreview,
+        update_existing: updateExisting
+      });
+      toast.dismiss(t);
+      const { added = 0, updated = 0, skipped = 0, errors = [] } = res.data || {};
+      if (errors.length > 0) {
+        setImportErrors(errors);
+      }
+      if (added > 0 || updated > 0) {
+        toast.success(`Processed: ${added} added${updated > 0 ? `, ${updated} updated` : ''}`);
+        load();
+        if (errors.length === 0) {
+          setBulkModal(false);
+          setBulkData('');
+          setBulkPreview([]);
+          setUploadedFileName('');
+        }
+      } else {
+        toast.error(`0 items imported. ${skipped} skipped or had issues.`);
+      }
+    } catch (err) {
+      toast.dismiss(t);
+      toast.error(err.response?.data?.error || 'Import failed');
+    } finally {
+      setImporting(false);
+      setParsingFile(false);
+    }
   };
 
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -780,23 +1087,166 @@ export default function ItemMaster() {
       </Modal>
 
       {/* Bulk Import Modal */}
-      <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Items" wide>
+      <Modal isOpen={bulkModal} onClose={() => { setBulkModal(false); setImportErrors([]); }} title="Bulk Import Items" wide>
         <div className="space-y-4">
-          <div className="bg-red-50 p-3 rounded-lg text-sm text-red-700">
-            <p className="font-semibold mb-1">CSV columns (in order):</p>
-            <p className="font-mono text-[11px]">Item Code, Department, Item Name, Specification, Size, UOM, GST, Type, Make, Rate, Vendor Name, Source Type, Bill/PO Number, Bill/PO Date</p>
-            <p className="text-[11px] mt-1">Vendor Name is matched against the Vendors Master (case-insensitive). Source Type: PO / Quote / Manual / Online / Bill.</p>
+          <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg text-sm text-blue-900">
+            <p className="font-semibold mb-1 flex items-center gap-1.5">
+              <span>📄</span> Supported Formats: Excel (.xlsx, .xls) and CSV (.csv)
+            </p>
+            <p className="font-mono text-[11px] text-blue-800">
+              Columns: Item Code, Department, Item Name (required), Specification, Size, UOM, GST, Type, Make, Rate, Vendor Name, Source Type, Bill/PO Number, Bill/PO Date
+            </p>
+            <p className="text-[11px] text-blue-700 mt-1">
+              • Blank Item Code will automatically generate next sequence from department (e.g. FF0001).<br />
+              • Vendor Name is auto-matched case-insensitively with Vendor Master.
+            </p>
           </div>
-          <button onClick={downloadTemplate} className="btn btn-secondary text-sm flex items-center gap-2"><FiDownload size={14} /> Download Template</button>
-          <div><label className="label">Upload CSV</label><input type="file" accept=".csv" onChange={handleFile} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" /></div>
-          <div><label className="label">Or Paste CSV</label><textarea className="input font-mono text-xs" rows="5" value={bulkData} onChange={e => { setBulkData(e.target.value); setBulkPreview(parseCSV(e.target.value)); }} placeholder="Item Code,Dept,Name,Spec,Size,UOM,GST,Type,Make,Rate,Vendor Name,Source,Bill/PO #,Bill/PO Date" /></div>
-          {bulkPreview.length > 0 && (
-            <div><p className="text-sm font-semibold mb-2">{bulkPreview.length} items to import</p>
-              <div className="max-h-48 overflow-y-auto border rounded text-xs"><NumberedTable><thead><tr className="bg-gray-50"><th className="px-2 py-1">Code</th><th className="px-2 py-1">Dept</th><th className="px-2 py-1">Name</th><th className="px-2 py-1">Rate</th><th className="px-2 py-1">Vendor</th><th className="px-2 py-1">Source</th><th className="px-2 py-1">Bill/PO</th></tr></thead>
-                <tbody>{bulkPreview.map((i, idx) => <tr key={idx}><td className="px-2 py-1">{i.item_code}</td><td className="px-2 py-1">{i.department}</td><td className="px-2 py-1 font-medium">{i.item_name}</td><td className="px-2 py-1">{i.current_price}</td><td className="px-2 py-1">{i.vendor_name}</td><td className="px-2 py-1">{i.source_type}</td><td className="px-2 py-1">{i.bill_po_number}</td></tr>)}</tbody></NumberedTable></div>
+
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={downloadExcelTemplate} className="btn btn-secondary text-xs flex items-center gap-1.5 font-medium">
+              <FiDownload size={14} /> Download Excel Template (.xlsx)
+            </button>
+            <button onClick={downloadTemplate} className="btn btn-secondary text-xs flex items-center gap-1.5 font-medium">
+              <FiDownload size={14} /> Download CSV Template
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="border rounded-lg p-3 bg-gray-50/60">
+              <label className="label font-medium text-xs text-gray-700 mb-1 block">
+                1. Upload Excel / CSV File
+              </label>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handleFile}
+                disabled={parsingFile || importing}
+                className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer disabled:opacity-50"
+              />
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                {parsingFile ? '⏳ Reading spreadsheet...' : uploadedFileName ? `✅ Loaded: ${uploadedFileName}` : 'Select an .xlsx, .xls, or .csv file from your computer'}
+              </p>
+            </div>
+
+            <div className="border rounded-lg p-3 bg-gray-50/60">
+              <label className="label font-medium text-xs text-gray-700 mb-1 block">
+                2. Or Paste CSV Text
+              </label>
+              <textarea
+                className="input font-mono text-[11px] w-full"
+                rows="3"
+                value={bulkData}
+                disabled={parsingFile || importing}
+                onChange={e => {
+                  setBulkData(e.target.value);
+                  setUploadedFileName('');
+                  setImportErrors([]);
+                  setBulkPreview(parseCSV(e.target.value));
+                }}
+                placeholder="Item Code,Dept,Item Name,Spec,Size,UOM,GST,Type,Make,Rate,Vendor,Source,Bill/PO #,Date"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-700 font-medium select-none">
+              <input
+                type="checkbox"
+                checked={updateExisting}
+                onChange={e => setUpdateExisting(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+              />
+              <span>Update existing items if Item Code already exists (updates rate, vendor, specs)</span>
+            </label>
+          </div>
+
+          {importErrors.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 max-h-40 overflow-y-auto">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-semibold text-xs text-amber-800 flex items-center gap-1">
+                  <FiAlertTriangle size={14} /> {importErrors.length} Item(s) Skipped or Had Issues:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setImportErrors([])}
+                  className="text-[11px] text-amber-700 hover:text-amber-900 underline"
+                >
+                  Clear Notice
+                </button>
+              </div>
+              <ul className="list-disc pl-4 text-[11px] text-amber-800 space-y-0.5">
+                {importErrors.map((err, idx) => (
+                  <li key={idx} className="font-mono">{err}</li>
+                ))}
+              </ul>
             </div>
           )}
-          <div className="flex justify-end gap-3"><button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button><button onClick={bulkImport} disabled={bulkPreview.length === 0} className="btn btn-primary disabled:opacity-50 flex items-center gap-1"><FiUpload size={14} /> Import {bulkPreview.length} Items</button></div>
+
+          {bulkPreview.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-gray-800">
+                  Preview ({bulkPreview.length} item{bulkPreview.length === 1 ? '' : 's'} ready to import)
+                  {uploadedFileName && <span className="text-gray-500 font-normal ml-1">from {uploadedFileName}</span>}
+                </p>
+                <button
+                  onClick={() => { setBulkPreview([]); setBulkData(''); setUploadedFileName(''); }}
+                  className="text-[11px] text-red-600 hover:underline"
+                >
+                  Clear preview
+                </button>
+              </div>
+              <div className="max-h-48 overflow-y-auto border rounded text-xs">
+                <NumberedTable>
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="px-2 py-1">Code</th>
+                      <th className="px-2 py-1">Dept</th>
+                      <th className="px-2 py-1">Name</th>
+                      <th className="px-2 py-1">Spec / Size</th>
+                      <th className="px-2 py-1">Rate</th>
+                      <th className="px-2 py-1">Vendor</th>
+                      <th className="px-2 py-1">Source</th>
+                      <th className="px-2 py-1">Bill/PO</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkPreview.map((i, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50/50">
+                        <td className="px-2 py-1 font-mono text-[11px]">{i.item_code || <span className="text-gray-400 italic">(auto)</span>}</td>
+                        <td className="px-2 py-1">{i.department || '-'}</td>
+                        <td className="px-2 py-1 font-medium">{i.item_name}</td>
+                        <td className="px-2 py-1 text-gray-600">{[i.specification, i.size].filter(Boolean).join(' · ') || '-'}</td>
+                        <td className="px-2 py-1 font-mono">{i.current_price > 0 ? `₹${i.current_price}` : '-'}</td>
+                        <td className="px-2 py-1">{i.vendor_name || '-'}</td>
+                        <td className="px-2 py-1">{i.source_type || '-'}</td>
+                        <td className="px-2 py-1 text-[11px]">{i.bill_po_number || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </NumberedTable>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2 border-t">
+            <button
+              type="button"
+              onClick={() => { setBulkModal(false); setImportErrors([]); }}
+              className="btn btn-secondary text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={bulkImport}
+              disabled={bulkPreview.length === 0 || importing || parsingFile}
+              className="btn btn-primary disabled:opacity-50 flex items-center gap-1.5 text-xs font-medium"
+            >
+              <FiUpload size={14} />
+              {importing ? 'Importing…' : `Import ${bulkPreview.length} Item${bulkPreview.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
         </div>
       </Modal>
 

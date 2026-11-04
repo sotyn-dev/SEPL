@@ -52,6 +52,26 @@ export function useRateActions({ onChanged } = {}) {
   // 2. ₹ Quotes → S2-S6: the 3 vendor quotes + finalise the Rate Contract
   const [quoteRow, setQuoteRow] = useState(null);
   const [qf, setQf] = useState({});
+  const [uploadingProof, setUploadingProof] = useState(false);
+
+  const handleProofUpload = async (n, file) => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    setUploadingProof(true);
+    try {
+      const res = await api.post('/procurement/item-rates/upload-proof', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setQf(f => ({ ...f, [`vendor${n}_proof`]: res.data.file_path }));
+      toast.success(`Vendor ${n} screenshot proof attached`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to upload screenshot');
+    } finally {
+      setUploadingProof(false);
+    }
+  };
+
   // Opens on the FRESH row (GET /rates-items/row/:id): a card or register
   // line loaded minutes ago may show 0/3 while someone else has since locked
   // this Item Master's contract — seeding the modal from the stale row would
@@ -65,13 +85,20 @@ export function useRateActions({ onChanged } = {}) {
     if (!row) { toast.error('Could not load the latest rate row — refresh the page and try again'); return; }
     setQuoteRow(row);
     setQf({
-      vendor1_name: row.vendor1_name || '', vendor1_rate: row.vendor1_rate || '',
-      vendor2_name: row.vendor2_name || '', vendor2_rate: row.vendor2_rate || '',
-      vendor3_name: row.vendor3_name || '', vendor3_rate: row.vendor3_rate || '',
+      vendor1_name: row.vendor1_name || '', vendor1_rate: row.vendor1_rate || '', vendor1_proof: row.vendor1_proof || '',
+      vendor2_name: row.vendor2_name || '', vendor2_rate: row.vendor2_rate || '', vendor2_proof: row.vendor2_proof || '',
+      vendor3_name: row.vendor3_name || '', vendor3_rate: row.vendor3_rate || '', vendor3_proof: row.vendor3_proof || '',
       final_rate: row.final_rate || '', final_vendor_name: row.final_vendor_name || '',
     });
   };
   const saveQuotes = async () => {
+    // TSK-0851: WhatsApp/Gmail screenshot proof is mandatory for any entered vendor rate
+    for (const n of [1, 2, 3]) {
+      if (+qf[`vendor${n}_rate`] > 0 && !qf[`vendor${n}_proof`]) {
+        toast.error(`Vendor ${n}: WhatsApp/Gmail screenshot proof is mandatory for the quoted rate (TSK-0851)`);
+        return;
+      }
+    }
     try {
       const r = await api.put(`/procurement/rates-items/quotes/${quoteRow.item_master_id}`, qf);
       toast.success(r.data.locked ? '🔒 Rate Contract locked for the project' : 'Quotes saved — finalise when all 3 are in');
@@ -121,6 +148,24 @@ export function useRateActions({ onChanged } = {}) {
                     onChange={e => setQf(f => ({ ...f, [`vendor${n}_name`]: e.target.value }))} />
                   <input className="input text-xs" type="number" placeholder="Rate (full project qty)" value={qf[`vendor${n}_rate`] || ''}
                     onChange={e => setQf(f => ({ ...f, [`vendor${n}_rate`]: e.target.value }))} />
+                  <div className="pt-1 border-t border-gray-100 flex items-center justify-between text-[10px]">
+                    {qf[`vendor${n}_proof`] ? (
+                      <div className="flex items-center gap-1">
+                        <a href={qf[`vendor${n}_proof`]} target="_blank" rel="noreferrer" className="text-blue-600 font-semibold hover:underline">
+                          📎 View Proof
+                        </a>
+                        <button type="button" onClick={() => setQf(f => ({ ...f, [`vendor${n}_proof`]: '' }))} className="text-red-500 hover:text-red-700 ml-1">✕</button>
+                      </div>
+                    ) : (
+                      <span className="text-amber-600 font-medium">⚠️ Proof required</span>
+                    )}
+                    <label className="cursor-pointer text-[10px] text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded px-1.5 py-0.5 font-medium">
+                      {qf[`vendor${n}_proof`] ? '↻ Replace' : '📷 Proof'}
+                      <input type="file" accept="image/*,.pdf" className="hidden" disabled={uploadingProof} onChange={e => {
+                        if (e.target.files?.[0]) handleProofUpload(n, e.target.files[0]);
+                      }} />
+                    </label>
+                  </div>
                 </div>
               ))}
             </div>

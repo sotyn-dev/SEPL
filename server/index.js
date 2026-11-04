@@ -847,10 +847,31 @@ app.get('/api/thumbnail', async (req, res) => {
   return res.redirect(fileUrl);
 });
 
-// Cache image uploads in browser for 7 days
+// Cache image uploads in browser for 7 days & enforce inline preview (never force download)
 app.use('/uploads', (req, res, next) => {
+  res.setHeader('Content-Disposition', 'inline');
   if (/\.(jpg|jpeg|png|webp|gif|svg)$/i.test(req.path)) {
     res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  } else if (/\.pdf$/i.test(req.path)) {
+    res.setHeader('Content-Type', 'application/pdf');
+  } else if (!path.extname(req.path)) {
+    // Extensionless file: detect magic bytes so browser renders inline instead of downloading
+    try {
+      const local = path.join(uploadsDir, path.basename(req.path));
+      if (fs.existsSync(local) && fs.statSync(local).isFile()) {
+        const fd = fs.openSync(local, 'r');
+        const buf = Buffer.alloc(8);
+        fs.readSync(fd, buf, 0, 8, 0);
+        fs.closeSync(fd);
+        if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+          res.setHeader('Content-Type', 'image/jpeg');
+        } else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+          res.setHeader('Content-Type', 'image/png');
+        } else if (buf.toString('utf8', 0, 4) === '%PDF') {
+          res.setHeader('Content-Type', 'application/pdf');
+        }
+      }
+    } catch (_) {}
   }
   next();
 });

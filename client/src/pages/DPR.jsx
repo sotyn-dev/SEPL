@@ -12,6 +12,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage, FiZap, FiCpu } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
+import MonthlyDprRegister from '../components/MonthlyDprRegister';
 
 // IST calendar date + Monday snap — SPOS rules run on India wall-clock
 // (audit 2026-07-31: UTC dates misjudged everything between 00:00 and
@@ -1166,12 +1167,13 @@ export default function DPR() {
               <span className="bg-amber-500 text-white rounded-full px-1.5 text-[10px] font-bold">{pendingPlans.length}</span>
             </button>
           )}
-          {['dashboard', 'aaj', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
+          {['dashboard', 'aaj', 'reports', 'monthly-register', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} flex-shrink-0 whitespace-nowrap`}>
               {t === 'dashboard' ? 'Dashboard'
                 : t === 'aaj' ? '🏗️ Aaj Ka Update'
                   : t === 'reports' ? 'Daily Reports'
-                    : t === 'compliance' ? 'Engineer Compliance'
+                    : t === 'monthly-register' ? '📅 Monthly DPR Register'
+                      : t === 'compliance' ? 'Engineer Compliance'
                       : t === 'sites' ? 'Sites'
                         : t === 'losses' ? 'Loss Reasons'
                           : 'Responsible'}
@@ -1196,6 +1198,7 @@ export default function DPR() {
       {/* Mam (2026-05-30): keep Engineer Compliance HERE in Daily
           Reports AND under HR System → Performance.  Same shared
           component drives both — single source of truth. */}
+      {tab === 'monthly-register' && <MonthlyDprRegister />}
       {tab === 'losses' && <LossReasonsTab />}
       {tab === 'aaj' && <AajKaUpdate />}
       {tab === 'compliance' && <><SposComplianceGrid /><EngineerPerformance /></>}
