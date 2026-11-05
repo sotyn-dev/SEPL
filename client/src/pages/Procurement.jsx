@@ -2373,9 +2373,10 @@ export default function Procurement() {
             weight_per_meter: wpm,
             original_qty_mtr: mtr,
             specification: spec || null,
+            unit: 'KG',
           };
         }
-        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate, specification: spec || null };
+        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate, specification: spec || null, unit: it.unit || it.uom || null };
       });
 
     // Mandatory items (mam 2026-08-27 "civic sense"): a PO must carry at
@@ -6782,7 +6783,7 @@ export default function Procurement() {
                     ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RENTAL')
                     : masterItems.filter(m => {
                       const t = String(m.type || '').toUpperCase();
-                      return t === 'PO' || t === 'FOC' || t === '';
+                      return t === 'PO' || t === 'FOC' || t === '' || t.includes('MATERIAL');
                     });
                 const rowLabel = isRental ? 'Rental' : isRgp ? 'RGP item' : 'Extra item';
                 return (
@@ -7188,7 +7189,7 @@ export default function Procurement() {
                               ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RGP')
                               : masterItems.filter(m => {
                                 const t = String(m.type || '').toUpperCase();
-                                return t === 'PO' || t === 'FOC' || t === '';
+                                return t === 'PO' || t === 'FOC' || t === '' || t.includes('MATERIAL');
                               });
                             // Division scope: only items in the same division as the BOQ line
                             // (or, if that line is unmapped, the project's division), unless

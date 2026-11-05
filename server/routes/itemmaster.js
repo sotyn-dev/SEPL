@@ -375,7 +375,12 @@ router.post('/parse-file', requirePermission('item_master', 'create'), uploadMem
         size: pick(rowObj, ['size', 'dimensions', 'dimension', 'capacity'], ['name', 'code', 'rate']),
         uom: pick(rowObj, ['uom', 'unit', 'unitofmeasurement'], ['price', 'rate', 'cost']) || 'PCS',
         gst: pick(rowObj, ['gst', 'gstpercent', 'tax', 'taxrate'], []),
-        type: pick(rowObj, ['type', 'itemtype', 'classification'], ['sourcetype']),
+        type: (() => {
+          const rawT = pick(rowObj, ['type', 'itemtype', 'classification'], ['sourcetype']);
+          const upper = String(rawT || '').trim().toUpperCase();
+          if (upper === 'MATERIAL MASTER' || upper === 'MATERIAL' || upper === 'MATERIAL_MASTER') return 'PO';
+          return rawT;
+        })(),
         make: pick(rowObj, ['make', 'brand', 'manufacturer'], []),
         current_price: cleanPrice,
         vendor_name: pick(rowObj, ['vendorname', 'vendor', 'supplier', 'suppliername', 'party'], []),
@@ -707,6 +712,10 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
         const price = +it.current_price || 0;
         let code = it.item_code && String(it.item_code).trim();
         const existing = code ? findExisting.get(code) : null;
+        const rawType = String(it.type || '').trim().toUpperCase();
+        const normalizedType = (rawType === 'MATERIAL MASTER' || rawType === 'MATERIAL' || rawType === 'MATERIAL_MASTER')
+          ? 'PO'
+          : (it.type || 'PO');
 
         if (existing) {
           if (updateExisting) {
@@ -719,7 +728,7 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
             const size = it.size || '';
             const uom = it.uom || 'PCS';
             const gst = it.gst || '18%';
-            const type = it.type || 'PO';
+            const type = normalizedType;
             const make = it.make || '';
             update.run(
               dept, dept,
@@ -752,7 +761,7 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
           const r = insert.run(
             code, it.department || '', String(it.item_name).trim(),
             it.specification || '', it.size || '', it.uom || 'PCS',
-            it.gst || '18%', it.type || 'PO', it.make || '',
+            it.gst || '18%', normalizedType, it.make || '',
             price, vendorId, source, it.bill_po_number || null, it.bill_po_date || null,
             price > 0 ? new Date().toISOString() : null,
             price > 0 ? req.user.id : null,
