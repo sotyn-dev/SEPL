@@ -1345,6 +1345,41 @@ router.get('/chat-groups', (req, res) => {
   }
 });
 
+// GET /api/ai-agent/sites — returns active sites/projects for AI Agent snag & task modal
+router.get('/sites', (req, res) => {
+  try {
+    const db = getDb();
+    let rows = [];
+    try {
+      rows = db.prepare(`
+        SELECT MIN(s.id) as id,
+          TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '"', ''), CHAR(39), ''), '  ', ' '), '  ', ' ')) as name,
+          MAX(s.client_name) as client_name,
+          MAX(s.address) as address
+        FROM sites s
+        WHERE s.status = 'active' OR s.status IS NULL OR s.status = ''
+        GROUP BY LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '"', ''), CHAR(39), ''), '  ', ' '), '  ', ' ')))
+        ORDER BY name ASC
+      `).all();
+    } catch (_) {}
+
+    if (!rows || rows.length === 0) {
+      try {
+        rows = db.prepare(`
+          SELECT id, project_name as name, client_name
+          FROM business_book
+          WHERE status != 'cancelled'
+          ORDER BY project_name ASC
+        `).all();
+      } catch (_) {}
+    }
+    res.json(rows || []);
+  } catch (err) {
+    console.error('[aiAgent] sites error:', err);
+    res.json([]);
+  }
+});
+
 // Heuristic fallback extractor when AI provider is unconfigured or unavailable
 function fallbackExtractSnags(text, sites = []) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);

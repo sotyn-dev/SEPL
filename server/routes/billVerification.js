@@ -59,6 +59,53 @@ const BILL_COLS = `b.id, b.project_id, b.work_order_id, b.mb_id, b.ra_no, b.invo
   b.raised_by, b.raised_at, b.paid_by, b.paid_at, b.payment_ref, b.remarks, b.bill_file, b.updated_at,
   wo.wo_number, wo.sub_contractor_name, sc.name AS contractor_name, p.name AS project_name`;
 
+let _schemaChecked = false;
+function ensureBillVerificationSchema(db) {
+  if (_schemaChecked) return;
+  try {
+    const billCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+    if (!billCols.includes('bill_file')) {
+      try {
+        db.prepare("ALTER TABLE proj_contractor_ra_bills ADD COLUMN bill_file TEXT").run();
+        console.log('[billVerification] Auto-added missing column bill_file to proj_contractor_ra_bills');
+      } catch (err) {
+        console.warn('[billVerification] Could not alter bill_file column:', err.message);
+      }
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS proj_contractor_ra_bill_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ra_bill_id INTEGER NOT NULL REFERENCES proj_contractor_ra_bills(id) ON DELETE CASCADE,
+        boq_item_id INTEGER,
+        item_description TEXT NOT NULL,
+        uom TEXT,
+        boq_qty REAL DEFAULT 0,
+        prev_billed_qty REAL DEFAULT 0,
+        current_billed_qty REAL NOT NULL DEFAULT 0,
+        rate REAL NOT NULL DEFAULT 0,
+        amount REAL NOT NULL DEFAULT 0,
+        remarks TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_pcra_items_bill ON proj_contractor_ra_bill_items(ra_bill_id);
+    `);
+    _schemaChecked = true;
+  } catch (e) {
+    // ignore
+  }
+}
+
+function getBillSelectCols(db) {
+  ensureBillVerificationSchema(db);
+  try {
+    const cols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+    if (!cols.includes('bill_file')) {
+      return BILL_COLS.replace('b.bill_file,', 'NULL AS bill_file,');
+    }
+  } catch (_) {}
+  return BILL_COLS;
+}
+
 function withDeductions(db, bill) {
   const deductions = db.prepare('SELECT * FROM proj_contractor_ra_deductions WHERE ra_bill_id=?').all(bill.id);
   return { ...bill, deductions, stage_index: STAGES.indexOf(bill.current_stage), stages: STAGES.map(s => STAGE_LABEL[s]) };
@@ -66,6 +113,7 @@ function withDeductions(db, bill) {
 
 // ─── List / detail ───────────────────────────────────────────────────
 router.get('/bills', canRead, (req, res) => {
+  const db = getDb();
   const q = req.query || {};
   const where = [];
   const args = [];
@@ -75,8 +123,8 @@ router.get('/bills', canRead, (req, res) => {
   }
   // "Pending at my stage" — the queue each approver actually works from.
   if (q.pending_stage) { where.push(`b.current_stage = ? AND b.status != 'cancelled'`); args.push(q.pending_stage); }
-  res.json(getDb().prepare(`
-    SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  res.json(db.prepare(`
+    SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id = b.work_order_id
       LEFT JOIN sub_contractors sc ON sc.id = b.contractor_id
       LEFT JOIN proj_projects p ON p.id = b.project_id
@@ -86,7 +134,7 @@ router.get('/bills', canRead, (req, res) => {
 
 router.get('/bills/:id', canRead, (req, res) => {
   const db = getDb();
-  const bill = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  const bill = db.prepare(`SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id = b.work_order_id
       LEFT JOIN sub_contractors sc ON sc.id = b.contractor_id
       LEFT JOIN proj_projects p ON p.id = b.project_id
@@ -274,7 +322,7 @@ router.post('/bills', canCreate, (req, res) => {
   const billId = tx();
 
   notifyStage(db, billId, 'site_engineer', req.user);
-  const after = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  const after = db.prepare(`SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id=b.work_order_id LEFT JOIN sub_contractors sc ON sc.id=b.contractor_id LEFT JOIN proj_projects p ON p.id=b.project_id WHERE b.id=?`).get(billId);
   const items = db.prepare('SELECT * FROM proj_contractor_ra_bill_items WHERE ra_bill_id=? ORDER BY id ASC').all(billId);
   logAuditEvent({ user: req.user, action: 'CREATE', entity_type: 'proj_contractor_ra_bills',
@@ -371,7 +419,7 @@ router.post('/bills/:id/action', canApprove, (req, res) => {
     entity_id: bill.id, entity_label: bill.ra_no,
     before: { current_stage: bill.current_stage, status: bill.status }, after: result });
 
-  const updated = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  const updated = db.prepare(`SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id=b.work_order_id LEFT JOIN sub_contractors sc ON sc.id=b.contractor_id LEFT JOIN proj_projects p ON p.id=b.project_id WHERE b.id=?`).get(bill.id);
   res.json(withDeductions(db, updated));
 });
@@ -404,7 +452,7 @@ router.post('/bills/:id/hold', canApprove, (req, res) => {
     before: { status: bill.status }, after: { status: 'on_hold', reason } });
   notifyHoldResume(db, bill.id, 'held', req.user, reason);
 
-  const updated = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  const updated = db.prepare(`SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id=b.work_order_id LEFT JOIN sub_contractors sc ON sc.id=b.contractor_id LEFT JOIN proj_projects p ON p.id=b.project_id WHERE b.id=?`).get(bill.id);
   res.json(withDeductions(db, updated));
 });
@@ -432,7 +480,7 @@ router.post('/bills/:id/resume', canApprove, (req, res) => {
     before: { status: 'on_hold' }, after: { status: 'raised', stage: bill.current_stage } });
   notifyHoldResume(db, bill.id, 'resumed', req.user, null);
 
-  const updated = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
+  const updated = db.prepare(`SELECT ${getBillSelectCols(db)} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id=b.work_order_id LEFT JOIN sub_contractors sc ON sc.id=b.contractor_id LEFT JOIN proj_projects p ON p.id=b.project_id WHERE b.id=?`).get(bill.id);
   res.json(withDeductions(db, updated));
 });

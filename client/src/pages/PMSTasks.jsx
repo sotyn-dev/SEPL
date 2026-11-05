@@ -1028,7 +1028,8 @@ export default function PMSTasks() {
         isOpen={aiChatModal}
         onClose={() => setAiChatModal(false)}
         defaultTarget="pms_task"
-        onSuccess={loadTasks}
+        sites={projects.map(p => ({ id: p.id, name: p.name || p.title || `Project #${p.id}` }))}
+        onSuccess={load}
       />
     </div>
   );
