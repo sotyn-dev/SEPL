@@ -458,10 +458,23 @@ router.post('/batch', requirePermission('snags', 'create'), (req, res) => {
         maxNum++;
         const snagNo = `${prefix}${String(maxNum).padStart(4, '0')}`;
         const itemPriority = ['low','medium','high','critical'].includes(it.priority) ? it.priority : defaultPriority;
+        const itSiteId = it.site_id || site_id || null;
+        let itSiteName = it.site_name || resolvedSiteName || null;
+        if (!itSiteName && itSiteId) {
+          const s = db.prepare('SELECT name FROM sites WHERE id=?').get(itSiteId);
+          itSiteName = s?.name || null;
+        }
+        const itAssignee = it.assigned_to || assigned_to || null;
+        let itAssigneeName = it.assigned_to_name || resolvedAssigneeName || null;
+        if (!itAssigneeName && itAssignee) {
+          const u = db.prepare('SELECT name FROM users WHERE id=?').get(itAssignee);
+          itAssigneeName = u?.name || null;
+        }
+        const desc = it.trade && !String(it.description).startsWith('[') ? `[${it.trade}] ${String(it.description).trim()}` : String(it.description).trim();
         const r = insertStmt.run(
-          snagNo, site_id || null, resolvedSiteName, it.location || null,
-          String(it.description).trim(), it.photo_url || null,
-          itemPriority, 'open', assigned_to || null, resolvedAssigneeName,
+          snagNo, itSiteId, itSiteName, it.location || null,
+          desc, it.photo_url || null,
+          itemPriority, 'open', itAssignee, itAssigneeName,
           req.user.id, it.target_date || target_date || null
         );
         created.push({ id: r.lastInsertRowid, snag_no: snagNo });
@@ -482,7 +495,7 @@ router.post('/batch', requirePermission('snags', 'create'), (req, res) => {
       }
     } catch {}
 
-    res.status(201).json({ count: created.length, snags: created });
+    res.status(201).json({ count: created.length, snags: created, created });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

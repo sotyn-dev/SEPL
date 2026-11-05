@@ -183,14 +183,14 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
 
   try {
     db.transaction(() => {
-      for (const v of vouchers) {
+      for (const v of rawVouchers) {
         const alterId = Number(v.alter_id || 0);
         if (alterId > maxAlterId) maxAlterId = alterId;
 
         const billNumber = String(v.bill_number || '').trim();
         const vendorName = String(v.vendor_name || '').trim();
         const billAmount = round2(Math.abs(Number(v.bill_amount) || 0));
-        const billDate = String(v.bill_date || '').trim().slice(0, 10);
+        const billDate = String(v.bill_date || v.invoice_date || v.date || '').trim().slice(0, 10);
         const guid = v.tally_guid ? String(v.tally_guid).trim() : null;
         const gstin = v.vendor_gstin ? String(v.vendor_gstin).trim() : null;
         const vchType = String(v.voucher_type || 'Purchase').trim();
@@ -318,7 +318,7 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
           sync_type, vouchers_received, vouchers_added, vouchers_updated,
           vouchers_skipped, last_alter_id, company_name, status, ip_address
         ) VALUES ('vouchers', ?, ?, ?, ?, ?, ?, 'success', ?)
-      `).run(vouchers.length, added, updated, skipped, maxAlterId, company_name || null, req.ip || null);
+      `).run(rawVouchers.length, added, updated, skipped, maxAlterId, company_name || null, req.ip || null);
     })();
 
     res.json({
@@ -346,9 +346,10 @@ router.post('/vouchers', verifyTallyToken, (req, res) => {
 // ─── 1b. Bulk Ingest Sales Vouchers (Invoices to Clients) ─────────────
 router.post('/sales', verifyTallyToken, (req, res) => {
   const db = getDb();
-  const { vouchers, company_name } = req.body || {};
+  const rawVouchers = req.body.vouchers || req.body.sales || [];
+  const company_name = req.body.company_name;
 
-  if (!Array.isArray(vouchers) || vouchers.length === 0) {
+  if (!Array.isArray(rawVouchers) || rawVouchers.length === 0) {
     return res.json({ message: 'No sales vouchers in payload', added: 0, updated: 0, skipped: 0 });
   }
 
@@ -393,8 +394,8 @@ router.post('/sales', verifyTallyToken, (req, res) => {
         if (alterId > maxAlterId) maxAlterId = alterId;
 
         const billNumber = String(v.bill_number || v.invoice_number || v.voucher_number || '').trim();
-        const customerName = String(v.customer_name || v.buyer_name || v.party_name || '').trim();
-        const totalAmount = round2(Math.abs(Number(v.total_amount || v.bill_amount) || 0));
+        const customerName = String(v.customer_name || v.buyer_name || v.party_name || v.party_ledger_name || '').trim();
+        const totalAmount = round2(Math.abs(Number(v.total_amount ?? v.bill_amount ?? v.amount) || 0));
         const amount = round2(Math.abs(Number(v.amount || v.subtotal) || totalAmount));
         const gstAmount = round2(Math.abs(Number(v.gst_amount) || (totalAmount - amount)));
         const billDate = String(v.bill_date || '').trim().slice(0, 10);
@@ -434,7 +435,7 @@ router.post('/sales', verifyTallyToken, (req, res) => {
       `).run(vouchers.length, added, updated, skipped, maxAlterId, company_name || null, req.ip || null);
     })();
 
-    res.json({ success: true, received: vouchers.length, added, updated, skipped, max_alter_id: maxAlterId });
+    res.json({ success: true, received: rawVouchers.length, added, updated, skipped, max_alter_id: maxAlterId });
   } catch (err) {
     console.error('[tally-sync] Sales sync failed:', err);
     res.status(500).json({ error: 'Sales sync failed: ' + err.message });
@@ -444,9 +445,10 @@ router.post('/sales', verifyTallyToken, (req, res) => {
 // ─── 1c. Bulk Ingest Bank Transactions (Payments, Receipts, Contras) ──
 router.post('/bank', verifyTallyToken, (req, res) => {
   const db = getDb();
-  const { transactions, company_name } = req.body || {};
+  const rawTransactions = req.body.transactions || req.body.bank || req.body.vouchers || [];
+  const company_name = req.body.company_name;
 
-  if (!Array.isArray(transactions) || transactions.length === 0) {
+  if (!Array.isArray(rawTransactions) || rawTransactions.length === 0) {
     return res.json({ message: 'No bank transactions in payload', added: 0, updated: 0, skipped: 0 });
   }
 
@@ -471,15 +473,15 @@ router.post('/bank', verifyTallyToken, (req, res) => {
 
   try {
     db.transaction(() => {
-      for (const t of transactions) {
+      for (const t of rawTransactions) {
         const alterId = Number(t.alter_id || 0);
         if (alterId > maxAlterId) maxAlterId = alterId;
 
-        const date = String(t.date || '').trim().slice(0, 10);
-        const amount = round2(Math.abs(Number(t.amount) || 0));
+        const date = String(t.date || t.txn_date || t.transaction_date || '').trim().slice(0, 10);
+        const amount = round2(Math.abs(Number(t.amount ?? t.total_amount) || 0));
         const vchType = String(t.voucher_type || 'Payment').trim();
-        const party = String(t.party_name || '').trim();
-        const refNo = t.ref_no || t.voucher_number || t.instrument_number || null;
+        const party = String(t.party_name || t.party_ledger_name || '').trim();
+        const refNo = t.ref_no || t.ref_number || t.voucher_number || t.instrument_number || null;
         const narration = t.narration ? ` - ${t.narration}` : '';
         const desc = `[${vchType}] ${party}${narration}`.trim();
         const guid = t.tally_guid ? String(t.tally_guid).trim() : null;
@@ -526,10 +528,10 @@ router.post('/bank', verifyTallyToken, (req, res) => {
           sync_type, vouchers_received, vouchers_added, vouchers_updated,
           vouchers_skipped, last_alter_id, company_name, status, ip_address
         ) VALUES ('bank', ?, ?, 0, ?, ?, ?, 'success', ?)
-      `).run(transactions.length, added, skipped, maxAlterId, company_name || null, req.ip || null);
+      `).run(rawTransactions.length, added, skipped, maxAlterId, company_name || null, req.ip || null);
     })();
 
-    res.json({ success: true, received: transactions.length, added, skipped, max_alter_id: maxAlterId });
+    res.json({ success: true, received: rawTransactions.length, added, skipped, max_alter_id: maxAlterId });
   } catch (err) {
     console.error('[tally-sync] Bank sync failed:', err);
     res.status(500).json({ error: 'Bank sync failed: ' + err.message });
@@ -539,9 +541,10 @@ router.post('/bank', verifyTallyToken, (req, res) => {
 // ─── 2. Bulk Ingest Payment Vouchers (Reconciliation) ─────────────────
 router.post('/payments', verifyTallyToken, (req, res) => {
   const db = getDb();
-  const { payments, company_name } = req.body || {};
+  const rawPayments = req.body.payments || req.body.vouchers || [];
+  const company_name = req.body.company_name;
 
-  if (!Array.isArray(payments) || payments.length === 0) {
+  if (!Array.isArray(rawPayments) || rawPayments.length === 0) {
     return res.json({ message: 'No payments in payload', matched: 0, added: 0, skipped: 0 });
   }
 
@@ -583,14 +586,14 @@ router.post('/payments', verifyTallyToken, (req, res) => {
 
   try {
     db.transaction(() => {
-      for (const p of payments) {
+      for (const p of rawPayments) {
         const alterId = Number(p.alter_id || 0);
         if (alterId > maxAlterId) maxAlterId = alterId;
 
-        const billRef = String(p.bill_ref || '').trim();
-        const vendorName = String(p.vendor_name || '').trim();
-        const payAmount = round2(Math.abs(Number(p.amount) || 0));
-        const payDate = String(p.payment_date || '').trim().slice(0, 10);
+        const billRef = String(p.bill_ref || p.ref_number || p.voucher_number || p.reference || '').trim();
+        const vendorName = String(p.vendor_name || p.supplier_name || p.party_name || p.party_ledger_name || '').trim();
+        const payAmount = round2(Math.abs(Number(p.amount ?? p.amount_paid) || 0));
+        const payDate = String(p.payment_date || p.date || p.txn_date || '').trim().slice(0, 10);
         const utr = String(p.utr_ref || p.instrument_number || '').trim() || null;
         const remarks = (p.remarks || p.narration || 'Synced from Tally Payment Voucher').trim();
 

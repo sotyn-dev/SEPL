@@ -435,4 +435,37 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+
+// BATCH CREATE — for AI Agent & Bulk PMS Task creation (TSK-0567)
+router.post('/batch', (req, res) => {
+  if (!can(req.user.id, 'create')) return res.status(403).json({ error: 'Not allowed to create PMS tasks' });
+  const { tasks } = req.body || {};
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return res.status(400).json({ error: 'At least one task is required' });
+  }
+
+  const db = getDb();
+  const created = [];
+  const runBatch = db.transaction(() => {
+    for (const t of tasks) {
+      const desc = String(t.description || t.title || '').trim();
+      if (!desc) continue;
+      const derivedTitle = String(t.title || desc.split(/\r?\n/)[0]).slice(0, 80).trim();
+      const siteName = t.site_name || t.project_name || 'General Site';
+      const flowNumber = t.flow_number || '15.1';
+      const assignee = t.assigned_to || req.user.id;
+      const dueDate = t.due_date || null;
+
+      const r = db.prepare(`
+        INSERT INTO pms_tasks (title, description, project_name_snapshot, assigned_by, assigned_to, due_date, status, flow_number)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+      `).run(derivedTitle, desc, siteName, req.user.id, assignee, dueDate, flowNumber);
+      created.push({ id: r.lastInsertRowid, title: derivedTitle });
+    }
+  });
+  runBatch();
+
+  res.status(201).json({ success: true, count: created.length, created });
+});
+
 module.exports = router;

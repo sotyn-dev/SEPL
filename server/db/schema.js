@@ -7243,6 +7243,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     //                also needs leads.can_create)
     //   can_delete → bin a junk submission
     'sotyn_leads',
+    'vendor_registration',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -7790,6 +7791,14 @@ in your first week. If a process feels broken, raise a Help Ticket
     runSotynLeadsMigrations(db);
   } catch (e) {
     console.warn('[sotyn_leads] migrations skipped (non-fatal):', e.message);
+  }
+
+  // SOTYN Vendor Registration & Empanelment
+  try {
+    const { runVendorRegistrationMigrations } = require('./vendorRegistrationSchema');
+    runVendorRegistrationMigrations(db);
+  } catch (e) {
+    console.warn('[vendor_registration] migrations skipped (non-fatal):', e.message);
   }
 
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────

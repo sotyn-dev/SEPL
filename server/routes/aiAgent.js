@@ -1321,4 +1321,219 @@ Guidance:
   }
 });
 
+
+// ─── TSK-0567: AI Agent to Fetch & Convert Client Chat Snags into PMS / Snag List ───
+
+// GET /api/ai-agent/chat-groups — returns groups list for chat selection
+router.get('/chat-groups', (req, res) => {
+  try {
+    const { getChatDb } = require('../db/chatDb');
+    const cDb = getChatDb();
+    const groups = cDb.prepare(`
+      SELECT g.id, g.name, g.is_dm,
+             (SELECT COUNT(*) FROM chat_messages m WHERE m.group_id = g.id AND m.deleted_at IS NULL) as message_count,
+             (SELECT m.created_at FROM chat_messages m WHERE m.group_id = g.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) as last_activity
+      FROM chat_groups g
+      WHERE g.archived_at IS NULL
+      ORDER BY last_activity DESC, message_count DESC, g.name ASC
+      LIMIT 100
+    `).all();
+    res.json(groups);
+  } catch (err) {
+    console.error('[aiAgent] chat-groups error:', err);
+    res.json([]);
+  }
+});
+
+// Heuristic fallback extractor when AI provider is unconfigured or unavailable
+function fallbackExtractSnags(text, sites = []) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const items = [];
+  const issueKeywords = /(leak|broken|crack|missing|loose|damage|short circuit|fault|danger|urgent|water|fire|replace|drawing|submission|clean|inverter|wiring|not working|defect|snag|punch|rectif)/i;
+
+  for (const line of lines) {
+    if (!issueKeywords.test(line)) continue;
+    const cleanLine = line.replace(/^\[.*?\]\s*/, '').replace(/^[A-Za-z0-9_\s\(\)]+:\s*/, '').trim();
+    if (cleanLine.length < 10) continue;
+
+    // Skip greetings and intro lines like "Good morning site team. Following punch list..."
+    if (/^(good\s+morning|good\s+afternoon|hello|hi\s+team|dear|following\s+(?:are|items|punch)|please\s+find|noted|regards)/i.test(cleanLine) && /(following|closure|handover|list\s+items|below)/i.test(cleanLine)) {
+      continue;
+    }
+
+    // Strip leading list bullets/numbering: e.g. "1. ", "1) ", "2 - ", "• ", "- "
+    const withoutBullet = cleanLine.replace(/^(\d+[\.\)\-:]\s*|[\-\*•–—]\s*)/, '').trim();
+    if (withoutBullet.length < 6) continue;
+
+    let trade = 'General';
+    if (/(chilled|water|pipe|leak|drain|plumb|sink|valve|tap)/i.test(withoutBullet)) trade = 'Plumbing';
+    else if (/(db|panel|short circuit|cable|wire|electric|light|switch|mcb|earthing)/i.test(withoutBullet)) trade = 'Electrical';
+    else if (/(tile|crack|wall|civil|paint|masonry|floor|lobby|door|grout|plaster)/i.test(withoutBullet)) trade = 'Civil';
+    else if (/(fire|hose|reel|drum|extinguisher|noc|hydrant|sprinkler)/i.test(withoutBullet)) trade = 'Fire Fighting';
+    else if (/(hvac|ahu|duct|ac|cooling|diffuser)/i.test(withoutBullet)) trade = 'HVAC';
+    else if (/(solar|inverter|module|pv)/i.test(withoutBullet)) trade = 'Solar';
+
+    let priority = 'medium';
+    if (/(urgent|danger|short circuit|hazard|immediately|critical|emergency)/i.test(withoutBullet)) priority = 'urgent';
+    else if (/(fire|audit|leak|broken|missing|safety)/i.test(withoutBullet)) priority = 'high';
+
+    let location = '';
+    const locMatch = withoutBullet.match(/(\b\d+(?:st|nd|rd|th)?\s+floor\b|\bbasement(?:\s+[a-z0-9]+)?\b|\blift\s+lobby\b|\bahu\s+room\b|\bterrace\b|\bstair(?:\s+\d+)?\b|\bcorridor\b|\btoilet\b|\bwashroom\b|\bkitchen\b)/i);
+    if (locMatch) location = locMatch[0].trim();
+
+    const isPms = /(drawing|submission|as-built|vendor|invoice|approval|po\b|schedule|meeting|permit)/i.test(withoutBullet);
+    const target_type = isPms ? 'pms_task' : 'snag';
+
+    let title = withoutBullet.split(/[.?!;\n]/)[0].trim();
+    if (title.length > 70) title = title.slice(0, 67) + '...';
+    if (!title || title.length < 5) title = withoutBullet.slice(0, 60);
+
+    items.push({
+      title,
+      description: withoutBullet,
+      location: location || '',
+      priority,
+      trade,
+      suggested_action: `Inspect and rectify ${trade.toLowerCase()} issue: ${title}`,
+      target_type
+    });
+  }
+  return items;
+}
+
+// POST /api/ai-agent/extract-snags — extracts snags/PMS tasks from chat text or group
+router.post('/extract-snags', async (req, res) => {
+  const db = getDb();
+  const { group_id, chat_text, site_id } = req.body || {};
+
+  let rawTranscript = String(chat_text || '').trim();
+  let groupName = '';
+
+  // If group_id provided, fetch recent chat messages from chatDb
+  if (group_id) {
+    try {
+      const { getChatDb } = require('../db/chatDb');
+      const cDb = getChatDb();
+      const gRow = cDb.prepare('SELECT name FROM chat_groups WHERE id=?').get(group_id);
+      groupName = gRow?.name || '';
+      const msgs = cDb.prepare(`
+        SELECT sender_name, body, created_at 
+        FROM chat_messages 
+        WHERE group_id=? AND deleted_at IS NULL AND body IS NOT NULL AND TRIM(body) != ''
+        ORDER BY id DESC LIMIT 60
+      `).all(group_id);
+      msgs.reverse();
+      const fetchedText = msgs.map(m => `[${m.created_at || ''}] ${m.sender_name || 'Client'}: ${m.body}`).join('\n');
+      if (fetchedText) {
+        rawTranscript = rawTranscript ? `${fetchedText}\n\n${rawTranscript}` : fetchedText;
+      }
+    } catch (err) {
+      console.error('[aiAgent] error fetching group messages:', err);
+    }
+  }
+
+  if (!rawTranscript) {
+    return res.status(400).json({ error: 'Please provide chat transcript text or select a group with messages.' });
+  }
+
+  // Load sites for mapping
+  const sites = db.prepare("SELECT id, name FROM sites WHERE status != 'archived' ORDER BY name").all();
+  const siteMap = new Map(sites.map(s => [s.name.toLowerCase(), s.id]));
+
+  let selectedSiteName = '';
+  if (site_id) {
+    const sRow = db.prepare('SELECT name FROM sites WHERE id=?').get(site_id);
+    selectedSiteName = sRow?.name || '';
+  }
+
+  const { aiComplete, extractJsonArray, aiConfig } = require('../lib/aiComplete');
+  const cfg = aiConfig(db);
+
+  let candidates = [];
+  let usedAi = false;
+
+  if (cfg.configured) {
+    try {
+      const prompt = `Extract all defects, punch-list items, customer complaints, and tasks from this client chat transcript.
+
+Available sites in ERP: ${sites.map(s => s.name).join(', ')}
+Default site if not specified: ${selectedSiteName || groupName || 'None'}
+
+Return ONLY a valid JSON array of objects. Each object MUST have:
+- "title": Concise 4-10 word defect/task summary
+- "description": Complete observation context or verbatim client remark
+- "location": Floor, room, area, or grid (e.g., "3rd Floor AHU Room", "Basement Block B")
+- "site_name": Best matching site name from available sites, or default site
+- "priority": one of ["urgent", "high", "medium", "low"]
+- "trade": one of ["Civil", "Electrical", "Plumbing", "HVAC", "Fire Fighting", "Solar", "Finishing", "General"]
+- "suggested_action": Recommended rectification step
+- "target_type": "snag" for on-site physical defects/rectifications, "pms_task" for documentation/administrative/as-built drawing/approval tasks
+
+CHAT TRANSCRIPT:
+${rawTranscript}`;
+
+      const aiRes = await aiComplete(db, {
+        prompt,
+        system: "You are a professional Construction QA/QC Engineer and Project Manager. Extract structured snag and task records from chat text. Output strictly a JSON array without markdown or explanation.",
+        maxTokens: 2500,
+        temperature: 0.1
+      });
+
+      const parsed = extractJsonArray(aiRes?.text || aiRes);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        candidates = parsed;
+        usedAi = true;
+      }
+    } catch (aiErr) {
+      console.warn('[aiAgent] AI completion error, falling back to heuristic extractor:', aiErr.message);
+    }
+  }
+
+  // Fallback if AI not configured or returned no items
+  if (candidates.length === 0) {
+    candidates = fallbackExtractSnags(rawTranscript, sites);
+  }
+
+  // Enrich candidates with site_id mapping
+  const enrichedCandidates = candidates.map((it, idx) => {
+    let matchedSiteId = site_id || null;
+    let matchedSiteName = it.site_name || selectedSiteName || groupName || '';
+
+    if (!matchedSiteId && matchedSiteName) {
+      const lower = matchedSiteName.toLowerCase();
+      for (const [sName, sId] of siteMap.entries()) {
+        if (lower.includes(sName) || sName.includes(lower)) {
+          matchedSiteId = sId;
+          break;
+        }
+      }
+    }
+    if (!matchedSiteId && sites.length > 0) {
+      matchedSiteId = sites[0].id;
+      matchedSiteName = matchedSiteName || sites[0].name;
+    }
+
+    return {
+      temp_id: `cand-${Date.now()}-${idx}`,
+      title: it.title || 'Untitled Snag',
+      description: it.description || it.title || '',
+      location: it.location || '',
+      priority: ['urgent', 'high', 'medium', 'low'].includes(String(it.priority).toLowerCase()) ? String(it.priority).toLowerCase() : 'medium',
+      trade: it.trade || 'General',
+      suggested_action: it.suggested_action || '',
+      target_type: it.target_type === 'pms_task' ? 'pms_task' : 'snag',
+      site_id: matchedSiteId,
+      site_name: matchedSiteName,
+      selected: true
+    };
+  });
+
+  res.json({
+    success: true,
+    used_ai: usedAi,
+    count: enrichedCandidates.length,
+    candidates: enrichedCandidates
+  });
+});
+
 module.exports = router;

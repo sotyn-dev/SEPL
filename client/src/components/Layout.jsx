@@ -71,7 +71,7 @@ import {
   // Project Dashboard & PO Analytics (TSK-0819)
   FiPieChart,
 } from 'react-icons/fi';
-import { LuIndianRupee, LuBrain, LuBuilding2 } from 'react-icons/lu';
+import { LuIndianRupee, LuBrain, LuBuilding2, LuBadgeCheck } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 
@@ -107,6 +107,7 @@ const SIDEBAR_GROUPS = [
     // Mam (2026-09-07): sotyn.ai website enquiries land here by themselves
     // (public webhook) and are pushed into the Sales Funnel with Convert.
     { path: '/sotyn-leads',   label: 'Sotyn Leads',       icon: FiRss,        module: 'sotyn_leads' },
+    { path: '/vendor-registration', label: 'Vendor Registration', icon: LuBadgeCheck, module: 'vendor_registration' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
