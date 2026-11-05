@@ -1,5 +1,5 @@
 import NumberedTable from '../components/NumberedTable';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
-  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle, FiUsers,
+  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle, FiUsers, FiSearch, FiX,
 } from 'react-icons/fi';
 // FiPlayCircle is already imported above for the Hold/Unhold button
 // — reused here for the Training Library tab icon.
@@ -142,13 +142,30 @@ export default function HR() {
   };
   useEffect(() => { load(); }, []);
 
+  const [candSearch, setCandSearch] = useState('');
+
   // Candidates-tab pagination — the table itself renders inside a
   // conditional tab block, so the hook (and the filtered list it windows)
   // must live here at the component top level.
-  const visibleCandidates = stageFilter === 'all'
-    ? candidates
-    : candidates.filter(c => bucketFor(c) === stageFilter);
-  const candPager = usePagination(visibleCandidates, { resetKey: [stageFilter] });
+  const visibleCandidates = useMemo(() => {
+    let list = stageFilter === 'all'
+      ? candidates
+      : candidates.filter(c => bucketFor(c) === stageFilter);
+    if (!candSearch.trim()) return list;
+    const q = candSearch.toLowerCase().trim();
+    return list.filter(c => {
+      const matchName = (c.name || '').toLowerCase().includes(q);
+      const matchPhone = (c.phone || '').toLowerCase().includes(q);
+      const matchEmail = (c.email || '').toLowerCase().includes(q);
+      const matchPos = (c.position || '').toLowerCase().includes(q);
+      const matchSource = (c.source || '').toLowerCase().includes(q);
+      const matchInterviewer = (c.interviewer_name || c.interview_interviewer || '').toLowerCase().includes(q);
+      const matchNotes = (c.notes || '').toLowerCase().includes(q);
+      return matchName || matchPhone || matchEmail || matchPos || matchSource || matchInterviewer || matchNotes;
+    });
+  }, [candidates, stageFilter, candSearch]);
+
+  const candPager = usePagination(visibleCandidates, { resetKey: [stageFilter, candSearch] });
 
   // Generic file upload helper — reuses /upload, returns the served URL.
   const uploadFile = async (file) => {
@@ -582,10 +599,9 @@ export default function HR() {
             </div>
           </div>
 
-          {/* Stage pill tabs — same Sales-Funnel / CRM-Kitting pattern
-              with coloured count badges.  Click a pill to filter the
-              table.  Mam (2026-05-22). */}
-          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap items-center">
+          {/* Search bar & Stage pill tabs */}
+          <div className="flex flex-col sm:flex-row gap-2.5 items-start sm:items-center justify-between">
+            <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap items-center flex-1">
             <button
               onClick={() => setStageFilter('all')}
               className={`btn ${stageFilter === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
@@ -611,7 +627,35 @@ export default function HR() {
                 </button>
               );
             })}
+            </div>
+            {/* ATS Candidate Search Input */}
+            <div className="relative w-full sm:w-72 shrink-0">
+              <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              <input
+                type="text"
+                className="input text-xs pl-8 pr-7 py-1.5 w-full bg-white shadow-xs"
+                placeholder="Search candidates by name, phone, role…"
+                value={candSearch}
+                onChange={e => setCandSearch(e.target.value)}
+              />
+              {candSearch && (
+                <button
+                  type="button"
+                  onClick={() => setCandSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full"
+                  title="Clear search"
+                >
+                  <FiX size={12} />
+                </button>
+              )}
+            </div>
           </div>
+          {candSearch.trim() && (
+            <div className="text-[11px] text-gray-600 flex items-center gap-1.5 bg-blue-50/60 px-2.5 py-1 rounded border border-blue-100">
+              <span>Showing <strong>{visibleCandidates.length}</strong> matching candidate(s) for "<em>{candSearch}</em>"</span>
+              <button onClick={() => setCandSearch('')} className="text-blue-600 font-semibold hover:underline ml-2">Clear search</button>
+            </div>
+          )}
 
           <div className="card p-0 overflow-x-auto">
             <NumberedTable start={(candPager.page - 1) * candPager.perPage + 1} className="text-sm w-full min-w-[800px]">

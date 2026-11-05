@@ -431,7 +431,7 @@ export default function VendorPOPrint() {
               // Pipe lines are stored & PO'd in KG (quantity = kg); the
               // original meters ride along in original_qty_mtr for "show both".
               const isPipe = +it.weight_per_meter > 0;
-              const unit = isPipe ? 'KG' : String(it.uom || it.unit || '').toUpperCase();
+              const unit = isPipe ? 'KG' : String(it.vpi_unit || it.unit || it.uom || '').toUpperCase();
               // Mam (2026-05-21): "update here if i update rate in 3
               // vendor" — prefer the latest finalised rate from the
               // Vendor Rates step over the PO-frozen rate.  Drift
