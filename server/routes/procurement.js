@@ -4037,6 +4037,7 @@ router.get('/vendor-po/:id/print', (req, res) => {
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
            vpi.weight_per_meter, vpi.original_qty_mtr,
            vpi.description as custom_description, vpi.hsn_code as custom_hsn,
+           vpi.unit as vpi_unit,
            COALESCE(vpi.specification, im.specification) as specification,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            ii.item_type,
@@ -4303,6 +4304,7 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity,
            COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
+           vpi.unit as vpi_unit,
            COALESCE(vpi.specification, im.specification) as specification, im.size,
            COALESCE(im.make, ii.make) as make,
            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
@@ -5009,8 +5011,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       // Terms + credit_days are deliberately null — PO terms now live on the
       // uploaded Tally PO itself.
       const insItem = db.prepare(
-        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr, specification)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)`
+        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr, specification, unit)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)`
       );
       for (const i of lines) {
         // For pipe lines the client sends quantity already in KG (mtr × kg/m),
@@ -5018,7 +5020,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         const wpm = +i.weight_per_meter > 0 ? +i.weight_per_meter : null;
         const mtr = +i.original_qty_mtr > 0 ? +i.original_qty_mtr : null;
         const spec = i.specification ? String(i.specification).trim() : null;
-        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr, spec);
+        const itemUnit = i.unit ? String(i.unit).trim() : (wpm ? 'KG' : (db.prepare('SELECT unit FROM indent_items WHERE id=?').get(i.indent_item_id)?.unit || null));
+        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr, spec, itemUnit);
       }
       // TSK-0477: Item Master rate is NOT overwritten while PO is pending review/approval.
       // Master rate update is deferred until final approval (syncApprovedPoItemPrices).
@@ -5267,7 +5270,8 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
     let items = db.prepare(`
       SELECT vpi.id, vpi.vendor_po_id, vpi.indent_item_id, vpi.quantity, vpi.rate as actual_rate,
              vpi.amount as actual_amount, vpi.description, ii.unit,
-             COALESCE(vpi.specification, im.specification) as specification,
+             vpi.unit as vpi_unit,
+           COALESCE(vpi.specification, im.specification) as specification,
              ii.description as indent_description, ii.unit as indent_unit,
              ii.make as indent_make, im.size as indent_size, ii.weight_per_meter,
              im.item_code, im.item_name as master_name, im.size as master_size,
@@ -5815,6 +5819,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
   let items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.description, vpi.hsn_code,
+           vpi.unit as vpi_unit,
            COALESCE(vpi.specification, im.specification) as specification,
            ii.description as indent_description, ii.unit,
            im.item_code, im.item_name as master_name, im.size

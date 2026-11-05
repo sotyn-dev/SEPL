@@ -668,7 +668,7 @@ export default function DPR() {
   const handleSiteSelect = (siteId) => {
     setForm(f => ({ ...f, site_id: siteId }));
     setWorkItems([]);
-    if (siteId) {
+    if (siteId && siteId !== 'inactive_site') {
       // Response is now { items, diagnostic, total_count } — older format
       // was a bare array. Handle both for robustness.
       api.get(`/dpr/sites/${siteId}/po-items`).then(r => {
@@ -924,9 +924,17 @@ export default function DPR() {
     // the DPR never diverge without the engineer knowing.
     const over = dprMaterials.find(m => !m.from_slips && +m.consumed_today > 0 && +m.consumed_today > +m.stock_qty);
     if (over) return toast.error(`${over.material_name}: consumed ${over.consumed_today} is more than the ${over.stock_qty} in store. Correct the qty, or record the extra material IN first.`);
+    if (form.site_id === 'inactive_site') {
+      if (!form.inactive_site_name?.trim()) return toast.error('Please enter the Inactive Site name');
+      if (!form.inactive_site_reason?.trim()) return toast.error('Please explain why work was performed on this inactive site');
+    }
     try {
       const res = await api.post('/dpr', {
         ...form,
+        is_inactive_site: form.site_id === 'inactive_site' ? 1 : 0,
+        inactive_site_name: form.inactive_site_name?.trim() || null,
+        inactive_site_reason: form.inactive_site_reason?.trim() || null,
+        actual_site_id: (form.inactive_picked_id && form.inactive_picked_id !== 'custom') ? form.inactive_picked_id : null,
         work_items: workItems.filter(w => w.po_item_id || w.description),
         manpower: costs.filter(c => c.qty > 0 || c.amount > 0),
         machinery: machinery.filter(m => m.equipment),
@@ -1399,7 +1407,10 @@ export default function DPR() {
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
                         <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">DPR</div>
-                        <div className="text-base font-bold text-gray-900 truncate">{d.site_name}</div>
+                        <div className="text-base font-bold text-gray-900 truncate flex items-center gap-1.5">
+                        <span>{d.is_inactive_site && d.inactive_site_name ? d.inactive_site_name : d.site_name}</span>
+                        {d.is_inactive_site ? <span className="bg-amber-100 text-amber-800 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-300">Inactive Site</span> : null}
+                      </div>
                         <div className="text-[11px] text-gray-500">{d.report_date} · {d.submitted_by_name || '—'}</div>
                       </div>
                       {planned
@@ -1504,7 +1515,9 @@ export default function DPR() {
                   const variance = (!planned && hasPlan) ? (actB - planB) : null;
                   return (
                     <tr key={d.id}>
-                      <td className="font-medium">{d.site_name}</td>
+                      <td className="font-medium">
+                        {d.is_inactive_site && d.inactive_site_name ? `${d.inactive_site_name} (Inactive Site)` : d.site_name}
+                      </td>
                       <td>{d.report_date}</td>
                       <td>{d.submitted_by_name}</td>
                       <td>
@@ -1696,10 +1709,69 @@ export default function DPR() {
 
           {/* Header */}
           <div className="border rounded-lg p-3 bg-gray-50">
+            {form.site_id === 'inactive_site' && (
+              <div className="mb-3 border border-amber-300 bg-amber-50/90 rounded-lg p-3 space-y-2.5">
+                <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
+                  <FiAlertTriangle size={15} className="text-amber-600 shrink-0" />
+                  <span>DPR for Inactive / On-Hold Site</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="label text-[11px] font-semibold text-amber-950">Select On-Hold Site (or pick Custom) *</label>
+                    <select
+                      className="select text-xs bg-white"
+                      value={form.inactive_picked_id || ''}
+                      onChange={e => {
+                        const val = e.target.value;
+                        const found = sites.find(s => String(s.id) === String(val));
+                        setForm(f => ({
+                          ...f,
+                          inactive_picked_id: val,
+                          inactive_site_name: found ? found.name : (val === 'custom' ? '' : f.inactive_site_name || ''),
+                        }));
+                      }}
+                    >
+                      <option value="">-- Choose from On-Hold Sites --</option>
+                      {sites.filter(s => s.status !== 'active').map(s => (
+                        <option key={s.id} value={s.id}>{s.lead_no ? `[${s.lead_no}] ` : ''}{s.name} ({s.status || 'on_hold'})</option>
+                      ))}
+                      <option value="custom">✏️ Other / Unlisted Inactive Site</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label text-[11px] font-semibold text-amber-950">Inactive Site Name *</label>
+                    <input
+                      className="input text-xs bg-white"
+                      placeholder="e.g. Hartex Rubber / Unlisted Site"
+                      value={form.inactive_site_name || ''}
+                      onChange={e => setForm(f => ({ ...f, inactive_site_name: e.target.value }))}
+                      required
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="label text-[11px] font-semibold text-amber-950">Reason & Explanation for Work on Inactive Site *</label>
+                  <textarea
+                    className="input text-xs bg-white w-full"
+                    rows="2"
+                    placeholder="Explain why work was performed on this inactive/on-hold site (e.g. client requested urgent punch-list work, standby maintenance, equipment shifting)…"
+                    value={form.inactive_site_reason || ''}
+                    onChange={e => setForm(f => ({ ...f, inactive_site_reason: e.target.value }))}
+                    required
+                  />
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div><label className="label">Site Name *</label>
                 <select className="select" value={form.site_id || ''} onChange={e => handleSiteSelect(e.target.value)} required>
-                  <option value="">Select Site</option>{sites.filter(s => s.status === 'active').map(s => <option key={s.id} value={s.id}>{s.lead_no ? `[${s.lead_no}] ` : ''}{s.name}</option>)}
+                  <option value="">Select Site</option>
+                  <optgroup label="Active Sites">
+                    {sites.filter(s => s.status === 'active').map(s => <option key={s.id} value={s.id}>{s.lead_no ? `[${s.lead_no}] ` : ''}{s.name}</option>)}
+                  </optgroup>
+                  <optgroup label="On-Hold / Inactive">
+                    <option value="inactive_site">⚠️ Inactive / On-Hold Site (Specify)</option>
+                  </optgroup>
                 </select>
               </div>
               <div><label className="label">Date *</label><input className="input" type="date" value={form.report_date || ''} onChange={e => setForm({ ...form, report_date: e.target.value })} required /></div>

@@ -4224,6 +4224,10 @@ function initializeDatabase() {
     // the finalised one, so editing the PO changed nothing on the PDF (mam
     // 2026-08-19). With this timestamp the newer edit wins either way.
     ['vendor_po_items', 'rate_updated_at DATETIME'],
+    ['vendor_po_items', 'unit TEXT'],
+    ['dpr', 'is_inactive_site INTEGER DEFAULT 0'],
+    ['dpr', 'inactive_site_name TEXT'],
+    ['dpr', 'inactive_site_reason TEXT'],
     // Optional proof file for a complaint's Step 2 service report (mam
     // 2026-08-20). Added here, at boot, because the complaints route only ran
     // its own ALTERs inside POST /public — so on any install where no client had

@@ -15,7 +15,7 @@ import {
   FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus,
   FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown,
   FiCornerUpLeft, FiCornerUpRight, FiDownload, FiImage, FiEdit2, FiStar,
-  FiArchive, FiRotateCcw, FiMoreVertical, FiSmile
+  FiArchive, FiRotateCcw, FiMoreVertical, FiSmile, FiChevronUp, FiType, FiMaximize2, FiMinimize2
 } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
@@ -120,12 +120,42 @@ const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attach
 // Rendered as React elements (never innerHTML), so message text can't inject
 // markup — only the matched URL itself becomes an <a>.
 const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
-function linkify(text, keyBase = 'u') {
+function highlightQuery(node, searchQuery, keyBase = 'hl') {
+  if (!searchQuery || !searchQuery.trim() || typeof node !== 'string') return [node];
+  const q = searchQuery.trim();
+  const qLower = q.toLowerCase();
+  const nLower = node.toLowerCase();
+  if (!nLower.includes(qLower)) return [node];
+
+  const parts = [];
+  let cur = 0;
+  let idx = 0;
+  while (cur < node.length) {
+    const matchIdx = nLower.indexOf(qLower, cur);
+    if (matchIdx === -1) {
+      parts.push(node.slice(cur));
+      break;
+    }
+    if (matchIdx > cur) {
+      parts.push(node.slice(cur, matchIdx));
+    }
+    parts.push(
+      <mark key={`${keyBase}-${idx++}`} className="bg-amber-300 text-gray-900 px-0.5 rounded font-semibold">
+        {node.slice(matchIdx, matchIdx + q.length)}
+      </mark>
+    );
+    cur = matchIdx + q.length;
+  }
+  return parts;
+}
+
+function linkify(text, keyBase = 'u', searchQuery = '') {
+  if (!text || (!text.includes('http') && !text.includes('www.'))) return highlightQuery(text, searchQuery, keyBase);
   if (!text || (!text.includes('http') && !text.includes('www.'))) return [text];
   const re = new RegExp(URL_RE.source, 'g');
   const out = []; let last = 0; let mm;
   while ((mm = re.exec(text))) {
-    if (mm.index > last) out.push(text.slice(last, mm.index));
+    if (mm.index > last) out.push(...highlightQuery(text.slice(last, mm.index), searchQuery, `${keyBase}-t${last}`));
     let url = mm[0];
     const trail = (url.match(/[.,;:!?)\]]+$/) || [''])[0];
     if (trail) url = url.slice(0, -trail.length);
@@ -134,11 +164,93 @@ function linkify(text, keyBase = 'u') {
         target="_blank" rel="noreferrer" className="text-blue-600 underline break-all"
         onClick={(e) => e.stopPropagation()}>{url}</a>
     );
-    if (trail) out.push(trail);
+    if (trail) out.push(...highlightQuery(trail, searchQuery, `${keyBase}-tr${last}`));
     last = mm.index + mm[0].length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) out.push(...highlightQuery(text.slice(last), searchQuery, `${keyBase}-end`));
   return out;
+}
+
+// WhatsApp-style markdown renderer: *bold*, _italic_, ~strike~, `code`, ```block```, and > quotes
+function renderPlainChunk(chunk, keyBase = 'pc', searchQuery = '') {
+  if (!chunk.includes('\n>') && !chunk.startsWith('>')) {
+    return linkify(chunk, keyBase, searchQuery);
+  }
+  const lines = chunk.split('\n');
+  const res = [];
+  lines.forEach((line, i) => {
+    if (line.startsWith('> ') || line.startsWith('>')) {
+      const qText = line.startsWith('> ') ? line.slice(2) : line.slice(1);
+      res.push(
+        <blockquote key={`${keyBase}-q${i}`} className="border-l-3 border-blue-500 pl-2.5 py-0.5 my-1 bg-blue-50/50 rounded-r text-gray-700 italic block">
+          {linkify(qText, `${keyBase}-ql${i}`, searchQuery)}
+        </blockquote>
+      );
+    } else {
+      res.push(...linkify(line, `${keyBase}-l${i}`, searchQuery));
+    }
+    if (i < lines.length - 1) {
+      res.push('\n');
+    }
+  });
+  return res;
+}
+
+function formatMarkdown(text, keyBase = 'md', searchQuery = '') {
+  if (!text) return [text];
+  const tokenRegex = /(```[\s\S]*?```|`[^`\n]+?`|\*\*[^*]+?\*\*|\*[^*]+?\*|_[^_]+?_|~[^~]+?~)/g;
+  const parts = [];
+  let last = 0, match, idx = 0;
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > last) {
+      parts.push(...renderPlainChunk(text.slice(last, match.index), `${keyBase}-t${idx++}`, searchQuery));
+    }
+    const raw = match[0];
+    const key = `${keyBase}-${idx++}`;
+    if (raw.startsWith('```') && raw.endsWith('```')) {
+      const code = raw.slice(3, -3).replace(/^\n+|\n+$/g, '');
+      parts.push(
+        <pre key={key} className="bg-black/[0.08] text-gray-800 rounded px-2.5 py-1.5 my-1 font-mono text-[11px] overflow-x-auto whitespace-pre leading-relaxed border border-black/[0.06]">
+          {highlightQuery(code, searchQuery, `${key}-pre`)}
+        </pre>
+      );
+    } else if (raw.startsWith('`') && raw.endsWith('`')) {
+      parts.push(
+        <code key={key} className="bg-black/[0.08] text-pink-700 font-semibold px-1 py-0.5 rounded font-mono text-[11px]">
+          {highlightQuery(raw.slice(1, -1), searchQuery, `${key}-c`)}
+        </code>
+      );
+    } else if (raw.startsWith('**') && raw.endsWith('**')) {
+      parts.push(
+        <strong key={key} className="font-bold text-gray-900">
+          {highlightQuery(raw.slice(2, -2), searchQuery, `${key}-s`)}
+        </strong>
+      );
+    } else if (raw.startsWith('*') && raw.endsWith('*')) {
+      parts.push(
+        <strong key={key} className="font-bold text-gray-900">
+          {highlightQuery(raw.slice(1, -1), searchQuery, `${key}-s`)}
+        </strong>
+      );
+    } else if (raw.startsWith('_') && raw.endsWith('_')) {
+      parts.push(
+        <em key={key} className="italic text-gray-900">
+          {highlightQuery(raw.slice(1, -1), searchQuery, `${key}-em`)}
+        </em>
+      );
+    } else if (raw.startsWith('~') && raw.endsWith('~')) {
+      parts.push(
+        <del key={key} className="line-through opacity-75">
+          {highlightQuery(raw.slice(1, -1), searchQuery, `${key}-del`)}
+        </del>
+      );
+    }
+    last = match.index + raw.length;
+  }
+  if (last < text.length) {
+    parts.push(...renderPlainChunk(text.slice(last), `${keyBase}-t${idx++}`, searchQuery));
+  }
+  return parts;
 }
 
 // Memoised message list — the heavy part of the thread. Its own React.memo
@@ -173,7 +285,7 @@ function previewOf(m) {
   return { icon: '📎', label: name || 'Attachment', text };
 }
 
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward, onReact, onImageClick }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, activeSearchMsgId, searchQuery, onReply, onInfo, onDelete, onEdit, onForward, onReact, onImageClick }) {
   const [reactMsgId, setReactMsgId] = useState(null);
 
   useEffect(() => {
@@ -203,15 +315,15 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
   // mentions go through linkify() so a pasted link is clickable either way.
   const renderBody = (body) => {
     if (!body) return body;
-    if (!mentionPattern) return linkify(body);
+    if (!mentionPattern) return formatMarkdown(body, 'b', searchQuery);
     const re = new RegExp(mentionPattern, 'g');
     const out = []; let last = 0; let mm;
     while ((mm = re.exec(body))) {
-      if (mm.index > last) out.push(...linkify(body.slice(last, mm.index), `t${last}`));
-      out.push(<span key={`m${mm.index}`} className="text-blue-400 font-semibold">@{mm[1]}</span>);
+      if (mm.index > last) out.push(...formatMarkdown(body.slice(last, mm.index), `t${last}`, searchQuery));
+      out.push(<span key={`m${mm.index}`} className="text-blue-500 font-semibold bg-blue-50/70 px-1 py-0.5 rounded">@{mm[1]}</span>);
       last = mm.index + mm[0].length;
     }
-    if (last < body.length) out.push(...linkify(body.slice(last), `t${last}`));
+    if (last < body.length) out.push(...formatMarkdown(body.slice(last), `t${last}`, searchQuery));
     return out;
   };
   // Group consecutive messages by calendar day so each day's label can be a
@@ -274,7 +386,7 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                <div className={`group relative max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''}`}>
+                <div className={`group relative max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''} ${activeSearchMsgId === m.id ? 'ring-2 ring-amber-500 shadow-md !bg-amber-100/90' : ''}`}>
                   {/* Floating quick emoji reaction popup */}
                   {reactMsgId === m.id && (
                     <div
@@ -514,8 +626,23 @@ export default function SiteChat() {
   const [previewImage, setPreviewImage] = useState(null); // image preview lightbox: { url, name, downloadUrl }
   const previewImageRef = useRef(null);
   previewImageRef.current = previewImage;
-  const [text, setText] = useState('');
+  const draftsRef = useRef((() => {
+    try { return JSON.parse(sessionStorage.getItem('sotyn_chat_drafts') || '{}'); } catch { return {}; }
+  })());
+  const prevSelIdRef = useRef(sel?.id || null);
+  const [text, setText] = useState(() => {
+    try {
+      const drafts = JSON.parse(sessionStorage.getItem('sotyn_chat_drafts') || '{}');
+      const initialId = Number(new URLSearchParams(window.location.search).get('chat'));
+      return (initialId && drafts[initialId]) || '';
+    } catch { return ''; }
+  });
   const [showComposerEmoji, setShowComposerEmoji] = useState(false);
+  const [showFormatBar, setShowFormatBar] = useState(false);
+  const [isExpandedEditor, setIsExpandedEditor] = useState(false);
+  const [threadSearchOpen, setThreadSearchOpen] = useState(false);
+  const [threadSearchQuery, setThreadSearchQuery] = useState('');
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
   const [editingId, setEditingId] = useState(null);   // id of the message being edited inline
   const [busy, setBusy] = useState(false);
@@ -752,11 +879,24 @@ export default function SiteChat() {
   // loader appears. Clearing here — instead of in the async effect below, which runs
   // after paint — guarantees the loader covers from the very first painted frame.
   useLayoutEffect(() => {
+    if (prevSelIdRef.current != null && prevSelIdRef.current !== sel?.id) {
+      if (text) {
+        draftsRef.current[prevSelIdRef.current] = text;
+      } else {
+        delete draftsRef.current[prevSelIdRef.current];
+      }
+      try { sessionStorage.setItem('sotyn_chat_drafts', JSON.stringify(draftsRef.current)); } catch {}
+    }
+    prevSelIdRef.current = sel?.id || null;
+
     if (!sel) return;
-    setText(''); setMention(null); setReplyTo(null); setEditingId(null);   // drop the composer draft + reply + edit when switching threads
-    setGroupMenu(false);                                                    // ...and never leave the ⋮ menu open over a different group
-    justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
-    setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
+    const restoredDraft = draftsRef.current[sel.id] || '';
+    setText(restoredDraft);
+    setMention(null); setReplyTo(null); setEditingId(null);
+    setGroupMenu(false);
+    justSentRef.current = { body: '', at: 0 };
+    setMsgs([]); setThreadLoading(true);
+    setThreadSearchOpen(false); setThreadSearchQuery(''); setSearchMatchIndex(0);
   }, [sel?.id]);
   useEffect(() => {
     if (!sel) return;
@@ -865,6 +1005,52 @@ export default function SiteChat() {
     el.style.height = `${newHeight}px`;
   }, []);
 
+  const applyFormat = (prefix, suffix = '', defaultPlaceholder = '') => {
+    const ta = taRef.current;
+    const val = text || '';
+    let start = 0, end = 0;
+    if (ta) {
+      start = ta.selectionStart || 0;
+      end = ta.selectionEnd || 0;
+    } else {
+      start = end = val.length;
+    }
+    const selected = val.slice(start, end);
+    const insertText = selected || defaultPlaceholder;
+    const nextVal = val.slice(0, start) + prefix + insertText + suffix + val.slice(end);
+    setText(nextVal);
+    if (sel?.id) {
+      draftsRef.current[sel.id] = nextVal;
+      try { sessionStorage.setItem('sotyn_chat_drafts', JSON.stringify(draftsRef.current)); } catch {}
+    }
+    setTimeout(() => {
+      if (ta) {
+        ta.focus();
+        const newStart = start + prefix.length;
+        const newEnd = newStart + insertText.length;
+        ta.setSelectionRange(newStart, newEnd);
+        adjustTaHeight(ta);
+      }
+    }, 20);
+  };
+
+  const matchingMsgIds = useMemo(() => {
+    if (!threadSearchQuery.trim()) return [];
+    const qLower = threadSearchQuery.toLowerCase().trim();
+    return msgs.filter(m => (m.body || '').toLowerCase().includes(qLower)).map(m => m.id);
+  }, [msgs, threadSearchQuery]);
+
+  const activeSearchMsgId = matchingMsgIds[searchMatchIndex] || null;
+
+  const jumpSearchMatch = (delta) => {
+    if (!matchingMsgIds.length) return;
+    const nextIdx = (searchMatchIndex + delta + matchingMsgIds.length) % matchingMsgIds.length;
+    setSearchMatchIndex(nextIdx);
+    const targetId = matchingMsgIds[nextIdx];
+    const el = document.getElementById('msg-' + targetId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   const handleReact = useCallback(async (msgId, emoji) => {
     if (!sel || !msgId || !emoji) return;
     // Optimistic UI reaction update
@@ -900,6 +1086,8 @@ export default function SiteChat() {
     // (WhatsApp-style) instead of after the round-trip. Clearing after the await
     // let a trailing mobile predictive-keyboard input event land after setText('')
     // and repopulate the just-sent text, so it stayed in the box (mam 2026-07-10).
+    delete draftsRef.current[sel.id];
+    try { sessionStorage.setItem('sotyn_chat_drafts', JSON.stringify(draftsRef.current)); } catch {}
     setText(''); setMention(null); setReplyTo(null); setShowComposerEmoji(false);
     if (taRef.current) { taRef.current.value = ''; taRef.current.style.height = 'auto'; } // belt-and-suspenders vs the IME buffer
     justSentRef.current = { body, at: Date.now() };   // arm the guard for the trailing IME re-inject
@@ -1039,6 +1227,14 @@ export default function SiteChat() {
       return;                                         // do NOT setText(val)
     }
     setText(val);
+    if (sel?.id) {
+      if (val) {
+        draftsRef.current[sel.id] = val;
+      } else {
+        delete draftsRef.current[sel.id];
+      }
+      try { sessionStorage.setItem('sotyn_chat_drafts', JSON.stringify(draftsRef.current)); } catch {}
+    }
     adjustTaHeight(e.target);
     const pos = e.target.selectionStart ?? val.length;
     const m = val.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
@@ -1649,6 +1845,7 @@ export default function SiteChat() {
                         {members.length === 1 && members[0].user_id === user?.id ? 'Message yourself · Notes & drafts' : 'Direct message'}
                       </div>
                     </div>
+                    <button onClick={() => setThreadSearchOpen(o => !o)} className={`p-1.5 rounded transition ${threadSearchOpen ? 'bg-white/30 text-white' : 'hover:bg-white/15'}`} title="Search messages in this chat"><FiSearch size={18} /></button>
                     {(() => {
                       const oid = members.find(m => m.user_id !== user?.id)?.user_id; return oid ? (
                         <>
@@ -1664,6 +1861,7 @@ export default function SiteChat() {
                       <div className="font-semibold text-sm truncate">{sel.name}</div>
                       <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
                     </button>
+                    <button onClick={() => setThreadSearchOpen(o => !o)} className={`p-1.5 rounded transition ${threadSearchOpen ? 'bg-white/30 text-white' : 'hover:bg-white/15'}`} title="Search messages in this group"><FiSearch size={18} /></button>
                     <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
                     {/* Group actions — same ⋮ dropdown SOTYN Flow uses for a board, so
                         the two modules behave alike. Archive/Delete live here rather
@@ -1687,6 +1885,60 @@ export default function SiteChat() {
                 )}
               </div>
 
+              {threadSearchOpen && (
+                <div className="bg-white border-b px-3 py-1.5 flex items-center gap-2 shadow-xs z-10">
+                  <FiSearch size={15} className="text-gray-400 shrink-0" />
+                  <input
+                    type="text"
+                    className="input text-xs flex-1 py-1 px-2 border-0 bg-transparent focus:ring-0"
+                    placeholder="Search messages in this chat…"
+                    value={threadSearchQuery}
+                    onChange={e => {
+                      setThreadSearchQuery(e.target.value);
+                      setSearchMatchIndex(0);
+                    }}
+                    autoFocus
+                  />
+                  {threadSearchQuery.trim() && (
+                    <div className="flex items-center gap-1 text-xs text-gray-500 shrink-0 select-none">
+                      <span className="text-[11px] font-medium mr-1">
+                        {matchingMsgIds.length > 0
+                          ? `${searchMatchIndex + 1} of ${matchingMsgIds.length}`
+                          : 'No matches'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={matchingMsgIds.length <= 1}
+                        onClick={() => jumpSearchMatch(-1)}
+                        className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer"
+                        title="Previous match"
+                      >
+                        <FiChevronUp size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={matchingMsgIds.length <= 1}
+                        onClick={() => jumpSearchMatch(1)}
+                        className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer"
+                        title="Next match"
+                      >
+                        <FiChevronDown size={15} />
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setThreadSearchOpen(false);
+                      setThreadSearchQuery('');
+                    }}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-500 cursor-pointer"
+                    title="Close search"
+                  >
+                    <FiX size={15} />
+                  </button>
+                </div>
+              )}
               <div className="relative flex-1 flex flex-col min-h-0">
                 <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#f4f5f7' }}
                   onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
@@ -1705,7 +1957,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} onImageClick={openImagePreview} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} activeSearchMsgId={activeSearchMsgId} searchQuery={threadSearchQuery} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} onImageClick={openImagePreview} />
                   </div>
 
                   <div ref={endRef} />
@@ -1812,16 +2064,48 @@ export default function SiteChat() {
                     <>
                       <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
                       <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-blue-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                      {/* Wrap the textarea in a flex-1 min-w-0 div (NOT on the
-                        textarea itself) — a textarea's intrinsic width isn't
-                        reliably collapsed by min-width:0 on mobile, which pushed
-                        the send button off the right edge so it never showed
-                        (mam 2026-06-25). The reply bar uses this same wrapper. */}
+                      <button
+                        type="button"
+                        onClick={() => setShowFormatBar(v => !v)}
+                        disabled={busy}
+                        className={`flex-shrink-0 p-2 transition rounded-full ${showFormatBar ? 'text-blue-600 bg-blue-100' : 'text-gray-500 hover:text-blue-600'}`}
+                        title="Formatting text tools"
+                      >
+                        <FiType size={18} />
+                      </button>
+                      {/* Wrap the textarea in a flex-1 min-w-0 div */}
                       <div className="flex-1 min-w-0">
-                        <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
+                        {(showFormatBar || isExpandedEditor) && (
+                          <div className="flex items-center gap-1 px-2 py-1 mb-1 bg-gray-50/90 rounded border border-gray-200 text-xs text-gray-700 select-none flex-wrap">
+                            <button type="button" onClick={() => applyFormat('*', '*')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-bold" title="Bold (*text*)">B</button>
+                            <button type="button" onClick={() => applyFormat('_', '_')} className="p-1 px-1.5 rounded hover:bg-gray-200 italic font-serif" title="Italic (_text_)">I</button>
+                            <button type="button" onClick={() => applyFormat('~', '~')} className="p-1 px-1.5 rounded hover:bg-gray-200 line-through" title="Strikethrough (~text~)">S</button>
+                            <button type="button" onClick={() => applyFormat('`', '`')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-mono text-[11px]" title="Inline Code (`code`)">&lt;/&gt;</button>
+                            <button type="button" onClick={() => applyFormat('```\n', '\n```')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-mono text-[11px]" title="Code Block (```)">Code</button>
+                            <button type="button" onClick={() => applyFormat('> ')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-serif" title="Quote (> text)">“ ”</button>
+                            <button type="button" onClick={() => applyFormat('• ')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-bold" title="Bullet List">• List</button>
+                            <button type="button" onClick={() => applyFormat('1. ')} className="p-1 px-1.5 rounded hover:bg-gray-200 font-medium" title="Numbered List">1. List</button>
+                            <div className="flex-1" />
+                            <button
+                              type="button"
+                              onClick={() => setIsExpandedEditor(v => !v)}
+                              className="p-1 px-2 rounded hover:bg-gray-200 text-gray-600 flex items-center gap-1 text-[11px] font-medium"
+                              title={isExpandedEditor ? "Collapse editor" : "Expand text editor"}
+                            >
+                              {isExpandedEditor ? <><FiMinimize2 size={13} /> Minimize</> : <><FiMaximize2 size={13} /> Expand</>}
+                            </button>
+                          </div>
+                        )}
+                        <textarea
+                          ref={taRef}
+                          className={`input block w-full ${isExpandedEditor ? 'resize-y min-h-[140px]' : 'resize-none'}`}
+                          rows={isExpandedEditor ? 6 : 1}
+                          placeholder="Type a message… (@ to tag, formatting supported)"
+                          value={text}
                           onChange={onTextChange}
                           onPaste={onPaste}
-                          onKeyDown={handleKeyDown} />
+                          onKeyDown={handleKeyDown}
+                        />
                       </div>
                       <button
                         type="button"
@@ -2112,7 +2396,7 @@ export default function SiteChat() {
             <div className="space-y-3 text-sm">
               <div className="rounded-lg bg-[#e6ecf7] px-3 py-2">
                 {m.attachment_name && <div className="text-xs text-gray-600 mb-0.5">📎 {m.attachment_name}</div>}
-                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{linkify(m.body, 'info')}</div>}
+                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{formatMarkdown(m.body, 'info')}</div>}
                 <div className="text-[10px] text-gray-500 mt-1">{m.sender_name} · {fmtDateTime(m.created_at)}</div>
               </div>
               <div>

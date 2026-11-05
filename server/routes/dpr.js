@@ -2250,7 +2250,32 @@ router.post('/', (req, res) => {
     } catch (_) { sitePhotosJson = null; }
   }
 
-  if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
+  const isInactiveSite = (site_id === 'inactive_site' || req.body.is_inactive_site) ? 1 : 0;
+  const inactiveSiteName = req.body.inactive_site_name ? String(req.body.inactive_site_name).trim() : null;
+  const inactiveSiteReason = req.body.inactive_site_reason ? String(req.body.inactive_site_reason).trim() : null;
+  let effectiveSiteId = site_id;
+  const dbEarly = getDb();
+  if (isInactiveSite) {
+    if (!inactiveSiteName) return res.status(400).json({ error: 'Please specify the Inactive / On-Hold Site name.' });
+    if (!inactiveSiteReason) return res.status(400).json({ error: 'Please explain the reason for working on this inactive/on-hold site.' });
+    if (req.body.actual_site_id && !isNaN(+req.body.actual_site_id)) {
+      effectiveSiteId = +req.body.actual_site_id;
+    } else {
+      const matched = dbEarly.prepare('SELECT id FROM sites WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1').get(inactiveSiteName);
+      if (matched) {
+        effectiveSiteId = matched.id;
+      } else {
+        let placeholder = dbEarly.prepare("SELECT id FROM sites WHERE name LIKE 'Inactive / On-Hold Site%' LIMIT 1").get();
+        if (!placeholder) {
+          const ins = dbEarly.prepare("INSERT INTO sites (name, status) VALUES ('Inactive / On-Hold Site', 'on_hold')").run();
+          effectiveSiteId = ins.lastInsertRowid;
+        } else {
+          effectiveSiteId = placeholder.id;
+        }
+      }
+    }
+  }
+  if (!effectiveSiteId || effectiveSiteId === 'inactive_site' || !report_date) return res.status(400).json({ error: 'Site and date required' });
 
   // Mam: 'in dpr if loss then hindrance/issue which is reason mandatory,
   // category one select Money / Machine / Material / Manpower / Site
@@ -2275,7 +2300,7 @@ router.post('/', (req, res) => {
   // INSERT a fresh row.  Either way, dprId is the row we just wrote.
   let dprId;
   const existing = db.prepare(`SELECT id, is_planned_template, site_photos, approval_status, billing_ready, sales_bill_id
-                                 FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+                                 FROM dpr WHERE site_id = ? AND report_date = ?`).get(effectiveSiteId, report_date);
 
   // Editing an APPROVED DPR sends it back for approval (mam 2026-09-09: "admin
   // can back edit data change and rejected also again reapprove"). Until now a
@@ -2320,7 +2345,10 @@ router.post('/', (req, res) => {
         -- Edited after approval? Then the approval no longer describes this
         -- data, so it goes back in the queue (mam 2026-09-09).
         approval_status = CASE WHEN ? = 1 THEN 'pending' ELSE approval_status END,
-        billing_ready   = CASE WHEN ? = 1 THEN 0 ELSE billing_ready END
+        billing_ready   = CASE WHEN ? = 1 THEN 0 ELSE billing_ready END,
+        is_inactive_site = ?,
+        inactive_site_name = ?,
+        inactive_site_reason = ?
       WHERE id = ?`)
       .run(req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
@@ -2329,6 +2357,7 @@ router.post('/', (req, res) => {
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
         sitePhotosJson,
         reopened ? 1 : 0, reopened ? 1 : 0,
+        isInactiveSite, inactiveSiteName, inactiveSiteReason,
         existing.id);
     dprId = existing.id;
     if (reopened) {
@@ -2349,12 +2378,14 @@ router.post('/', (req, res) => {
     const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
       shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
       floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-      next_day_plan, hindrances, hindrance_category, remarks, site_photos, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
-      .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
+      next_day_plan, hindrances, hindrance_category, remarks, site_photos, labour_pct_applied,
+      is_inactive_site, inactive_site_name, inactive_site_reason) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`)
+      .run(effectiveSiteId, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
-        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks, sitePhotosJson);
+        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks, sitePhotosJson,
+        isInactiveSite, inactiveSiteName, inactiveSiteReason);
     dprId = r.lastInsertRowid;
   }
 
