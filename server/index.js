@@ -575,6 +575,7 @@ app.use('/api/public', require('./routes/publicHr'));
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/public/leads', require('./routes/webhooks'));
 app.use('/api/sotyn-leads', require('./routes/sotynLeads'));
+app.use('/api/vendor-registration', require('./routes/vendorRegistration'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/gamification', require('./routes/champions'));

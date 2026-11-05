@@ -12,7 +12,8 @@ import './PMSTasks.css';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload, FiCpu } from 'react-icons/fi';
+import AiChatSnagModal from '../components/AiChatSnagModal';
 import StatusMultiSelect from '../components/StatusMultiSelect';
 
 // Web Speech API — live mic dictation (Chromium browsers only).
@@ -31,6 +32,7 @@ export default function PMSTasks() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [aiChatModal, setAiChatModal] = useState(false); // TSK-0567: AI Agent Chat Extractor
   // Default scope = 'mine' (tasks the logged-in user is involved in,
   // either as assignee or assigner). Mirrors the Delegations page so
   // users land on their own queue, not the entire team's.
@@ -355,6 +357,14 @@ export default function PMSTasks() {
             ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Approved At','Flow Number','Latest Follow-up Remark','Remark By','Remark At'],
             tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.reviewed_at ? fmtDate(t.reviewed_at) : '', t.flow_number || '', t.followup_remark || '', t.followup_remark_by || '', t.followup_remark_at || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          <button
+            type="button"
+            onClick={() => setAiChatModal(true)}
+            className="btn bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 text-sm font-semibold shadow-xs"
+            title="AI Agent: Extract tasks from client chat (TSK-0567)"
+          >
+            <FiCpu size={15} /> 🤖 AI Extract from Chat
+          </button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
           )}
@@ -1013,6 +1023,13 @@ export default function PMSTasks() {
           </div>
         </form>
       </Modal>
+      {/* TSK-0567: AI Agent Chat Task Extractor Modal */}
+      <AiChatSnagModal
+        isOpen={aiChatModal}
+        onClose={() => setAiChatModal(false)}
+        defaultTarget="pms_task"
+        onSuccess={loadTasks}
+      />
     </div>
   );
 }

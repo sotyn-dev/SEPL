@@ -59,6 +59,39 @@ export default function BillPrint() {
           <div><div className="label">Transaction ID</div><div className="val">{bill.transaction_id || '—'}</div></div>
           <div><div className="label">Paid At</div><div className="val">{bill.paid_at ? new Date(bill.paid_at).toLocaleDateString('en-IN') : '—'}</div></div>
         </div>
+        {bill.items?.length > 0 && (
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: '30px' }}>#</th>
+                <th>Item Description</th>
+                <th style={{ textAlign: 'center', width: '50px' }}>UOM</th>
+                <th style={{ textAlign: 'right', width: '60px' }}>BOQ Qty</th>
+                <th style={{ textAlign: 'right', width: '60px' }}>Prev Qty</th>
+                <th style={{ textAlign: 'right', width: '70px' }}>Billed Qty</th>
+                <th style={{ textAlign: 'right', width: '70px' }}>Rate</th>
+                <th style={{ textAlign: 'right', width: '80px' }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bill.items.map((it, idx) => (
+                <tr key={it.id || idx}>
+                  <td style={{ color: '#888' }}>{idx + 1}</td>
+                  <td>
+                    <strong>{it.item_description}</strong>
+                    {it.item_code ? ` (${it.item_code})` : ''}
+                  </td>
+                  <td style={{ textAlign: 'center' }}>{it.uom}</td>
+                  <td style={{ textAlign: 'right' }}>{it.boq_qty}</td>
+                  <td style={{ textAlign: 'right', color: '#666' }}>{it.prev_billed_qty}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{it.current_billed_qty}</td>
+                  <td style={{ textAlign: 'right' }}>{money(it.rate)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{money(it.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
         {bill.deductions?.length > 0 && (
           <table>
             <thead><tr><th>Deduction</th><th>%</th><th>Amount</th></tr></thead>

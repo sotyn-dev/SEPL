@@ -813,7 +813,9 @@ function syncFromTally() {
               voucher_type: v.voucherType,
               voucher_number: v.voucherNumber,
               ref_no: v.reference || v.voucherNumber,
+              ref_number: v.reference || v.voucherNumber,
               date: v.date,
+              txn_date: v.date,
               amount: v.amount,
               party_name: v.partyLedgerName,
               instrument_number: v.instrumentNumber,
@@ -833,9 +835,14 @@ function syncFromTally() {
               tally_guid: v.guid,
               alter_id: v.alterId,
               payment_date: v.date,
+              date: v.date,
               vendor_name: pParty,
+              supplier_name: pParty,
+              party_name: pParty,
               amount: v.amount,
+              amount_paid: v.amount,
               bill_ref: v.reference || '',
+              ref_number: v.reference || '',
               utr_ref: v.instrumentNumber || null,
               narration: v.narration || '',
               company_name: config.companyName,
@@ -877,7 +884,7 @@ function syncFromTally() {
         totalItems += (purchasesToSync[pi].items ? purchasesToSync[pi].items.length : 0);
       }
       console.log('[Purchases] Pushing ' + purchasesToSync.length + ' purchase bill(s) to ERP with ' + totalItems + ' line item(s)...');
-      var pBody = JSON.stringify({ vouchers: purchasesToSync, company_name: config.companyName });
+      var pBody = JSON.stringify({ vouchers: purchasesToSync, bills: purchasesToSync, company_name: config.companyName });
       chain = chain.then(function () {
         return request(config.erpBaseUrl + '/vouchers', {
           method: 'POST',
@@ -897,7 +904,7 @@ function syncFromTally() {
     // Push Sales
     if (salesToSync.length > 0) {
       console.log('[Sales] Pushing ' + salesToSync.length + ' sales invoice(s) to ERP...');
-      var sBody = JSON.stringify({ vouchers: salesToSync, company_name: config.companyName });
+      var sBody = JSON.stringify({ vouchers: salesToSync, sales: salesToSync, company_name: config.companyName });
       chain = chain.then(function () {
         return request(config.erpBaseUrl + '/sales', {
           method: 'POST',
@@ -917,7 +924,7 @@ function syncFromTally() {
     // Push Bank Transactions
     if (bankTxnsToSync.length > 0) {
       console.log('[Bank] Pushing ' + bankTxnsToSync.length + ' bank transaction(s) to ERP...');
-      var bBody = JSON.stringify({ transactions: bankTxnsToSync, company_name: config.companyName });
+      var bBody = JSON.stringify({ transactions: bankTxnsToSync, bank: bankTxnsToSync, vouchers: bankTxnsToSync, company_name: config.companyName });
       chain = chain.then(function () {
         return request(config.erpBaseUrl + '/bank', {
           method: 'POST',
@@ -937,7 +944,7 @@ function syncFromTally() {
     // Push Vendor Bill Payments (Reconciliation)
     if (paymentsToSync.length > 0) {
       console.log('[Payments] Reconciling ' + paymentsToSync.length + ' payment(s) to bills...');
-      var payBody = JSON.stringify({ payments: paymentsToSync, company_name: config.companyName });
+      var payBody = JSON.stringify({ payments: paymentsToSync, vouchers: paymentsToSync, company_name: config.companyName });
       chain = chain.then(function () {
         return request(config.erpBaseUrl + '/payments', {
           method: 'POST',
@@ -982,7 +989,7 @@ function syncFromTally() {
 console.log('============================================');
 console.log('   SEPL TALLY -> ERP SYNC AGENT STARTED    ');
 console.log('============================================');
-console.log('Version:      v2.2.0 (Clean Daybook & Line Items)');
+console.log('Version:      v2.2.1 (Full Stream Support)');
 console.log('Tally URL:    ' + config.tallyUrl);
 console.log('ERP Endpoint: ' + config.erpBaseUrl);
 console.log('Company:      ' + config.companyName);

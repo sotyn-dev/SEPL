@@ -56,7 +56,7 @@ const BILL_COLS = `b.id, b.project_id, b.work_order_id, b.mb_id, b.ra_no, b.invo
   b.payment_mode, b.transaction_id, b.contractor_id,
   b.hold_reason, b.held_by, b.held_by_name, b.held_at,
   b.resumed_by, b.resumed_by_name, b.resumed_at,
-  b.raised_by, b.raised_at, b.paid_by, b.paid_at, b.payment_ref, b.remarks, b.updated_at,
+  b.raised_by, b.raised_at, b.paid_by, b.paid_at, b.payment_ref, b.remarks, b.bill_file, b.updated_at,
   wo.wo_number, wo.sub_contractor_name, sc.name AS contractor_name, p.name AS project_name`;
 
 function withDeductions(db, bill) {
@@ -93,35 +93,180 @@ router.get('/bills/:id', canRead, (req, res) => {
     WHERE b.id=?`).get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
   const stage_log = db.prepare('SELECT * FROM proj_bill_stage_log WHERE ra_bill_id=? ORDER BY acted_at DESC').all(req.params.id);
-  res.json({ ...withDeductions(db, bill), stage_log });
+  const items = db.prepare('SELECT * FROM proj_contractor_ra_bill_items WHERE ra_bill_id=? ORDER BY id ASC').all(req.params.id);
+  res.json({ ...withDeductions(db, bill), stage_log, items });
 });
 
-// ─── Create (Contractor uploads) ────────────────────────────────────────
+// ─── Fetch billable BOQ PO items for contractor bill builder ─────────
+router.get('/boq-po-items', canRead, (req, res) => {
+  const db = getDb();
+  const workOrderId = req.query.work_order_id ? Number(req.query.work_order_id) : null;
+  const projectId = req.query.project_id ? Number(req.query.project_id) : null;
+
+  let wo = null;
+  let targetProjectId = projectId;
+  if (workOrderId) {
+    wo = db.prepare(`
+      SELECT wo.*, p.name AS project_name, sc.name AS contractor_name
+        FROM proj_work_orders wo
+        LEFT JOIN proj_projects p ON p.id = wo.project_id
+        LEFT JOIN sub_contractors sc ON sc.id = wo.sub_contractor_id
+       WHERE wo.id = ?
+    `).get(workOrderId);
+    if (wo?.project_id) {
+      targetProjectId = wo.project_id;
+    }
+  }
+
+  // Resolve all linked project & business_book ids
+  const linkedIds = new Set();
+  if (targetProjectId) linkedIds.add(targetProjectId);
+  if (wo?.project_name) {
+    const bbMatches = db.prepare('SELECT id FROM business_book WHERE project_name = ?').all(wo.project_name);
+    for (const b of bbMatches) linkedIds.add(b.id);
+  }
+  const idList = Array.from(linkedIds);
+  const inClause = idList.length > 0 ? idList.map(() => '?').join(',') : 'NULL';
+
+  // 1. Fetch billable items from po_items strictly filtered to type = 'PO'
+  let poItems = [];
+  if (idList.length > 0) {
+    const poQuery = `
+      SELECT id AS boq_item_id, 'po_items' AS source_table,
+             COALESCE(item_master_id, '') AS item_code,
+             description AS item_description,
+             COALESCE(unit, 'nos') AS uom,
+             COALESCE(quantity, 0) AS boq_qty,
+             COALESCE(rate, 0) AS rate,
+             COALESCE(amount, 0) AS amount,
+             COALESCE(type, 'PO') AS type
+        FROM po_items
+       WHERE business_book_id IN (${inClause})
+         AND UPPER(TRIM(COALESCE(type, 'PO'))) = 'PO'
+    `;
+    poItems = db.prepare(poQuery).all(...idList);
+  }
+
+  // 2. Fetch billable items from boq_items strictly filtered to type = 'PO'
+  let boqItems = [];
+  if (idList.length > 0) {
+    const boqQuery = `
+      SELECT bi.id AS boq_item_id, 'boq_items' AS source_table,
+             COALESCE(bi.item_id, '') AS item_code,
+             bi.description AS item_description,
+             COALESCE(bi.unit, 'nos') AS uom,
+             COALESCE(bi.quantity, 0) AS boq_qty,
+             COALESCE(bi.rate, 0) AS rate,
+             COALESCE(bi.amount, 0) AS amount,
+             COALESCE(bi.type, 'PO') AS type
+        FROM boq_items bi
+        LEFT JOIN boq b ON b.id = bi.boq_id
+       WHERE b.lead_id IN (${inClause})
+         AND UPPER(TRIM(COALESCE(bi.type, 'PO'))) = 'PO'
+    `;
+    boqItems = db.prepare(boqQuery).all(...idList);
+  }
+
+  const rawItems = [...poItems, ...boqItems];
+
+  // Calculate cumulative prev_billed_qty for each item
+  const getPrevQty = db.prepare(`
+    SELECT COALESCE(SUM(bi.current_billed_qty), 0) AS prev_qty
+      FROM proj_contractor_ra_bill_items bi
+      JOIN proj_contractor_ra_bills b ON b.id = bi.ra_bill_id
+     WHERE bi.boq_item_id = ?
+       AND (b.work_order_id = ? OR (? IS NULL AND b.project_id = ?))
+       AND b.status != 'cancelled'
+  `);
+
+  const items = rawItems.map(item => {
+    const prevRow = getPrevQty.get(item.boq_item_id, workOrderId || -1, workOrderId, targetProjectId || -1);
+    const prevBilledQty = prevRow ? Number(prevRow.prev_qty) : 0;
+    const balanceQty = Math.max(0, Number(item.boq_qty) - prevBilledQty);
+    return {
+      ...item,
+      prev_billed_qty: prevBilledQty,
+      balance_qty: balanceQty,
+      current_billed_qty: 0
+    };
+  });
+
+  res.json({
+    work_order: wo || null,
+    project_id: targetProjectId,
+    items
+  });
+});
+
+// ─── Create (Contractor uploads linked to BOQ PO items) ───────────────
 router.post('/bills', canCreate, (req, res) => {
   const db = getDb();
   const b = req.body || {};
   if (!b.work_order_id) return res.status(400).json({ error: 'work_order_id is required' });
-  if (num(b.gross_amount, -1) < 0) return res.status(400).json({ error: 'gross_amount must be zero or more' });
 
   const wo = db.prepare('SELECT * FROM proj_work_orders WHERE id=?').get(b.work_order_id);
   if (!wo) return res.status(404).json({ error: 'Work Order not found' });
 
+  const rawItems = Array.isArray(b.items) ? b.items : [];
+  let calculatedGross = 0;
+  const validItems = [];
+
+  for (const item of rawItems) {
+    const qty = num(item.current_billed_qty, 0);
+    const rate = num(item.rate, 0);
+    const lineAmount = num(item.amount, Math.round(qty * rate * 100) / 100);
+    if (qty > 0 || lineAmount > 0) {
+      calculatedGross += lineAmount;
+      validItems.push({
+        boq_item_id: item.boq_item_id || null,
+        item_code: str(item.item_code) || null,
+        item_description: str(item.item_description || item.description) || 'Bill Item',
+        uom: str(item.uom || item.unit) || 'nos',
+        boq_qty: num(item.boq_qty, 0),
+        prev_billed_qty: num(item.prev_billed_qty, 0),
+        current_billed_qty: qty,
+        rate: rate,
+        amount: lineAmount,
+        remarks: str(item.remarks) || null
+      });
+    }
+  }
+
+  const grossAmount = validItems.length > 0 ? calculatedGross : num(b.gross_amount, 0);
+  if (grossAmount < 0) return res.status(400).json({ error: 'gross_amount must be zero or more' });
+
   const deductions = Array.isArray(b.deductions) ? b.deductions : [];
   const totalDeductions = deductions.reduce((s, d) => s + (num(d.amount, 0)), 0);
-  const netAmount = num(b.gross_amount) - totalDeductions;
+  const netAmount = grossAmount - totalDeductions;
 
   const raNo = nextSequence(db, 'proj_contractor_ra_bills', 'ra_no', 'CRA', { pad: 4 });
   const tx = db.transaction(() => {
+    // Lands at 'site_engineer' stage for immediate verification
     const info = db.prepare(`
       INSERT INTO proj_contractor_ra_bills
         (project_id, work_order_id, mb_id, ra_no, invoice_number, gross_amount, net_amount,
-         status, current_stage, contractor_id, raised_by, remarks)
-      VALUES (?,?,?,?,?,?,?,'raised','contractor_uploaded',?,?,?)`).run(
+         status, current_stage, contractor_id, raised_by, remarks, bill_file)
+      VALUES (?,?,?,?,?,?,?,'raised','site_engineer',?,?,?,?)`).run(
       wo.project_id, b.work_order_id, b.mb_id || null, raNo, str(b.invoice_number),
-      num(b.gross_amount), netAmount, wo.sub_contractor_id || null, req.user.id, str(b.remarks));
+      grossAmount, netAmount, wo.sub_contractor_id || null, req.user.id, str(b.remarks),
+      str(b.bill_file) || null);
     const billId = info.lastInsertRowid;
+
+    const insItem = db.prepare(`
+      INSERT INTO proj_contractor_ra_bill_items
+        (ra_bill_id, boq_item_id, item_code, item_description, uom, boq_qty, prev_billed_qty, current_billed_qty, rate, amount, remarks)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    for (const it of validItems) {
+      insItem.run(
+        billId, it.boq_item_id, it.item_code, it.item_description, it.uom,
+        it.boq_qty, it.prev_billed_qty, it.current_billed_qty, it.rate, it.amount, it.remarks
+      );
+    }
+
     const insDed = db.prepare('INSERT INTO proj_contractor_ra_deductions (ra_bill_id, label, pct, amount) VALUES (?,?,?,?)');
     for (const d of deductions) insDed.run(billId, str(d.label) || 'Deduction', num(d.pct, 0), num(d.amount, 0));
+
     db.prepare(`INSERT INTO vendor_ledger (contractor_id, contractor_name, ra_bill_id, entry_type, amount, created_by, created_by_name)
       VALUES (?,?,?,'bill',?,?,?)`).run(wo.sub_contractor_id || null, wo.sub_contractor_name, billId, netAmount, req.user.id, req.user.name || null);
     return billId;
@@ -131,9 +276,10 @@ router.post('/bills', canCreate, (req, res) => {
   notifyStage(db, billId, 'site_engineer', req.user);
   const after = db.prepare(`SELECT ${BILL_COLS} FROM proj_contractor_ra_bills b
       LEFT JOIN proj_work_orders wo ON wo.id=b.work_order_id LEFT JOIN sub_contractors sc ON sc.id=b.contractor_id LEFT JOIN proj_projects p ON p.id=b.project_id WHERE b.id=?`).get(billId);
+  const items = db.prepare('SELECT * FROM proj_contractor_ra_bill_items WHERE ra_bill_id=? ORDER BY id ASC').all(billId);
   logAuditEvent({ user: req.user, action: 'CREATE', entity_type: 'proj_contractor_ra_bills',
-    entity_id: billId, entity_label: after.ra_no, before: null, after });
-  res.status(201).json(after);
+    entity_id: billId, entity_label: after.ra_no, before: null, after: { ...after, items } });
+  res.status(201).json({ ...after, items });
 });
 
 // ─── Verify / Reject / Send Back ────────────────────────────────────────
@@ -152,13 +298,15 @@ router.post('/bills/:id/action', canApprove, (req, res) => {
   const action = ['verified', 'rejected', 'sent_back'].includes(b.action) ? b.action : null;
   if (!action) return res.status(400).json({ error: 'action must be verified, rejected or sent_back' });
 
-  const idx = STAGES.indexOf(bill.current_stage);
-  const nextStage = STAGES[idx + 1]; // the stage this action is being taken FOR
-  if (!nextStage) return res.status(409).json({ error: 'This bill has already completed the chain.' });
-
-  // The acting stage is the NEXT stage after contractor_uploaded — i.e. the
-  // first real approver is site_engineer, matching the spec's chain order.
-  const actingStage = nextStage;
+  const NEXT_STAGE_MAP = {
+    contractor_uploaded: 'site_engineer',
+    site_engineer: 'finance',
+    finance: 'payment',
+    payment: 'paid'
+  };
+  const actingStage = bill.current_stage === 'contractor_uploaded' ? 'site_engineer' : bill.current_stage;
+  const nextStage = NEXT_STAGE_MAP[bill.current_stage] || null;
+  if (!nextStage && action === 'verified') return res.status(409).json({ error: 'This bill has already completed the chain.' });
 
   if (action === 'rejected' && !str(b.remarks)) {
     return res.status(400).json({ error: 'A reason is required to reject a bill.' });

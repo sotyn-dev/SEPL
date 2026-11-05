@@ -24,8 +24,9 @@ import {
   FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2,
   FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers, FiUsers, FiLock, FiUnlock,
   FiPrinter, FiClock, FiShield, FiFileText, FiCheck, FiChevronRight, FiChevronDown, FiChevronUp, FiCalendar,
-  FiDollarSign
+  FiDollarSign, FiCpu
 } from 'react-icons/fi';
+import AiChatSnagModal from '../components/AiChatSnagModal';
 import HandoverRaciModal from '../components/HandoverRaciModal';
 import HandoverCertificateModal from '../components/HandoverCertificateModal';
 import FinalAccountRetentionModal from '../components/FinalAccountRetentionModal';
@@ -99,6 +100,7 @@ export default function Snags() {
   const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '', due_from: '', due_to: '' });
   const [searchInput, setSearchInput] = useState('');
   const [modal, setModal] = useState(false);          // raise/edit
+  const [aiChatModal, setAiChatModal] = useState(false); // TSK-0567: AI Agent Chat Extractor
   const [snagMode, setSnagMode] = useState('single'); // 'single' | 'walk'
   const [walkItems, setWalkItems] = useState([]);     // items for multi-photo snag walk
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
@@ -501,6 +503,14 @@ export default function Snags() {
           </button>
           <button onClick={() => exportXlsx(true)}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
+          <button
+            type="button"
+            onClick={() => setAiChatModal(true)}
+            className="btn bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 text-sm font-semibold shadow-xs"
+            title="AI Agent: Extract snags and punch items from WhatsApp / Client chat (TSK-0567)"
+          >
+            <FiCpu size={15} /> 🤖 AI Extract from Chat
+          </button>
           {canCreate('snags') && (
             <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
           )}
@@ -1545,6 +1555,17 @@ export default function Snags() {
           </div>
         </Modal>
       )}
+
+      {/* TSK-0567: AI Agent Chat Snag Extractor Modal */}
+      <AiChatSnagModal
+        isOpen={aiChatModal}
+        onClose={() => setAiChatModal(false)}
+        defaultTarget="snag"
+        onSuccess={() => {
+          load();
+
+        }}
+      />
     </div>
   );
 }
