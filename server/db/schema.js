@@ -2692,6 +2692,7 @@ function initializeDatabase() {
       paid_at DATETIME,
       payment_ref TEXT,
       remarks TEXT,
+      bill_file TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_pcra_project ON proj_contractor_ra_bills(project_id);
@@ -2705,6 +2706,23 @@ function initializeDatabase() {
       amount REAL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_pcra_ded_bill ON proj_contractor_ra_deductions(ra_bill_id);
+
+    -- TSK-0564: Itemized contractor bill lines linked to BOQ PO items
+    CREATE TABLE IF NOT EXISTS proj_contractor_ra_bill_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ra_bill_id INTEGER NOT NULL REFERENCES proj_contractor_ra_bills(id) ON DELETE CASCADE,
+      boq_item_id INTEGER,
+      item_description TEXT NOT NULL,
+      uom TEXT,
+      boq_qty REAL DEFAULT 0,
+      prev_billed_qty REAL DEFAULT 0,
+      current_billed_qty REAL NOT NULL DEFAULT 0,
+      rate REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      remarks TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pcra_items_bill ON proj_contractor_ra_bill_items(ra_bill_id);
 
     -- Client RA Bill — SEPL → client side, same 3-state cycle.
     CREATE TABLE IF NOT EXISTS proj_client_ra_bills (
@@ -4346,6 +4364,7 @@ function initializeDatabase() {
     ['proj_contractor_ra_bills', 'resumed_by INTEGER'],
     ['proj_contractor_ra_bills', 'resumed_by_name TEXT'],
     ['proj_contractor_ra_bills', 'resumed_at DATETIME'],
+    ['proj_contractor_ra_bills', 'bill_file TEXT'],
     // Work Order routing (2026-08): "send to Site Engineer -> send to
     // Contractor" after save. One WO can be routed more than once as it
     // moves along, so this holds only the MOST RECENT hop — full history

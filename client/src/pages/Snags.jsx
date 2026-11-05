@@ -580,8 +580,8 @@ export default function Snags() {
                 <div
                   key={st.key}
                   className={`p-2.5 rounded-lg border text-left transition-all ${st.done
-                      ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-200'
-                      : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                    ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-200'
+                    : 'bg-slate-800/80 border-slate-700 text-slate-300'
                     }`}
                 >
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase mb-1">
@@ -1059,8 +1059,8 @@ export default function Snags() {
               type="button"
               onClick={() => setSnagMode('single')}
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${snagMode === 'single'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-100'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-gray-600 hover:bg-gray-100'
                 }`}
             >
               <FiPlus size={13} /> Single Snag
@@ -1069,8 +1069,8 @@ export default function Snags() {
               type="button"
               onClick={() => setSnagMode('walk')}
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${snagMode === 'walk'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-100'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-gray-600 hover:bg-gray-100'
                 }`}
             >
               <FiLayers size={13} /> Snag Walk (Multi-Photo Batch)
@@ -1561,6 +1561,7 @@ export default function Snags() {
         isOpen={aiChatModal}
         onClose={() => setAiChatModal(false)}
         defaultTarget="snag"
+        sites={sites}
         onSuccess={() => {
           load();
 

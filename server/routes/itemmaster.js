@@ -11,7 +11,7 @@ const uploadMemory = multer({
   limits: { fileSize: 15 * 1024 * 1024 }
 });
 
-const ALLOWED_SOURCES = ['PO', 'Quote', 'Manual', 'Online'];
+const ALLOWED_SOURCES = ['PO', 'Quote', 'Manual', 'Online', 'Bill', 'Catalogue'];
 
 // MD Phase 1: "Right now Price is just a number — no date, no vendor,
 // no bill. We can't trust it for tenders." Every Item Master row now
@@ -703,7 +703,7 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
         const vendorId = it.vendor_id != null
           ? +it.vendor_id || null
           : (it.vendor_name ? vendorByName.get(String(it.vendor_name).trim().toLowerCase()) || null : null);
-        const source = ALLOWED_SOURCES.includes(it.source_type) ? it.source_type : (it.source_type ? null : 'Manual');
+        const source = it.source_type && String(it.source_type).trim() ? String(it.source_type).trim() : 'Manual';
         const price = +it.current_price || 0;
         let code = it.item_code && String(it.item_code).trim();
         const existing = code ? findExisting.get(code) : null;

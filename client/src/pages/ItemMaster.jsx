@@ -780,7 +780,9 @@ export default function ItemMaster() {
           <thead><tr className="bg-gray-50">
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
-            <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Item / Spec / Size</th>
+            <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Item Name</th>
+            <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Specification</th>
+            <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Size</th>
             <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Photo</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Make</th>
             {/* UOM column added per mam, 2026-05-16: "SHOW HERE UOM".
@@ -806,8 +808,13 @@ export default function ItemMaster() {
                   <td className="px-3 py-2 font-mono text-xs font-bold text-red-600">{i.item_code}</td>
                   <td className="px-3 py-2"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">{i.department}</span></td>
                   <td className="px-3 py-2">
-                    <div className="font-medium text-sm">{i.item_name}</div>
-                    <div className="text-xs text-gray-500">{[i.specification, i.size].filter(Boolean).join(' | ')}</div>
+                    <div className="font-medium text-sm text-gray-900">{i.item_name}</div>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-600 max-w-[220px] truncate font-normal" title={i.specification}>
+                    {i.specification || <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-xs font-semibold text-gray-800 whitespace-nowrap">
+                    {i.size ? <span className="inline-block px-1.5 py-0.5 rounded bg-gray-100 border border-gray-200">{i.size}</span> : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-3 py-2 text-center">
                     {i.photo_link ? (
@@ -876,7 +883,7 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="14" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </NumberedTable>
         {/* Paginator — responsive mobile layout + desktop layout */}
@@ -1056,7 +1063,7 @@ export default function ItemMaster() {
           <div className="space-y-3">
             <div className="bg-gray-50 border border-gray-200 rounded p-2.5 text-xs grid grid-cols-2 gap-1">
               <div><b>Item:</b> {historyModal.item.item_name}</div>
-              <div><b>Spec / Size:</b> {[historyModal.item.specification, historyModal.item.size].filter(Boolean).join(' / ') || '—'}</div>
+              <div><b>Spec:</b> {historyModal.item.specification || '—'} &nbsp;·&nbsp; <b>Size:</b> {historyModal.item.size || '—'}</div>
               <div><b>Current rate:</b> Rs {(+historyModal.item.current_price || 0).toLocaleString('en-IN')}</div>
               <div><b>Current vendor:</b> {historyModal.item.vendor_name || '—'}</div>
             </div>
@@ -1087,7 +1094,7 @@ export default function ItemMaster() {
       </Modal>
 
       {/* Bulk Import Modal */}
-      <Modal isOpen={bulkModal} onClose={() => { setBulkModal(false); setImportErrors([]); }} title="Bulk Import Items" wide>
+      <Modal isOpen={bulkModal} onClose={() => { setBulkModal(false); setImportErrors([]); }} title="Bulk Import Items" xwide className="max-w-6xl">
         <div className="space-y-4">
           <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg text-sm text-blue-900">
             <p className="font-semibold mb-1 flex items-center gap-1.5">
@@ -1196,31 +1203,43 @@ export default function ItemMaster() {
                   Clear preview
                 </button>
               </div>
-              <div className="max-h-48 overflow-y-auto border rounded text-xs">
-                <NumberedTable>
+              <div className="max-h-64 overflow-y-auto overflow-x-auto border border-gray-200 rounded-lg text-xs shadow-inner bg-white">
+                <NumberedTable className="min-w-[1450px]">
                   <thead>
-                    <tr className="bg-gray-50">
-                      <th className="px-2 py-1">Code</th>
-                      <th className="px-2 py-1">Dept</th>
-                      <th className="px-2 py-1">Name</th>
-                      <th className="px-2 py-1">Spec / Size</th>
-                      <th className="px-2 py-1">Rate</th>
-                      <th className="px-2 py-1">Vendor</th>
-                      <th className="px-2 py-1">Source</th>
-                      <th className="px-2 py-1">Bill/PO</th>
+                    <tr className="bg-gray-100 text-[11px] text-gray-700 uppercase tracking-wider">
+                      <th className="px-2.5 py-2 text-left font-semibold">Code</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Dept</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Item Name</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Specification</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Size</th>
+                      <th className="px-2.5 py-2 text-center font-semibold">UOM</th>
+                      <th className="px-2.5 py-2 text-center font-semibold">GST</th>
+                      <th className="px-2.5 py-2 text-center font-semibold">Type</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Make</th>
+                      <th className="px-2.5 py-2 text-right font-semibold">Rate (₹)</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Vendor Name</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Source Type</th>
+                      <th className="px-2.5 py-2 text-left font-semibold">Bill/PO Number</th>
+                      <th className="px-2.5 py-2 text-center font-semibold">Bill/PO Date</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-gray-100">
                     {bulkPreview.map((i, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50/50">
-                        <td className="px-2 py-1 font-mono text-[11px]">{i.item_code || <span className="text-gray-400 italic">(auto)</span>}</td>
-                        <td className="px-2 py-1">{i.department || '-'}</td>
-                        <td className="px-2 py-1 font-medium">{i.item_name}</td>
-                        <td className="px-2 py-1 text-gray-600">{[i.specification, i.size].filter(Boolean).join(' · ') || '-'}</td>
-                        <td className="px-2 py-1 font-mono">{i.current_price > 0 ? `₹${i.current_price}` : '-'}</td>
-                        <td className="px-2 py-1">{i.vendor_name || '-'}</td>
-                        <td className="px-2 py-1">{i.source_type || '-'}</td>
-                        <td className="px-2 py-1 text-[11px]">{i.bill_po_number || '-'}</td>
+                      <tr key={idx} className="hover:bg-blue-50/40">
+                        <td className="px-2.5 py-1.5 font-mono text-[11px] whitespace-nowrap text-red-600 font-semibold">{i.item_code || <span className="text-gray-400 italic font-normal">(auto)</span>}</td>
+                        <td className="px-2.5 py-1.5 whitespace-nowrap"><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-red-100 text-red-700 font-medium">{i.department || '-'}</span></td>
+                        <td className="px-2.5 py-1.5 font-medium max-w-[200px] truncate" title={i.item_name}>{i.item_name}</td>
+                        <td className="px-2.5 py-1.5 text-gray-600 max-w-[240px] truncate font-normal" title={i.specification}>{i.specification || '-'}</td>
+                        <td className="px-2.5 py-1.5 font-semibold text-gray-800 whitespace-nowrap">{i.size || '-'}</td>
+                        <td className="px-2.5 py-1.5 text-center font-mono uppercase whitespace-nowrap">{i.uom || 'PCS'}</td>
+                        <td className="px-2.5 py-1.5 text-center whitespace-nowrap">{i.gst || '-'}</td>
+                        <td className="px-2.5 py-1.5 text-center whitespace-nowrap"><span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">{i.type || 'PO'}</span></td>
+                        <td className="px-2.5 py-1.5 whitespace-nowrap text-purple-700 font-medium">{i.make || '-'}</td>
+                        <td className="px-2.5 py-1.5 font-mono font-semibold text-right whitespace-nowrap">{i.current_price > 0 ? `₹${(+i.current_price).toLocaleString('en-IN')}` : '-'}</td>
+                        <td className="px-2.5 py-1.5 max-w-[150px] truncate whitespace-nowrap" title={i.vendor_name}>{i.vendor_name || '-'}</td>
+                        <td className="px-2.5 py-1.5 max-w-[150px] truncate whitespace-nowrap text-gray-600" title={i.source_type}>{i.source_type || '-'}</td>
+                        <td className="px-2.5 py-1.5 text-[11px] font-mono whitespace-nowrap">{i.bill_po_number || '-'}</td>
+                        <td className="px-2.5 py-1.5 text-center text-gray-600 whitespace-nowrap">{i.bill_po_date || '-'}</td>
                       </tr>
                     ))}
                   </tbody>

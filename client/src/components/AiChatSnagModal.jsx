@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Modal from './Modal';
-import { 
-  FiCpu, FiMessageSquare, FiClipboard, FiCheckSquare, FiSquare, 
+import {
+  FiCpu, FiMessageSquare, FiClipboard, FiCheckSquare, FiSquare,
   FiAlertTriangle, FiCheck, FiX, FiRefreshCw, FiLayers, FiMapPin,
   FiUser, FiSend, FiFileText
 } from 'react-icons/fi';
@@ -16,7 +16,7 @@ const PRIORITIES = [
   { id: 'low', label: 'Low', color: 'bg-gray-100 text-gray-700 border-gray-300' }
 ];
 
-export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag', onSuccess }) {
+export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag', onSuccess, sites: initialSites = [] }) {
   const [activeTab, setActiveTab] = useState('group'); // 'group' | 'paste'
   const [chatGroups, setChatGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -24,11 +24,19 @@ export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag
   const [sites, setSites] = useState([]);
   const [selectedSiteId, setSelectedSiteId] = useState('');
   const [users, setUsers] = useState([]);
-  
+
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [candidates, setCandidates] = useState([]);
   const [hasExtracted, setHasExtracted] = useState(false);
+
+  const normalizeSites = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map(s => ({
+      id: s.id,
+      name: s.name || s.site_name || s.project_name || s.title || `Site #${s.id}`
+    }));
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -37,22 +45,42 @@ export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag
       .then(r => setChatGroups(Array.isArray(r.data) ? r.data : []))
       .catch(() => setChatGroups([]));
 
-    // Load sites
-    api.get('/sites')
-      .then(r => {
-        const sList = Array.isArray(r.data) ? r.data : (r.data?.sites || []);
-        setSites(sList);
-        if (sList.length > 0 && !selectedSiteId) {
-          setSelectedSiteId(sList[0].id);
-        }
-      })
-      .catch(() => setSites([]));
+    // Load sites: check prop first, then fallback to endpoints
+    if (Array.isArray(initialSites) && initialSites.length > 0) {
+      const norm = normalizeSites(initialSites);
+      setSites(norm);
+      setSelectedSiteId(prev => prev || norm[0]?.id || '');
+    } else {
+      api.get('/ai-agent/sites')
+        .then(r => {
+          let sList = normalizeSites(r.data);
+          if (sList.length > 0) {
+            setSites(sList);
+            setSelectedSiteId(prev => prev || sList[0]?.id || '');
+          } else {
+            return api.get('/dpr/sites?all=1').then(r2 => {
+              const list2 = normalizeSites(r2.data);
+              setSites(list2);
+              setSelectedSiteId(prev => prev || list2[0]?.id || '');
+            });
+          }
+        })
+        .catch(() => {
+          api.get('/dpr/sites?all=1')
+            .then(r2 => {
+              const list2 = normalizeSites(r2.data);
+              setSites(list2);
+              setSelectedSiteId(prev => prev || list2[0]?.id || '');
+            })
+            .catch(() => setSites([]));
+        });
+    }
 
     // Load active users
     api.get('/users')
       .then(r => setUsers(Array.isArray(r.data) ? r.data : []))
       .catch(() => setUsers([]));
-  }, [isOpen]);
+  }, [isOpen, initialSites]);
 
   const handleExtract = async () => {
     if (activeTab === 'group' && !selectedGroupId) {
@@ -206,22 +234,20 @@ export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag
               <button
                 type="button"
                 onClick={() => setActiveTab('group')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${
-                  activeTab === 'group'
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${activeTab === 'group'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 <FiMessageSquare size={14} /> Group Chat Feed
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('paste')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${
-                  activeTab === 'paste'
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 ${activeTab === 'paste'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 <FiClipboard size={14} /> Paste WhatsApp / Chat Text
               </button>
@@ -327,9 +353,8 @@ export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag
               {candidates.map((c, idx) => (
                 <div
                   key={c.temp_id || idx}
-                  className={`p-3 rounded-xl border transition ${
-                    c.selected ? 'bg-white border-indigo-200 shadow-xs' : 'bg-gray-50 border-gray-200 opacity-60'
-                  }`}
+                  className={`p-3 rounded-xl border transition ${c.selected ? 'bg-white border-indigo-200 shadow-xs' : 'bg-gray-50 border-gray-200 opacity-60'
+                    }`}
                 >
                   <div className="flex items-start gap-2.5">
                     {/* Checkbox */}
@@ -357,22 +382,20 @@ export default function AiChatSnagModal({ isOpen, onClose, defaultTarget = 'snag
                           <button
                             type="button"
                             onClick={() => updateCandidate(idx, 'target_type', 'snag')}
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold border transition ${
-                              c.target_type === 'snag'
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold border transition ${c.target_type === 'snag'
                                 ? 'bg-amber-100 text-amber-800 border-amber-300 shadow-2xs'
                                 : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                            }`}
+                              }`}
                           >
                             🚧 Snag List
                           </button>
                           <button
                             type="button"
                             onClick={() => updateCandidate(idx, 'target_type', 'pms_task')}
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold border transition ${
-                              c.target_type === 'pms_task'
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold border transition ${c.target_type === 'pms_task'
                                 ? 'bg-blue-100 text-blue-800 border-blue-300 shadow-2xs'
                                 : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
-                            }`}
+                              }`}
                           >
                             📌 PMS Task
                           </button>
