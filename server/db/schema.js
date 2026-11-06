@@ -7849,6 +7849,24 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) { console.warn('[schema] stage repair skipped:', e.message); }
 
+  // Sales Funnel Send Back for Recheck columns
+  try {
+    const sfCols = db.prepare("PRAGMA table_info(sales_funnel)").all().map(c => c.name);
+    const toAdd = [
+      ['is_send_back', 'INTEGER DEFAULT 0'],
+      ['send_back_from_stage', 'TEXT'],
+      ['send_back_to_stage', 'TEXT'],
+      ['send_back_remarks', 'TEXT'],
+      ['send_back_by_name', 'TEXT'],
+      ['send_back_at', 'DATETIME']
+    ];
+    for (const [col, colType] of toAdd) {
+      if (!sfCols.includes(col)) {
+        db.exec(`ALTER TABLE sales_funnel ADD COLUMN ${col} ${colType}`);
+      }
+    }
+  } catch (e) { console.warn('[schema] sales_funnel send_back columns skipped:', e.message); }
+
   // Sotyn Leads (mam 2026-09-07) — sotyn.ai website enquiry inbox fed by
   // the public webhook. server/routes/sotynLeads.js
   try {

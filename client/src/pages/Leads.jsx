@@ -11,7 +11,7 @@ import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock, FiXCircle, FiSettings, FiExternalLink, FiTag } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock, FiXCircle, FiSettings, FiExternalLink, FiTag, FiCornerUpLeft, FiAlertTriangle } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import Pagination, { usePagination } from '../components/PaginationBar';
@@ -233,6 +233,13 @@ export default function Leads() {
     allowed_users: [],
   });
   const [savingLostAccess, setSavingLostAccess] = useState(false);
+
+  // Send Back for Recheck state (Stages 4-11)
+  const [sendBackModal, setSendBackModal] = useState(false);
+  const [sendBackTargetLead, setSendBackTargetLead] = useState(null);
+  const [sendBackStage, setSendBackStage] = useState('');
+  const [sendBackRemarks, setSendBackRemarks] = useState('');
+  const [sendBackSubmitting, setSendBackSubmitting] = useState(false);
 
   const [kindFilter, setKindFilter] = useState('all'); // 'all' | 'private' | 'government'
 
@@ -463,11 +470,52 @@ export default function Leads() {
       setSavingLostAccess(false);
     }
   };
+
+  const openSendBack = (lead) => {
+    if (!lead || !lead.current_stage) return;
+    const curIdx = STAGES.indexOf(lead.current_stage);
+    if (curIdx < 3 || curIdx > 10) return;
+    const defaultStage = curIdx > 0 ? STAGES[curIdx - 1] : 'concept_design';
+    setSendBackTargetLead(lead);
+    setSendBackStage(defaultStage);
+    setSendBackRemarks('');
+    setSendBackModal(true);
+  };
+
+  const handleSendBack = async (e) => {
+    e.preventDefault();
+    if (!sendBackTargetLead) return;
+    if (!sendBackRemarks.trim()) {
+      return toast.error('Remarks explaining the reason for recheck are mandatory');
+    }
+    setSendBackSubmitting(true);
+    try {
+      const res = await api.post(`/sales-funnel/${sendBackTargetLead.id}/send-back`, {
+        target_stage: sendBackStage,
+        remarks: sendBackRemarks.trim(),
+      });
+      toast.success(res.data.message || 'Lead sent back for recheck');
+      setSendBackModal(false);
+      if (viewData?.id === sendBackTargetLead.id) {
+        const updated = await api.get(`/sales-funnel/${sendBackTargetLead.id}`);
+        if (updated.data) {
+          viewLead(updated.data);
+          setViewStage(sendBackStage);
+        }
+      }
+      setSendBackTargetLead(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to send back lead');
+    } finally {
+      setSendBackSubmitting(false);
+    }
+  };
   const safeParse = (str) => {
     try { return str ? JSON.parse(str) : {}; }
     catch { return {}; }
   };
-  const viewLead = (l) => {
+  const viewLead = async (l) => {
     setViewData(l);
     setStageForm({
       ...l,
@@ -481,6 +529,12 @@ export default function Leads() {
     setBoqForm({ boq_file_link: '', boq_amount: '', notes: '' });
     api.get(`/sales-funnel/${l.id}/followups`).then(r => setFollowups(r.data)).catch(() => setFollowups([]));
     loadBoqs(l.id);
+    try {
+      const res = await api.get(`/sales-funnel/${l.id}`);
+      if (res.data) {
+        setViewData(prev => ({ ...prev, ...res.data }));
+      }
+    } catch (_) {}
   };
 
   // Auto-open lead detail modal when deep-linked with ?lead_id= or ?id= (e.g. from Scorecard drill-down)
@@ -640,6 +694,11 @@ export default function Leads() {
     <tr key={l.id} data-serial-skip={child} className={`border-b hover:bg-red-50/40 cursor-pointer ${child ? 'bg-gray-50/60' : ''}`} onClick={() => viewLead(l)}>
       <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>
         <div>{l.lead_no}</div>
+        {l.is_send_back === 1 && (
+          <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 mt-0.5" title={`Returned from: ${STAGE_LABELS[l.send_back_from_stage] || l.send_back_from_stage}. Remarks: ${l.send_back_remarks || ''}`}>
+            <FiCornerUpLeft size={10} className="text-amber-700" /> Returned ({STAGE_SHORT[l.send_back_from_stage] || 'Recheck'})
+          </span>
+        )}
         {(l.lead_kind === 'government' || l.gem_bid_number || l.government_portal === 'GeM') && (
           <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300 mt-0.5" title={`Government Portal: ${l.government_portal || 'GeM'}`}>
             🛒 {l.gem_bid_number ? 'GeM Bid' : (l.government_portal || 'Govt')}
@@ -1246,16 +1305,86 @@ export default function Leads() {
             </div>
           )}
 
-          {/* Move to Lost button inside modal if lead is active */}
-          {viewData.current_stage !== 'lost' && canMoveToLost && (
-            <div className="flex justify-end pt-1">
-              <button
-                type="button"
-                onClick={() => openMoveToLost(viewData)}
-                className="btn btn-outline border-red-300 text-red-600 hover:bg-red-50 text-xs py-1 px-3 flex items-center gap-1.5"
-              >
-                <FiXCircle size={14} /> Move Lead to Lost Stage
-              </button>
+          {/* Prominent Send-Back / Recheck Alert Card */}
+          {((viewData.is_send_back === 1 && viewData.send_back_remarks) || viewData.last_send_back) && viewData.current_stage !== 'lost' && (
+            <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-300 rounded-xl p-3.5 shadow-xs space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2 border-b border-amber-200/90 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-amber-500 text-white shadow-xs">
+                    <FiCornerUpLeft size={16} />
+                  </span>
+                  <div>
+                    <span className="font-bold text-amber-950 text-sm block">
+                      ⚠️ Lead Returned for Recheck
+                    </span>
+                    <span className="text-[11px] text-amber-800">
+                      This lead was sent back from a higher stage and has pending corrections.
+                    </span>
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-200/80 text-amber-900 border border-amber-300">
+                  Returned from: {STAGE_LABELS[viewData.send_back_from_stage] || STAGE_SHORT[viewData.send_back_from_stage] || viewData.send_back_from_stage || 'Upper Stage'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                <div>
+                  <span className="text-amber-800/80 text-[10px] uppercase font-bold block">Sent Back By</span>
+                  <span className="font-semibold text-gray-900">
+                    {viewData.send_back_by_name || viewData.last_send_back?.actor_name || 'Team member'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-amber-800/80 text-[10px] uppercase font-bold block">Date & Time</span>
+                  <span className="text-gray-800 font-medium">
+                    {fmtDateIST(viewData.send_back_at || viewData.last_send_back?.at)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-amber-800/80 text-[10px] uppercase font-bold block">Current Stage Target</span>
+                  <span className="font-semibold text-amber-900">
+                    {STAGE_LABELS[viewData.current_stage] || viewData.current_stage}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg p-3 border border-amber-200 shadow-2xs">
+                <span className="text-xs font-bold text-red-700 flex items-center gap-1.5 mb-1">
+                  <FiAlertTriangle size={14} className="text-red-600" /> Pending Requirement / Remarks:
+                </span>
+                <div className="text-xs text-gray-900 font-semibold whitespace-pre-wrap leading-relaxed bg-amber-50/50 p-2.5 rounded border border-amber-200">
+                  {viewData.send_back_remarks || viewData.last_send_back?.notes || 'Please recheck deliverables before advancing.'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons: Send Back for Recheck & Move to Lost */}
+          {viewData.current_stage !== 'lost' && (
+            <div className="flex items-center justify-end gap-2 pt-1 flex-wrap">
+              {canEdit('leads') &&
+                viewData.dropped !== 1 &&
+                STAGES.indexOf(viewData.current_stage) >= 3 &&
+                STAGES.indexOf(viewData.current_stage) <= 10 && (
+                  <button
+                    type="button"
+                    onClick={() => openSendBack(viewData)}
+                    className="btn btn-secondary border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 text-xs py-1 px-3 flex items-center gap-1.5 font-medium shadow-2xs"
+                    title="Send this lead back to a previous stage for corrections or rework"
+                  >
+                    <FiCornerUpLeft size={13} className="text-amber-700" /> Send Back for Recheck
+                  </button>
+              )}
+
+              {canMoveToLost && (
+                <button
+                  type="button"
+                  onClick={() => openMoveToLost(viewData)}
+                  className="btn btn-outline border-red-300 text-red-600 hover:bg-red-50 text-xs py-1 px-3 flex items-center gap-1.5"
+                >
+                  <FiXCircle size={14} /> Move Lead to Lost Stage
+                </button>
+              )}
             </div>
           )}
           {viewData.qualified_remarks && <div className="bg-red-50 p-2 rounded text-xs"><strong>Qualified:</strong> {viewData.qualified_remarks}</div>}
@@ -1379,6 +1508,22 @@ export default function Leads() {
                     <span className="text-[10px] font-normal text-gray-500">Lead is currently at: <b>{STAGE_LABELS[viewData.current_stage]}</b></span>
                   )}
                 </h5>
+
+                {/* Stage-level pending recheck requirement banner */}
+                {(viewData.is_send_back === 1 || viewData.last_send_back) && activeStage === viewData.current_stage && (
+                  <div className="bg-amber-100/90 border border-amber-300 rounded-lg p-3 text-xs text-amber-950 flex items-start gap-2 shadow-2xs">
+                    <FiAlertTriangle className="text-amber-700 shrink-0 mt-0.5" size={16} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between flex-wrap gap-1 font-bold">
+                        <span>Required Revision (Sent back from {STAGE_LABELS[viewData.send_back_from_stage] || STAGE_SHORT[viewData.send_back_from_stage] || viewData.send_back_from_stage}):</span>
+                        <span className="text-[10px] font-normal text-amber-800">By {viewData.send_back_by_name || viewData.last_send_back?.actor_name || 'Team member'}</span>
+                      </div>
+                      <p className="mt-1 font-bold text-red-800 bg-white/90 p-2 rounded border border-amber-200 whitespace-pre-wrap">
+                        {viewData.send_back_remarks || viewData.last_send_back?.notes || 'Please recheck deliverables before advancing.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {/* Stage 1 → Stage 2: Qualified or Not (S2: 5-Point Quick Check GO / NO-GO · SOP-01.2) */}
                 {activeStage === 'lead_capture' && (<div className="space-y-3">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs">
@@ -2610,6 +2755,86 @@ export default function Leads() {
                 className="btn bg-red-600 hover:bg-red-700 text-white text-xs px-4 flex items-center gap-1.5"
               >
                 {lostSubmitting ? 'Moving…' : 'Confirm Move to Lost'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Send Back for Recheck Modal */}
+      <Modal
+        isOpen={sendBackModal}
+        onClose={() => { if (!sendBackSubmitting) setSendBackModal(false); }}
+        title={`Send Back for Recheck — ${sendBackTargetLead?.lead_no || ''}`}
+      >
+        {sendBackTargetLead && (
+          <form onSubmit={handleSendBack} className="space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-sm text-amber-950">
+                <FiCornerUpLeft size={16} className="text-amber-700" /> Send Lead Back to Previous Stage
+              </div>
+              <p>
+                Lead: <strong>{sendBackTargetLead.lead_no}</strong> ({sendBackTargetLead.client_name})
+              </p>
+              <p>
+                Current Stage:{' '}
+                <span className="font-semibold px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-800">
+                  {STAGE_LABELS[sendBackTargetLead.current_stage] || sendBackTargetLead.current_stage}
+                </span>
+              </p>
+              <p className="text-[11px] text-amber-700">
+                Sending this lead back will update its current stage, reset the SLA timer for the target stage, notify the stage owner, and record this action in the audit log.
+              </p>
+            </div>
+
+            <div>
+              <label className="label font-medium text-xs text-gray-700">Send Back To Stage *</label>
+              <select
+                className="input text-xs w-full"
+                value={sendBackStage}
+                onChange={e => setSendBackStage(e.target.value)}
+                required
+              >
+                {STAGES.slice(0, STAGES.indexOf(sendBackTargetLead.current_stage)).map(sKey => (
+                  <option key={sKey} value={sKey}>
+                    {STAGE_LABELS[sKey] || sKey}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label font-medium text-xs text-gray-700">
+                Remarks (Mandatory) <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                className="input text-xs w-full min-h-[90px]"
+                rows={3}
+                placeholder="Explain what needs to be corrected, recalculated, or revised..."
+                value={sendBackRemarks}
+                onChange={e => setSendBackRemarks(e.target.value)}
+                required
+              />
+              <span className="text-[11px] text-gray-400">
+                Explain specifically what needs to be changed before the lead can advance again.
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+              <button
+                type="button"
+                disabled={sendBackSubmitting}
+                onClick={() => setSendBackModal(false)}
+                className="btn btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={sendBackSubmitting}
+                className="btn btn-primary text-xs px-4 flex items-center gap-1.5"
+              >
+                {sendBackSubmitting ? 'Sending…' : 'Submit'}
               </button>
             </div>
           </form>

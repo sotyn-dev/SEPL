@@ -176,7 +176,7 @@ router.get('/settings/move-to-lost-access', (req, res) => {
   try {
     const row = db.prepare("SELECT value FROM app_settings WHERE key = 'sf_move_to_lost_access'").get();
     if (row?.value) conf = JSON.parse(row.value);
-  } catch (_) {}
+  } catch (_) { }
 
   let userCanMarkLost = req.user.role === 'admin';
   if (!userCanMarkLost) {
@@ -205,9 +205,19 @@ router.post('/settings/move-to-lost-access', (req, res) => {
 
 // GET single (with SLA info)
 router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
-  const lead = getDb().prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
+  const db = getDb();
+  const lead = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  res.json(withSla([lead])[0]);
+  const row = withSla([lead])[0];
+  try {
+    const lastSendBack = db.prepare(`
+      SELECT notes, actor_name, at FROM sales_funnel_audit
+      WHERE lead_id = ? AND action = 'send_back'
+      ORDER BY at DESC LIMIT 1
+    `).get(lead.id);
+    row.last_send_back = lastSendBack || null;
+  } catch (_) { }
+  res.json(row);
 });
 
 // Stage 1 validation per mam's spec — GST format, estimated value > 0,
@@ -356,7 +366,7 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     for (const u of usersToNotify) {
       try {
         insertNotif.run(u.id, notifTitle, notifBody, notifLink);
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (usersToNotify.length > 0) {
@@ -425,7 +435,7 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
           console.log(`[sales-funnel] Thank-you email dispatched to ${b.email} (${leadNo})`);
         }
       }).catch(err => console.warn('[sales-funnel] thank-you email non-fatal:', err.message));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   res.status(201).json({ id: leadId, lead_no: leadNo });
@@ -817,6 +827,9 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
   // (mam 2026-06-25 — empty Remarks bound undefined on Qualify).
   try {
     db.prepare(sql).run(...params);
+    if (stage !== lead.current_stage) {
+      db.prepare("UPDATE sales_funnel SET is_send_back = 0 WHERE id = ?").run(req.params.id);
+    }
   } catch (e) {
     console.error('[sales-funnel stage] write failed:', stage, e.message);
     return res.status(500).json({ error: `Could not save this stage: ${e.message}` });
@@ -846,7 +859,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       for (const u of usersToNotify) {
         try {
           insertNotif.run(u.id, notifTitle, notifBody, notifLink);
-        } catch (_) {}
+        } catch (_) { }
       }
       if (usersToNotify.length > 0) {
         const { notifyMany } = require('../lib/push');
@@ -895,7 +908,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
           });
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   const recordedStage = (stage === 'mom_uploaded') ? 'concept_design' : stage;
   audit(db, req.params.id, recordedStage, 'enter_stage', req.user, {
@@ -924,7 +937,7 @@ router.post('/:id/move-to-lost', (req, res) => {
       const p = db.prepare("SELECT rp.can_edit, rp.can_delete FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'leads'").get(req.user.id);
       if (p?.can_edit || p?.can_delete) allowed = true;
     }
-  } catch (_) {}
+  } catch (_) { }
 
   if (!allowed) {
     return res.status(403).json({ error: 'You do not have permission to move leads to lost' });
@@ -982,13 +995,114 @@ router.post('/:id/move-to-lost', (req, res) => {
   }
 });
 
+// POST send-back: Return lead to a prior stage for corrections/recheck with mandatory remarks.
+// Available from Stage 4 (concept_design) through Stage 11 (contract_signed).
+router.post('/:id/send-back', requirePermission('leads', 'edit'), (req, res) => {
+  const db = getDb();
+  const lead = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const curStage = normalizeStage(lead.current_stage);
+  if (curStage === 'lost' || lead.dropped === 1) {
+    return res.status(400).json({ error: 'Cannot send back a lost or dropped lead' });
+  }
+  if (curStage === 'project_kickoff' || curStage === 'won') {
+    return res.status(400).json({ error: 'Cannot send back a closed/won lead' });
+  }
+
+  const STAGE_ORDER = [
+    'lead_capture',
+    'qualification',
+    'site_survey',
+    'concept_design',
+    'boq_internal_costing',
+    'boq_costing',
+    'pricing_review',
+    'quote_submitted',
+    'technical_clarification',
+    'commercial_negotiation',
+    'contract_signed',
+  ];
+
+  const curIdx = STAGE_ORDER.indexOf(curStage);
+  if (curIdx < 3) {
+    return res.status(400).json({ error: 'Send back is only available from Stage 4 (Concept Design) onwards' });
+  }
+
+  const { target_stage, remarks } = req.body;
+  if (!target_stage || !STAGE_ORDER.includes(target_stage)) {
+    return res.status(400).json({ error: 'Valid target stage is required' });
+  }
+
+  const targetIdx = STAGE_ORDER.indexOf(target_stage);
+  if (targetIdx >= curIdx) {
+    return res.status(400).json({ error: 'Target stage must be an earlier completed stage' });
+  }
+
+  if (!remarks || !String(remarks).trim()) {
+    return res.status(400).json({ error: 'Remarks explaining the reason for recheck are mandatory' });
+  }
+  const cleanRemarks = String(remarks).trim();
+
+  const curLabel = STAGES.find(s => s.key === curStage)?.label || curStage;
+  const targetLabel = STAGES.find(s => s.key === target_stage)?.label || target_stage;
+
+  db.prepare(`
+    UPDATE sales_funnel SET
+      current_stage = ?,
+      stage_entered_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP,
+      is_send_back = 1,
+      send_back_from_stage = ?,
+      send_back_to_stage = ?,
+      send_back_remarks = ?,
+      send_back_by_name = ?,
+      send_back_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(target_stage, curStage, target_stage, cleanRemarks, req.user?.name || 'Team member', lead.id);
+
+  // Write audit trail
+  audit(db, lead.id, target_stage, 'send_back', req.user, {
+    notes: `[Sent back for recheck from ${ curLabel } to ${ targetLabel }]: ${ cleanRemarks } `
+  });
+
+  // Notify responsible person of target stage
+  try {
+    const { createNotification } = require('../services/notificationService');
+    const raciRow = db.prepare(`
+      SELECT responsible_id FROM raci_assignment
+      WHERE module = 'sales_funnel' AND step_key = ? AND(record_id = ? OR record_id = 0)
+      ORDER BY record_id DESC LIMIT 1
+    `).get(target_stage, lead.id);
+    const notifyUserId = raciRow?.responsible_id || lead.created_by;
+    if (notifyUserId && notifyUserId !== req.user.id) {
+      createNotification({
+        userId: notifyUserId,
+        type: 'lead',
+        title: `🔄 Lead ${ lead.lead_no || ('#' + lead.id) } returned for recheck`,
+        body: `${ req.user.name || 'Team member' } sent lead back from ${ curLabel } to ${ targetLabel }: "${cleanRemarks}"`,
+        referenceType: 'lead',
+        referenceId: lead.id,
+        link: `/ leads ? lead_id = ${ lead.id }& stage=${ target_stage } `,
+      });
+    }
+  } catch (err) {
+    console.warn('[sales_funnel] notification error on send-back:', err.message);
+  }
+
+  res.json({
+    message: `Lead sent back to ${ targetLabel } for recheck`,
+    current_stage: target_stage
+  });
+});
+
 // ===== BOQ HISTORY (mam 2026-06-12: clients re-send BOQs over time) =====
 
 // GET all BOQs submitted for a lead (newest first).
 router.get('/:id/boqs', requirePermission('leads', 'view'), (req, res) => {
   const rows = getDb().prepare(
     `SELECT id, boq_file_link, boq_amount, notes, created_by, created_at
-       FROM sales_funnel_boqs WHERE funnel_id=? ORDER BY created_at DESC, id DESC`
+       FROM sales_funnel_boqs WHERE funnel_id =? ORDER BY created_at DESC, id DESC`
   ).all(req.params.id);
   res.json(rows);
 });
@@ -1003,10 +1117,10 @@ router.post('/:id/boq', requirePermission('leads', 'edit'), (req, res) => {
   }
   try {
     const noteText = b.notes || b.boq_notes || null;
-    db.prepare(`INSERT INTO sales_funnel_boqs (funnel_id, boq_file_link, boq_amount, created_by, notes)
-                VALUES (?, ?, ?, ?, ?)`)
+    db.prepare(`INSERT INTO sales_funnel_boqs(funnel_id, boq_file_link, boq_amount, created_by, notes)
+  VALUES(?, ?, ?, ?, ?)`)
       .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, req.user.name, noteText);
-    db.prepare(`UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    db.prepare(`UPDATE sales_funnel SET boq_file_link =?, boq_amount =?, boq_date = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id =? `)
       .run(b.boq_file_link || null, +b.boq_amount || 0, req.params.id);
     try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: noteText }); } catch (_) { }
     res.json({ ok: true });
@@ -1025,7 +1139,7 @@ router.delete('/:id/boqs/:boqId', requirePermission('leads', 'edit'), (req, res)
     db.prepare('DELETE FROM sales_funnel_boqs WHERE id=?').run(req.params.boqId);
     const next = db.prepare(
       `SELECT boq_file_link, boq_amount FROM sales_funnel_boqs
-        WHERE funnel_id=? ORDER BY created_at DESC, id DESC LIMIT 1`
+        WHERE funnel_id =? ORDER BY created_at DESC, id DESC LIMIT 1`
     ).get(req.params.id);
     db.prepare('UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
       .run(next ? next.boq_file_link : null, next ? (next.boq_amount || 0) : 0, req.params.id);
@@ -1041,8 +1155,8 @@ router.delete('/:id/boqs/:boqId', requirePermission('leads', 'edit'), (req, res)
 // GET follow-ups for a lead
 router.get('/:id/followups', requirePermission('leads', 'view'), (req, res) => {
   res.json(getDb().prepare(`SELECT f.*, u.name as created_by_name, u2.name as done_by_name FROM lead_followups f
-    LEFT JOIN users u ON f.created_by=u.id LEFT JOIN users u2 ON f.done_by=u2.id
-    WHERE f.lead_id=? ORDER BY f.followup_date DESC`).all(req.params.id));
+    LEFT JOIN users u ON f.created_by = u.id LEFT JOIN users u2 ON f.done_by = u2.id
+    WHERE f.lead_id =? ORDER BY f.followup_date DESC`).all(req.params.id));
 });
 
 // POST add follow-up
@@ -1076,8 +1190,8 @@ router.put('/followup/:fid', requirePermission('leads', 'edit'), (req, res) => {
 router.get('/followups/today', requirePermission('leads', 'view'), (req, res) => {
   const today = istToday();
   const pending = getDb().prepare(`SELECT f.*, sf.lead_no, sf.client_name, sf.company_name, sf.phone, sf.current_stage
-    FROM lead_followups f JOIN sales_funnel sf ON f.lead_id=sf.id
-    WHERE f.done=0 AND f.followup_date <= ? ORDER BY f.followup_date`).all(today);
+    FROM lead_followups f JOIN sales_funnel sf ON f.lead_id = sf.id
+    WHERE f.done = 0 AND f.followup_date <= ? ORDER BY f.followup_date`).all(today);
   res.json(pending);
 });
 
@@ -1085,8 +1199,8 @@ router.get('/followups/today', requirePermission('leads', 'view'), (req, res) =>
 router.get('/followups/overdue', requirePermission('leads', 'view'), (req, res) => {
   const today = istToday();
   const overdue = getDb().prepare(`SELECT f.*, sf.lead_no, sf.client_name, sf.company_name, sf.phone
-    FROM lead_followups f JOIN sales_funnel sf ON f.lead_id=sf.id
-    WHERE f.done=0 AND f.followup_date < ? ORDER BY f.followup_date`).all(today);
+    FROM lead_followups f JOIN sales_funnel sf ON f.lead_id = sf.id
+    WHERE f.done = 0 AND f.followup_date < ? ORDER BY f.followup_date`).all(today);
   res.json(overdue);
 });
 
@@ -1110,9 +1224,9 @@ router.post('/:id/email-mom', requirePermission('leads', 'edit'), async (req, re
   const actionPlanned = req.body.action_planned || lead.action_planned || 'Estimation team to process BOQ.';
   const senderName = req.user?.name || 'SEPL Sales Team';
 
-  const subject = `Minutes of Meeting (MOM): ${projectName} — Secured Engineers Pvt Ltd`;
+  const subject = `Minutes of Meeting(MOM): ${ projectName } — Secured Engineers Pvt Ltd`;
   const html = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+    < div style = "font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;" >
       <div style="background-color: #1e40af; color: #ffffff; padding: 20px; text-align: center;">
         <h2 style="margin: 0; font-size: 20px;">Secured Engineers Pvt. Ltd.</h2>
         <p style="margin: 5px 0 0 0; font-size: 13px; opacity: 0.9;">Minutes of Meeting (MOM) · SOP-01.4</p>
@@ -1152,8 +1266,8 @@ router.post('/:id/email-mom', requirePermission('leads', 'edit'), async (req, re
         <p style="margin: 4px 0 0 0; font-weight: bold; font-size: 14px;">${senderName}</p>
         <p style="margin: 0; font-size: 12px; color: #64748b;">Secured Engineers Pvt. Ltd. | Commercial MEP & Fire Solutions</p>
       </div>
-    </div>
-  `;
+    </div >
+    `;
 
   const { sendEmail } = require('../lib/email');
   let emailResult = { skipped: true, reason: 'Email sending skipped' };
@@ -1162,7 +1276,7 @@ router.post('/:id/email-mom', requirePermission('leads', 'edit'), async (req, re
       to: recipientEmail,
       subject,
       html,
-      text: `MOM Summary for ${projectName}:\n\n${momNotes}\n\nAction Planned:\n${actionPlanned}`,
+      text: `MOM Summary for ${ projectName }: \n\n${ momNotes } \n\nAction Planned: \n${ actionPlanned } `,
     });
   } catch (err) {
     console.error('[email-mom] Send error:', err.message);
@@ -1171,13 +1285,13 @@ router.post('/:id/email-mom', requirePermission('leads', 'edit'), async (req, re
   db.prepare(`
     UPDATE sales_funnel
        SET mom_emailed_at = CURRENT_TIMESTAMP,
-           mom_email_recipient = ?,
-           updated_at = CURRENT_TIMESTAMP
+    mom_email_recipient = ?,
+    updated_at = CURRENT_TIMESTAMP
      WHERE id = ?
-  `).run(recipientEmail, req.params.id);
+    `).run(recipientEmail, req.params.id);
 
   audit(db, req.params.id, lead.current_stage, 'email_mom', req.user, {
-    notes: `MOM dispatched to client at ${recipientEmail} (${emailResult.sent ? 'Sent' : 'Recorded'})`,
+    notes: `MOM dispatched to client at ${ recipientEmail } (${ emailResult.sent ? 'Sent' : 'Recorded' })`,
   });
 
   res.json({
