@@ -7805,6 +7805,48 @@ in your first week. If a process feels broken, raise a Help Ticket
   try {
     const n = db.prepare("UPDATE sales_funnel SET current_stage='lead_capture' WHERE current_stage='new_lead'").run().changes;
     if (n > 0) console.log(`[schema] stage repair: ${n} sales_funnel row(s) new_lead -> lead_capture`);
+    db.prepare("UPDATE sales_funnel SET current_stage='site_survey' WHERE current_stage='meeting'").run();
+    db.prepare("UPDATE sales_funnel SET current_stage='quote_submitted' WHERE current_stage='quotation'").run();
+
+    // Migrate sales_funnel RACI assignments from legacy 7-step keys to 11-stage spec
+    const sfKeyMap = [
+      ['drawing', 'concept_design'],
+      ['meeting', 'site_survey'],
+      ['boq', 'boq_costing'],
+      ['quotation', 'quote_submitted'],
+      ['result', 'contract_signed'],
+      ['qualified', 'qualification'],
+    ];
+    for (const [oldK, newK] of sfKeyMap) {
+      try {
+        db.prepare(`UPDATE OR IGNORE raci_assignment SET step_key=? WHERE module='sales_funnel' AND step_key=?`).run(newK, oldK);
+        db.prepare(`DELETE FROM raci_assignment WHERE module='sales_funnel' AND step_key=?`).run(oldK);
+      } catch (_) {}
+    }
+    db.prepare(`DELETE FROM raci_assignment WHERE module='sales_funnel' AND step_key='mom'`).run();
+    db.prepare(`DELETE FROM raci_assignment WHERE module='sales_funnel' AND record_id > 0 AND done_at IS NULL`).run();
+
+    // Ensure whole-module RACI default (record_id=0) covers all 11 stages
+    const defaultRaci11 = [
+      { key: 'lead_capture', resp: 4, acc: 3, sla: 1, wt: 10 },
+      { key: 'qualification', resp: 4, acc: 3, sla: 1, wt: 10 },
+      { key: 'site_survey', resp: 3, acc: 4, sla: 24, wt: 10 },
+      { key: 'concept_design', resp: 5, acc: 3, sla: 48, wt: 10 },
+      { key: 'boq_internal_costing', resp: 5, acc: 3, sla: 24, wt: 10 },
+      { key: 'boq_costing', resp: 5, acc: 3, sla: 48, wt: 10 },
+      { key: 'pricing_review', resp: 3, acc: 1, sla: 24, wt: 10 },
+      { key: 'quote_submitted', resp: 4, acc: 3, sla: 24, wt: 10 },
+      { key: 'technical_clarification', resp: 3, acc: 1, sla: 24, wt: 10 },
+      { key: 'commercial_negotiation', resp: 3, acc: 1, sla: 48, wt: 10 },
+      { key: 'contract_signed', resp: 3, acc: 1, sla: 48, wt: 10 },
+    ];
+    const insDefault = db.prepare(`
+      INSERT OR IGNORE INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, sla_hours, weight, step_enabled)
+      VALUES ('sales_funnel', 0, ?, ?, ?, ?, ?, 1)
+    `);
+    for (const d of defaultRaci11) {
+      insDefault.run(d.key, d.resp, d.acc, d.sla, d.wt);
+    }
   } catch (e) { console.warn('[schema] stage repair skipped:', e.message); }
 
   // Sotyn Leads (mam 2026-09-07) — sotyn.ai website enquiry inbox fed by
@@ -8028,6 +8070,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/offerLetterScore').initialize(db);
   require('../lib/purchaseBilling').ensurePurchaseBilling(db);
   require('./vendorTredsSchema').ensureVendorTredsSchema(db);
+  require('./notificationSchema').initializeNotificationSchema(db);
   db.prepare("INSERT INTO app_settings(key,value) VALUES('vendor_treds_settings',?) ON CONFLICT(key) DO NOTHING")
     .run(JSON.stringify(require('../lib/vendorTreds/kpis').getDefaultConfig()));
   return db;

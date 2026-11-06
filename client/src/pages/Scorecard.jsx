@@ -308,10 +308,40 @@ export default function Scorecard() {
 
   const [overview, setOverview] = useState(null);
   // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
-  // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
-  const [raci, setRaci] = useState({ open: false, loading: false, data: null });
-  // Collapse + drop stale data whenever the viewed user or week changes.
-  useEffect(() => { setRaci({ open: false, loading: false, data: null }); }, [viewUserId, weekStart]);
+  // on the page. Kept expanded by default across page refreshes until the user explicitly minimizes it.
+  const isRaciMinimized = () => {
+    try {
+      return localStorage.getItem('scorecard_raci_minimized') === 'true';
+    } catch (_) {
+      return false;
+    }
+  };
+  const [raci, setRaci] = useState(() => ({
+    open: !isRaciMinimized(),
+    loading: !isRaciMinimized(),
+    data: null,
+  }));
+
+  // Auto-fetch RACI breakdown whenever open (expanded by default on load, refresh, or user/week change)
+  useEffect(() => {
+    if (isRaciMinimized()) {
+      setRaci({ open: false, loading: false, data: null });
+      return;
+    }
+    let cancelled = false;
+    setRaci(prev => ({ ...prev, open: true, loading: true }));
+    api.get(`/scoring/raci-breakdown?user_id=${viewUserId}&week_start=${weekStart}`)
+      .then(res => {
+        if (!cancelled) setRaci({ open: true, loading: false, data: res.data });
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setRaci(prev => ({ ...prev, loading: false }));
+          console.warn('Failed to load step-wise breakdown:', err?.message);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [viewUserId, weekStart]);
 
   // Metric Explainer Modal (ℹ️ button next to each KPI)
   const [explainingKpi, setExplainingKpi] = useState(null);
@@ -423,11 +453,18 @@ export default function Scorecard() {
   }, [viewUserId, weekStart]);
   const toggleRaci = useCallback(() => {
     setRaci(r => {
-      if (r.open) return { ...r, open: false };          // collapse
+      if (r.open) {
+        try { localStorage.setItem('scorecard_raci_minimized', 'true'); } catch (_) {}
+        return { ...r, open: false };
+      }
+      try { localStorage.removeItem('scorecard_raci_minimized'); } catch (_) {}
       api.get(`/scoring/raci-breakdown?user_id=${viewUserId}&week_start=${weekStart}`)
-        .then(res => setRaci(rr => ({ ...rr, loading: false, data: res.data })))
-        .catch(err => { setRaci({ open: false, loading: false, data: null }); toast.error(err.response?.data?.error || 'Failed to load step-wise breakdown'); });
-      return { open: true, loading: true, data: r.data };  // expand + fetch fresh
+        .then(res => setRaci(rr => ({ ...rr, open: true, loading: false, data: res.data })))
+        .catch(err => {
+          setRaci({ open: false, loading: false, data: null });
+          toast.error(err.response?.data?.error || 'Failed to load step-wise breakdown');
+        });
+      return { open: true, loading: true, data: r.data };
     });
   }, [viewUserId, weekStart]);
 
@@ -2485,18 +2522,21 @@ function RaciBreakdown({ data, onDrilldown }) {
           <NumberedTable className="w-full text-xs">
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
               <tr>
-                <th className="text-left p-2">Step</th>
-                <th className="text-center p-2 w-14">Wt %</th>
-                <th className="text-center p-2 w-20">Planned</th>
-                <th className="text-center p-2 w-16">Done</th>
-                <th className="text-center p-2 w-16">Pending</th>
-                <th className="text-center p-2 w-20">Actual %</th>
-                <th className="text-center p-2 w-20">On-time</th>
+                <th className="text-left p-2">Stage / Step</th>
+                <th className="text-center p-2 w-14" title="Weight % configured for this step in RACI">Wt %</th>
+                <th className="text-center p-2 w-20" title="Tasks arrived or active for this stage in this week">Planned</th>
+                <th className="text-center p-2 w-16" title="Tasks completed in this stage this week">Done</th>
+                <th className="text-center p-2 w-24" title="Backlog total / Cleared this week">Pending (Backlog)</th>
+                <th className="text-center p-2 w-24" title="Performance: Achievement % and Variance vs Plan (0% = on target, negative = shortfall, positive = exceeded)">Score / Variance</th>
+                <th className="text-center p-2 w-20" title="Completed within target SLA turnaround hours">On-time</th>
                 <th className="text-left p-2">Commitment (next wk)</th>
               </tr>
             </thead>
             <tbody>
-              {list.map(r => (
+              {list.map(r => {
+                const variance = pct(r.actual, r.planned);
+                const achievedPct = r.planned > 0 ? Math.round((r.actual / r.planned) * 100) : 0;
+                return (
                 <tr key={r.step_key} className="border-t">
                   <td className="p-2 font-medium">
                     {r.step_label}
@@ -2554,7 +2594,7 @@ function RaciBreakdown({ data, onDrilldown }) {
                       <span className="text-amber-700">{((r.pending_before || 0) + (r.closed_before || 0)) || ''}</span>
                     )}
                     {(r.closed_before || 0) > 0 && (
-                      <span className="text-gray-300"> / {onDrilldown ? (
+                      <span className="text-gray-400 text-[11px]"> / {onDrilldown ? (
                         <button
                           type="button"
                           onClick={() => onDrilldown(r, 'prev_done')}
@@ -2567,12 +2607,23 @@ function RaciBreakdown({ data, onDrilldown }) {
                         <b className="text-emerald-700">{r.closed_before}</b>
                       )}</span>
                     )}
+                    {(r.closed_before || 0) > 0 && (
+                      <div className="text-[9px] text-gray-400">{r.closed_before} cleared</div>
+                    )}
                   </td>
-                  <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
+                  <td className={`text-center p-2 font-bold ${pctClr(variance)}`} title={`Completed ${r.actual} of ${r.planned} planned (${achievedPct}% target achievement)`}>
+                    {variance > 0 ? `+${variance}%` : `${variance}%`}
+                    {r.planned > 0 && (
+                      <div className="text-[10px] font-normal text-gray-500">
+                        {achievedPct}% met
+                      </div>
+                    )}
+                  </td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="p-2"><CommitmentCell row={r} /></td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </NumberedTable>
         </div>

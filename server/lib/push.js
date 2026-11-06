@@ -7,7 +7,7 @@
 
 const webpush = require('web-push');
 const { getDb } = require('../db/schema');
-const { isChatPush } = require('./chatPush');
+
 
 let initialised = false;
 
@@ -38,7 +38,7 @@ function getPublicKey() {
 
 // Send a single push to one subscription
 async function sendOne(sub, payload) {
-  if (!isChatPush(payload)) return { ok: false, reason: 'chat_only' };
+  if (!payload || typeof payload !== 'object') return { ok: false, reason: 'invalid_payload' };
   const isCall = payload.type === 'site_call';
   const ttl = isCall ? Math.min(60, Math.ceil((Number(payload.expiresAt) - Date.now()) / 1000)) : 86400;
   if (!Number.isFinite(ttl) || ttl <= 0) return { ok: false, reason: 'expired' };
@@ -63,7 +63,7 @@ async function sendOne(sub, payload) {
 
 // Send to one user (all their active devices)
 async function pushToUser(userId, payload) {
-  if (!isChatPush(payload)) return { sent: 0, total: 0, skipped: 'chat_only' };
+  if (!payload) return { sent: 0 };
   if (!userId) return { sent: 0 };
   ensureVapid();
   const subs = getDb().prepare(`SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
@@ -92,7 +92,7 @@ async function pushToUsers(userIds, payload) {
 
 // Send to every active user (announcements)
 async function pushToAll(payload) {
-  if (!isChatPush(payload)) return { sent: 0, total: 0, skipped: 'chat_only' };
+  if (!payload) return { sent: 0 };
   ensureVapid();
   const subs = getDb().prepare(`
     SELECT ps.endpoint, ps.p256dh, ps.auth

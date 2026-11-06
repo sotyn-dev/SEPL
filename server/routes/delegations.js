@@ -360,16 +360,24 @@ router.post('/', (req, res) => {
     `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name, attachment_url)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null, project, attachment);
-  // Fire-and-forget push to the assignee
+  // Fire-and-forget push to the assignee via Central Notification Engine
   try {
-    const { notify } = require('../lib/push');
-    notify(assigned_to, {
-      title: '📋 New Delegation',
-      body: `${req.user.name || 'Admin'} assigned: ${derivedTitle}${due_date ? ` · due ${due_date}` : ''}`,
-      url: '/delegations',
-      tag: `delegation-${r.lastInsertRowid}`,
+    const { createNotification } = require('../services/notificationService');
+    createNotification({
+      userId: +assigned_to,
+      type: 'delegation',
+      title: '📋 New Task Delegated',
+      body: `${req.user.name || 'Admin'} assigned: ${derivedTitle}${due_date ? ` · Due: ${due_date}` : ''}`,
+      referenceType: 'delegation',
+      referenceId: r.lastInsertRowid,
+      actionUrl: `/delegations?id=${r.lastInsertRowid}`,
+      priority: 'high',
+      dedupeKey: `delegation_create_${r.lastInsertRowid}`,
+      module: 'Delegation'
     });
-  } catch {}
+  } catch (err) {
+    console.warn('[delegations] notify error:', err.message);
+  }
 
   try {
     const { createMandatoryTaskNotification } = require('../services/complianceService');
@@ -394,7 +402,7 @@ router.post('/', (req, res) => {
 // touched here — those go through their own endpoints.
 router.put('/:id', (req, res) => {
   const db = getDb();
-  const d = db.prepare('SELECT assigned_by FROM delegations WHERE id=?').get(req.params.id);
+  const d = db.prepare('SELECT assigned_by, assigned_to, title FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
   if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Only the assigner or an admin can edit this task' });
@@ -422,6 +430,26 @@ router.put('/:id', (req, res) => {
   if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
   params.push(req.params.id);
   db.prepare(`UPDATE delegations SET ${sets.join(', ')} WHERE id=?`).run(...params);
+
+  // Notify on reassignment
+  if (assignedTo && assignedTo !== d.assigned_to) {
+    try {
+      const { createNotification } = require('../services/notificationService');
+      createNotification({
+        userId: assignedTo,
+        type: 'delegation',
+        title: '📋 Task Reassigned to You',
+        body: `${req.user.name || 'Admin'} reassigned: ${title || d.title || 'Task'}${dueDate ? ` · Due: ${dueDate}` : ''}`,
+        referenceType: 'delegation',
+        referenceId: req.params.id,
+        actionUrl: `/delegations?id=${req.params.id}`,
+        priority: 'high',
+        dedupeKey: `delegation_reassign_${req.params.id}_${assignedTo}`,
+        module: 'Delegation'
+      });
+    } catch (_) {}
+  }
+
   res.json({ message: 'Task updated' });
 });
 

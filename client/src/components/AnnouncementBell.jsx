@@ -5,7 +5,9 @@ import {
   FiChevronDown, FiImage, FiCamera, FiPaperclip,
   FiAlertCircle, FiCalendar, FiClock, FiAward, FiCheck, FiTarget,
   FiShield, FiAlertTriangle, FiCheckCircle,
+  FiMessageSquare, FiMessageCircle, FiCheckSquare, FiHelpCircle, FiFileText, FiSettings,
 } from 'react-icons/fi';
+import NotificationSettingsModal from './NotificationSettingsModal';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +25,11 @@ const NOTIF_TYPE_ICON = {
   compliance_alert:   FiAlertTriangle,
   compliance_monitor_alert: FiShield,
   mandatory_task:     FiAlertCircle,
+  chat_mention:       FiMessageSquare,
+  chat_dm:            FiMessageCircle,
+  delegation:         FiCheckSquare,
+  ticket:             FiHelpCircle,
+  approval:           FiFileText,
   generic:            FiBell,
 };
 const NOTIF_TYPE_COLOR = {
@@ -35,6 +42,11 @@ const NOTIF_TYPE_COLOR = {
   compliance_alert:   'text-red-600',
   compliance_monitor_alert: 'text-amber-600',
   mandatory_task:     'text-rose-600',
+  chat_mention:       'text-indigo-600',
+  chat_dm:            'text-blue-600',
+  delegation:         'text-emerald-600',
+  ticket:             'text-amber-600',
+  approval:           'text-purple-600',
   generic:            'text-gray-600',
 };
 
@@ -56,6 +68,9 @@ export default function AnnouncementBell() {
   const [unreadNotif, setUnreadNotif] = useState(0);             // notifications unread count
   const [items, setItems] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [filterCategory, setFilterCategory] = useState('all');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' });
   // Mam (2026-05-22): "upload photo option so that can check photo" —
@@ -76,15 +91,22 @@ export default function AnnouncementBell() {
 
   const loadCount = () => {
     api.get('/announcements/unread-count').then(r => setUnread(r.data?.count || 0)).catch(() => {});
-    // Mam (2026-05-22): also poll HR notifications so the merged
-    // bell badge reflects both sources.
-    api.get('/hr/my-notifications?unread=1').then(r => setUnreadNotif((r.data || []).length)).catch(() => {});
+    api.get('/notifications/unread-count').then(r => setUnreadNotif(r.data?.count || 0)).catch(() => {
+      api.get('/hr/my-notifications?unread=1').then(r => setUnreadNotif((r.data || []).length)).catch(() => {});
+    });
   };
   const loadItems = () => {
     api.get('/announcements').then(r => setItems(r.data || [])).catch(() => setItems([]));
   };
-  const loadNotifications = () => {
-    api.get('/hr/my-notifications').then(r => setNotifications(r.data || [])).catch(() => setNotifications([]));
+  const loadNotifications = (cat = filterCategory, unread = unreadOnly) => {
+    let url = '/notifications?limit=60';
+    if (cat && cat !== 'all') url += `&category=${cat}`;
+    if (unread) url += '&unread=1';
+    api.get(url).then(r => {
+      setNotifications(r.data || []);
+    }).catch(() => {
+      api.get('/hr/my-notifications').then(r => setNotifications(r.data || [])).catch(() => setNotifications([]));
+    });
   };
 
   // Real-time notification arrival over Socket.IO (e.g. website leads, interview reminders)
@@ -121,7 +143,22 @@ export default function AnnouncementBell() {
         </div>
       ), { duration: 8000 });
     });
-    return unsub;
+
+    // Cross-device read synchronization listener
+    const unsubRead = subscribe('notification:read', (data) => {
+      if (data?.all) {
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: 1, read_at: n.read_at || new Date().toISOString() })));
+        setUnreadNotif(0);
+      } else if (data?.id) {
+        setNotifications(prev => prev.map(n => n.id === data.id ? { ...n, is_read: 1, read_at: n.read_at || new Date().toISOString() } : n));
+        setUnreadNotif(cnt => Math.max(0, cnt - 1));
+      }
+    });
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      if (typeof unsubRead === 'function') unsubRead();
+    };
   }, [subscribe, navigate]);
 
   // Poll both unread counts every 60s so the bell badge stays current even
@@ -158,10 +195,14 @@ export default function AnnouncementBell() {
     try { await api.post('/announcements/mark-seen'); setUnread(0); } catch {}
   };
 
-  // ── Notification handlers (mam 2026-05-22) ────────────────────────
+  // ── Notification handlers (mam 2026-05-22 + Central Notification Engine) ──
   const clickNotification = async (n) => {
-    if (!n.read_at) {
-      try { await api.put(`/hr/notifications/${n.id}/read`); } catch {}
+    if (!n.read_at && !n.is_read) {
+      try {
+        await api.put(`/notifications/${n.id}/read`);
+      } catch {
+        try { await api.put(`/hr/notifications/${n.id}/read`); } catch {}
+      }
     }
     setOpen(false);
     if (n.link_url) navigate(n.link_url);
@@ -169,7 +210,13 @@ export default function AnnouncementBell() {
     loadCount();
   };
   const markAllNotificationsRead = async () => {
-    try { await api.post('/hr/notifications/mark-all-read'); loadNotifications(); loadCount(); } catch {}
+    try {
+      await api.post('/notifications/mark-all-read');
+    } catch {
+      try { await api.post('/hr/notifications/mark-all-read'); } catch {}
+    }
+    loadNotifications();
+    loadCount();
   };
 
   const submitNew = async (e) => {
@@ -278,6 +325,10 @@ export default function AnnouncementBell() {
         )}
       </button>
 
+      <NotificationSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />
       {open && (
         <>
           {/* Mobile backdrop to close when tapping outside */}
@@ -418,7 +469,59 @@ export default function AnnouncementBell() {
 
           {/* ── NOTIFICATIONS TAB ── */}
           {tab === 'notifications' && (
-            <div className="flex-1 overflow-y-auto">
+            <>
+              {/* Category Filter Pills & Settings */}
+              <div className="px-3 py-2 border-b bg-gray-50/80 flex items-center justify-between gap-1 flex-wrap">
+                <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+                  {[
+                    { id: 'all',        label: 'All' },
+                    { id: 'chat',       label: 'Chat' },
+                    { id: 'delegation', label: 'Delegations' },
+                    { id: 'ticket',     label: 'Helpdesk' },
+                    { id: 'approval',   label: 'Approvals' },
+                  ].map(cat => (
+                    <button
+                      key={cat.id}
+                      onClick={() => {
+                        setFilterCategory(cat.id);
+                        loadNotifications(cat.id, unreadOnly);
+                      }}
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
+                        filterCategory === cat.id
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1 text-[11px] text-gray-600 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={unreadOnly}
+                      onChange={(e) => {
+                        setUnreadOnly(e.target.checked);
+                        loadNotifications(filterCategory, e.target.checked);
+                      }}
+                      className="rounded text-blue-600 h-3.5 w-3.5 cursor-pointer"
+                    />
+                    <span>Unread</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowSettingsModal(true)}
+                    className="p-1 text-gray-500 hover:text-blue-700 hover:bg-white rounded border border-transparent hover:border-gray-200 transition-colors"
+                    title="Notification Settings & Push Setup"
+                  >
+                    <FiSettings size={13} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
               {notifications.length === 0 && (
                 <div className="text-center text-gray-400 text-sm py-10 px-4">
                   <FiBell size={28} className="mx-auto opacity-30 mb-2"/>
@@ -485,11 +588,12 @@ export default function AnnouncementBell() {
                         )}
                       </div>
                     </div>
-                    {!n.read_at && !isMandatoryActive && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 flex-shrink-0"/>}
+                    {(!n.read_at && !n.is_read) && !isMandatoryActive && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 flex-shrink-0"/>}
                   </div>
                 );
               })}
             </div>
+            </>
           )}
 
           {/* ── ANNOUNCEMENTS TAB ── */}
