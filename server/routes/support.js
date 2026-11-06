@@ -80,6 +80,20 @@ router.get('/', (req, res) => {
   const st = statusFilter(status, ['open', 'in_progress', 'submitted', 'resolved', 'rejected', 'closed'], 't.status');
   if (st) { where.push(st.sql); params.push(...st.params); }
 
+  // Optional user filters (for admin / see-all triage)
+  if (req.query.user_id || req.query.raised_by) {
+    where.push('t.user_id = ?');
+    params.push(+(req.query.user_id || req.query.raised_by));
+  }
+  if (req.query.assigned_to) {
+    if (req.query.assigned_to === 'unassigned') {
+      where.push('t.assigned_to IS NULL');
+    } else {
+      where.push('t.assigned_to = ?');
+      params.push(+req.query.assigned_to);
+    }
+  }
+
   let sql = `SELECT t.*,
       u.name as user_name,
       r.name as resolved_by_name,
@@ -173,41 +187,58 @@ router.get('/:id', (req, res) => {
   res.json(ticket);
 });
 
-// POST new ticket. `assigned_to` is optional; when set, that user sees the
-// ticket on their dashboard + can respond to it.
+// POST new ticket. Both deadline_date and assigned_to are required.
 router.post('/', (req, res) => {
   let { subject, description, category, priority, attachment_link, module, assigned_to, deadline_date } = req.body;
   if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
-  if (Array.isArray(attachment_link)) attachment_link = JSON.stringify(attachment_link);
+  if (!deadline_date) return res.status(400).json({ error: 'Deadline date is required' });
   const deadline = normalizeDeadline(deadline_date);
-  if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
+  if (!deadline || deadline === INVALID_DATE) return res.status(400).json({ error: 'Valid deadline date is required (YYYY-MM-DD)' });
+  if (!assigned_to) return res.status(400).json({ error: 'Assignee is required' });
+  if (Array.isArray(attachment_link)) attachment_link = JSON.stringify(attachment_link);
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const ticketNo = nextSequence(db, 'support_tickets', 'ticket_no', 'TK-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(
     'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to, deadline_date) VALUES (?,?,?,?,?,?,?,?,?,?)'
-  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null, deadline);
-  // Push to assignee (or every admin if unassigned)
+  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, +assigned_to, deadline);
+  // Push to assignee (or every admin if unassigned) via Central Notification Engine
   try {
-    const { notify, notifyMany } = require('../lib/push');
+    const { createNotification } = require('../services/notificationService');
     const dueInfo = deadline ? ` · Due: ${deadline}` : '';
     if (assigned_to) {
-      notify(+assigned_to, {
-        title: `🆘 ${ticketNo} — ${priority || 'medium'} priority`,
-        body: `${subject}${dueInfo}`,
-        url: '/help-tickets',
-        tag: `ticket-${r.lastInsertRowid}`,
+      createNotification({
+        userId: +assigned_to,
+        type: 'ticket',
+        title: `🆘 Help Ticket Assigned: ${ticketNo}`,
+        body: `${req.user.name || 'Requester'} assigned (${priority || 'medium'}): ${subject}${dueInfo}`,
+        referenceType: 'ticket',
+        referenceId: r.lastInsertRowid,
+        actionUrl: `/help-tickets?ticket=${r.lastInsertRowid}`,
+        priority: (priority === 'high' || priority === 'urgent') ? 'urgent' : 'normal',
+        dedupeKey: `ticket_assign_${r.lastInsertRowid}_${assigned_to}`,
+        module: 'Helpdesk'
       });
     } else {
       const admins = db.prepare(`SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1`).all().map(u => u.id);
-      notifyMany(admins, {
-        title: `🆘 New unassigned ticket — ${ticketNo}`,
-        body: `${subject}${dueInfo}`,
-        url: '/help-tickets',
-        tag: `ticket-${r.lastInsertRowid}`,
-      });
+      for (const adminId of admins) {
+        createNotification({
+          userId: adminId,
+          type: 'ticket',
+          title: `🆘 New Unassigned Ticket: ${ticketNo}`,
+          body: `${req.user.name || 'Requester'}: ${subject}${dueInfo}`,
+          referenceType: 'ticket',
+          referenceId: r.lastInsertRowid,
+          actionUrl: `/help-tickets?ticket=${r.lastInsertRowid}`,
+          priority: 'normal',
+          dedupeKey: `ticket_unassigned_${r.lastInsertRowid}_${adminId}`,
+          module: 'Helpdesk'
+        });
+      }
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[support] notify error:', err.message);
+  }
   fireEmailEvent('ticket.created', {
     ticket_no: ticketNo,
     subject: subject || '',
@@ -364,6 +395,45 @@ router.put('/:id', (req, res) => {
       director_email: stDirector(),
     });
   }
+
+  // Notify reassigned user
+  if (canFollowAll && assigned_to !== undefined && assigned_to && +assigned_to !== ticket.assigned_to) {
+    try {
+      const { createNotification } = require('../services/notificationService');
+      createNotification({
+        userId: +assigned_to,
+        type: 'ticket',
+        title: `🆘 Help Ticket Reassigned: ${ticket.ticket_no}`,
+        body: `${req.user.name || 'Admin'} reassigned ticket: ${ticket.subject}`,
+        referenceType: 'ticket',
+        referenceId: ticket.id,
+        actionUrl: `/help-tickets?ticket=${ticket.id}`,
+        priority: ticket.priority === 'urgent' ? 'urgent' : 'normal',
+        dedupeKey: `ticket_reassign_${ticket.id}_${assigned_to}`,
+        module: 'Helpdesk'
+      });
+    } catch (_) {}
+  }
+
+  // Notify raiser on reply
+  if (admin_response && admin_response !== ticket.admin_response && ticket.user_id && ticket.user_id !== req.user.id) {
+    try {
+      const { createNotification } = require('../services/notificationService');
+      createNotification({
+        userId: ticket.user_id,
+        type: 'ticket',
+        title: `💬 New Reply on Ticket ${ticket.ticket_no}`,
+        body: `${req.user.name || 'Admin'}: ${admin_response.slice(0, 140)}`,
+        referenceType: 'ticket',
+        referenceId: ticket.id,
+        actionUrl: `/help-tickets?ticket=${ticket.id}`,
+        priority: 'normal',
+        dedupeKey: `ticket_reply_${ticket.id}_${Date.now()}`,
+        module: 'Helpdesk'
+      });
+    } catch (_) {}
+  }
+
   res.json({ message: 'Updated' });
 });
 
@@ -395,14 +465,20 @@ router.post('/:id/submit-proof', (req, res) => {
        reject_reason = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   ).run(proof_url, proof_notes || null, req.user.id, req.params.id);
-  // Nudge the raiser that proof is awaiting their approval.
+  // Nudge the raiser that proof is awaiting their approval via Central Notification Engine
   try {
-    const { notify } = require('../lib/push');
-    if (ticket.user_id) notify(ticket.user_id, {
+    const { createNotification } = require('../services/notificationService');
+    if (ticket.user_id) createNotification({
+      userId: ticket.user_id,
+      type: 'ticket',
       title: `✅ Proof submitted — ${ticket.ticket_no}`,
-      body: ticket.subject,
-      url: '/help-tickets',
-      tag: `ticket-${ticket.id}`,
+      body: `${req.user.name || 'Assignee'} submitted proof for: ${ticket.subject}`,
+      referenceType: 'ticket',
+      referenceId: ticket.id,
+      actionUrl: `/help-tickets?ticket=${ticket.id}`,
+      priority: 'high',
+      dedupeKey: `ticket_proof_${ticket.id}_${Date.now()}`,
+      module: 'Helpdesk'
     });
   } catch {}
   res.json({ message: 'Proof submitted, awaiting approval' });
@@ -432,12 +508,18 @@ router.post('/:id/approve', (req, res) => {
     director_email: stDirector(),
   });
   try {
-    const { notify } = require('../lib/push');
-    if (ticket.assigned_to) notify(ticket.assigned_to, {
+    const { createNotification } = require('../services/notificationService');
+    if (ticket.assigned_to) createNotification({
+      userId: ticket.assigned_to,
+      type: 'ticket',
       title: `✔️ Proof approved — ${ticket.ticket_no}`,
-      body: ticket.subject,
-      url: '/help-tickets',
-      tag: `ticket-${ticket.id}`,
+      body: `${req.user.name || 'Raiser'} approved ticket: ${ticket.subject}`,
+      referenceType: 'ticket',
+      referenceId: ticket.id,
+      actionUrl: `/help-tickets?ticket=${ticket.id}`,
+      priority: 'normal',
+      dedupeKey: `ticket_approved_${ticket.id}`,
+      module: 'Helpdesk'
     });
   } catch {}
   res.json({ message: 'Proof approved, ticket resolved' });
@@ -460,12 +542,18 @@ router.post('/:id/reject', (req, res) => {
     `UPDATE support_tickets SET status = 'rejected', reject_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
   ).run(reason.trim(), req.params.id);
   try {
-    const { notify } = require('../lib/push');
-    if (ticket.assigned_to) notify(ticket.assigned_to, {
+    const { createNotification } = require('../services/notificationService');
+    if (ticket.assigned_to) createNotification({
+      userId: ticket.assigned_to,
+      type: 'ticket',
       title: `❌ Proof rejected — ${ticket.ticket_no}`,
-      body: reason.trim().slice(0, 120),
-      url: '/help-tickets',
-      tag: `ticket-${ticket.id}`,
+      body: `Rejected: ${reason.trim().slice(0, 120)}`,
+      referenceType: 'ticket',
+      referenceId: ticket.id,
+      actionUrl: `/help-tickets?ticket=${ticket.id}`,
+      priority: 'high',
+      dedupeKey: `ticket_rejected_${ticket.id}_${Date.now()}`,
+      module: 'Helpdesk'
     });
   } catch {}
   res.json({ message: 'Proof rejected, assignee notified' });

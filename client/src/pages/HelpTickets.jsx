@@ -194,6 +194,10 @@ export default function HelpTickets() {
   // Priority filter
   const [priorityFilter, setPriorityFilter] = useState('');
 
+  // User filters (for admins and users with See-All access)
+  const [raisedByFilter, setRaisedByFilter] = useState('');
+  const [assignedToFilter, setAssignedToFilter] = useState('');
+
   // Status multi-select filter
   const [statusFilter, setStatusFilter] = useState([]);
 
@@ -252,6 +256,60 @@ export default function HelpTickets() {
   if (editModal?.assigned_to && !employees.some(e => e.id === editModal.assigned_to)) {
     assigneeOptions.push({ id: editModal.assigned_to, label: `${editModal.assigned_to_name || 'Current assignee'} (inactive)` });
   }
+
+  // Dynamic user ticket counts for the filter dropdowns (based on current scope tickets)
+  const userCounts = useMemo(() => {
+    const raisers = new Map();
+    const assignees = new Map();
+    let unassigned = 0;
+
+    tickets.forEach(t => {
+      if (t.user_id) {
+        raisers.set(t.user_id, (raisers.get(t.user_id) || 0) + 1);
+      }
+      if (t.assigned_to) {
+        assignees.set(t.assigned_to, (assignees.get(t.assigned_to) || 0) + 1);
+      } else {
+        unassigned++;
+      }
+    });
+
+    return { raisers, assignees, unassigned };
+  }, [tickets]);
+
+  // Raiser options: sort by ticket count descending, then alphabetically by name
+  const raiserOptions = useMemo(() => {
+    const userMap = new Map();
+    employees.forEach(e => userMap.set(e.id, e.name));
+    tickets.forEach(t => {
+      if (t.user_id && !userMap.has(t.user_id)) {
+        userMap.set(t.user_id, t.user_name || `User #${t.user_id}`);
+      }
+    });
+
+    return Array.from(userMap.entries()).map(([id, name]) => ({
+      id,
+      name,
+      count: userCounts.raisers.get(id) || 0,
+    })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [employees, tickets, userCounts.raisers]);
+
+  // Assignee filter options: sort by ticket count descending, then alphabetically by name
+  const assigneeFilterOptions = useMemo(() => {
+    const userMap = new Map();
+    employees.forEach(e => userMap.set(e.id, e.name));
+    tickets.forEach(t => {
+      if (t.assigned_to && !userMap.has(t.assigned_to)) {
+        userMap.set(t.assigned_to, t.assigned_to_name || `User #${t.assigned_to}`);
+      }
+    });
+
+    return Array.from(userMap.entries()).map(([id, name]) => ({
+      id,
+      name,
+      count: userCounts.assignees.get(id) || 0,
+    })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [employees, tickets, userCounts.assignees]);
 
   const openView = (t) => {
     setViewModal(t);
@@ -424,6 +482,14 @@ export default function HelpTickets() {
     e.preventDefault();
     if (savingTicket) return;
     if (editModal) {
+      if (!form.deadline_date) {
+        toast.error('Deadline date is required');
+        return;
+      }
+      if (canFollowAll && !form.assigned_to) {
+        toast.error('Assignee is required');
+        return;
+      }
       setSavingTicket(true);
       const payload = {
         subject: form.subject,
@@ -444,6 +510,23 @@ export default function HelpTickets() {
       } finally {
         setSavingTicket(false);
       }
+      return;
+    }
+
+    if (!form.subject?.trim()) {
+      toast.error('Subject is required');
+      return;
+    }
+    if (!form.description?.trim()) {
+      toast.error('Description is required');
+      return;
+    }
+    if (!form.deadline_date) {
+      toast.error('Deadline date is required');
+      return;
+    }
+    if (!form.assigned_to) {
+      toast.error('Please select an assignee (Assign To is required)');
       return;
     }
 
@@ -556,6 +639,18 @@ export default function HelpTickets() {
       // Priority filter:
       if (priorityFilter && t.priority !== priorityFilter) return false;
 
+      // Raised by user filter:
+      if (raisedByFilter && String(t.user_id) !== String(raisedByFilter)) return false;
+
+      // Assigned to user filter:
+      if (assignedToFilter) {
+        if (assignedToFilter === 'unassigned') {
+          if (t.assigned_to) return false;
+        } else if (String(t.assigned_to) !== String(assignedToFilter)) {
+          return false;
+        }
+      }
+
       // Single omni-search:
       if (search.trim()) {
         const q = search.toLowerCase();
@@ -571,7 +666,7 @@ export default function HelpTickets() {
 
       return true;
     });
-  }, [tickets, quickFilter, workflowTab, priorityFilter, search]);
+  }, [tickets, quickFilter, workflowTab, priorityFilter, search, raisedByFilter, assignedToFilter]);
 
   // Group tickets into Kanban columns
   const kanbanGrouped = useMemo(() => {
@@ -586,7 +681,7 @@ export default function HelpTickets() {
   }, [filtered]);
 
   // Pagination for List view
-  const pager = usePagination(filtered, { resetKey: [scope, statusFilter, quickFilter, workflowTab, priorityFilter, search] });
+  const pager = usePagination(filtered, { resetKey: [scope, statusFilter, quickFilter, workflowTab, priorityFilter, search, raisedByFilter, assignedToFilter] });
 
   return (
     <div className="space-y-4">
@@ -764,6 +859,43 @@ export default function HelpTickets() {
             <option value="low">⚪ Low</option>
           </select>
 
+          {/* Raised By User Filter (for users with All tickets access) */}
+          {canFollowAll && (
+            <select
+              className={`select text-xs py-1.5 min-w-[140px] max-w-[200px] ${raisedByFilter ? 'border-red-500 font-semibold text-red-700 bg-red-50/50' : ''}`}
+              value={raisedByFilter}
+              onChange={e => setRaisedByFilter(e.target.value)}
+              title="Filter by user who raised the ticket"
+            >
+              <option value="">Raised By: All</option>
+              {raiserOptions.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.name} {u.count > 0 ? `(${u.count})` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Assigned To User Filter (for users with All tickets access) */}
+          {canFollowAll && (
+            <select
+              className={`select text-xs py-1.5 min-w-[140px] max-w-[200px] ${assignedToFilter ? 'border-blue-500 font-semibold text-blue-700 bg-blue-50/50' : ''}`}
+              value={assignedToFilter}
+              onChange={e => setAssignedToFilter(e.target.value)}
+              title="Filter by assigned user"
+            >
+              <option value="">Assigned To: All</option>
+              {userCounts.unassigned > 0 && (
+                <option value="unassigned">⚠️ Unassigned ({userCounts.unassigned})</option>
+              )}
+              {assigneeFilterOptions.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.name} {u.count > 0 ? `(${u.count})` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+
           {/* Status Multi-Select */}
           <div className="w-[200px]">
             <StatusMultiSelect
@@ -781,7 +913,7 @@ export default function HelpTickets() {
             />
           </div>
 
-          {(quickFilter !== 'all' || priorityFilter || statusFilter.length > 0 || search || workflowTab !== 'active') && (
+          {(quickFilter !== 'all' || priorityFilter || statusFilter.length > 0 || search || workflowTab !== 'active' || raisedByFilter || assignedToFilter) && (
             <button
               onClick={() => {
                 setQuickFilter('all');
@@ -789,6 +921,8 @@ export default function HelpTickets() {
                 setStatusFilter([]);
                 setSearch('');
                 setWorkflowTab('active');
+                setRaisedByFilter('');
+                setAssignedToFilter('');
               }}
               className="btn btn-secondary text-xs py-1.5 px-2 flex items-center gap-1 text-gray-600"
               title="Reset all filters"
@@ -797,6 +931,28 @@ export default function HelpTickets() {
             </button>
           )}
         </div>
+
+        {/* Active User Filter Badge Indicator */}
+        {(raisedByFilter || assignedToFilter) && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t text-xs">
+            <span className="text-gray-500 font-medium">Filtered by:</span>
+            {raisedByFilter && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-800 font-medium">
+                Raised by: {raiserOptions.find(u => String(u.id) === String(raisedByFilter))?.name || raisedByFilter}
+                <button type="button" onClick={() => setRaisedByFilter('')} className="hover:text-red-950 font-bold ml-1">✕</button>
+              </span>
+            )}
+            {assignedToFilter && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-medium">
+                Assigned to: {assignedToFilter === 'unassigned' ? 'Unassigned' : (assigneeFilterOptions.find(u => String(u.id) === String(assignedToFilter))?.name || assignedToFilter)}
+                <button type="button" onClick={() => setAssignedToFilter('')} className="hover:text-blue-950 font-bold ml-1">✕</button>
+              </span>
+            )}
+            <span className="text-gray-500 font-semibold">
+              ({filtered.length} ticket{filtered.length === 1 ? '' : 's'} found)
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Main View: Kanban Board or List View */}
@@ -1118,12 +1274,13 @@ export default function HelpTickets() {
 
             <div className="sm:col-span-2">
               <label className="label" htmlFor="ticket-deadline">
-                Deadline <span className="text-gray-400 font-normal text-[10px]">(optional target date)</span>
+                Deadline *
               </label>
               <input
                 id="ticket-deadline"
                 type="date"
                 className="input"
+                required
                 value={form.deadline_date}
                 onChange={e => setForm({ ...form, deadline_date: e.target.value })}
               />
@@ -1141,7 +1298,7 @@ export default function HelpTickets() {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="label">Assign To (optional)</label>
+              <label className="label">Assign To *</label>
               {editModal && !canFollowAll ? (
                 <p className="input text-sm text-gray-500">{editModal.assigned_to_name || 'Unassigned'}</p>
               ) : (
@@ -1150,7 +1307,7 @@ export default function HelpTickets() {
                   value={form.assigned_to || null}
                   valueKey="id"
                   displayKey="label"
-                  placeholder="Pick someone or leave blank for admin to triage"
+                  placeholder="Select an assignee *"
                   onChange={(emp) => setForm(f => ({ ...f, assigned_to: emp?.id || '' }))}
                 />
               )}

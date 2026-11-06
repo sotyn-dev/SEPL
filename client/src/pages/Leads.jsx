@@ -483,6 +483,26 @@ export default function Leads() {
     loadBoqs(l.id);
   };
 
+  // Auto-open lead detail modal when deep-linked with ?lead_id= or ?id= (e.g. from Scorecard drill-down)
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const targetLeadId = p.get('lead_id') || p.get('id');
+    if (!targetLeadId) return;
+    api.get(`/sales-funnel/${targetLeadId}`)
+      .then(res => {
+        if (res.data) {
+          viewLead(res.data);
+          const stg = res.data.current_stage;
+          if (stg && stg !== 'lost') {
+            goTab('list', stg);
+          } else {
+            goTab('list', 'all');
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const emailMom = async (id, payload) => {
     setEmailingMom(true);
     try {

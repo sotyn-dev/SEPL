@@ -165,34 +165,125 @@ const MODULE_DEFS = {
     },
   },
 
-  // ── Sales Funnel (7-stage, explicit per-stage date columns) ─────────────
+  // ── Sales Funnel (11-stage spec: Stage 1 to Stage 11) ─────────────────────
   sales_funnel: {
     label: 'Sales Funnel',
     steps: [
-      { key: 'qualified', label: 'Qualified' },
-      { key: 'meeting', label: 'Meeting' },
-      { key: 'mom', label: 'MOM' },
-      { key: 'drawing', label: 'Drawing' },
-      { key: 'boq', label: 'BOQ' },
-      { key: 'quotation', label: 'Quotation' },
-      { key: 'result', label: 'Result (Win/Loss)' },
+      { key: 'lead_capture', label: 'Stage 1 — Lead/Tender Capture', default_sla: 1 },
+      { key: 'qualification', label: 'Stage 2 — Qualified or Not', default_sla: 1 },
+      { key: 'site_survey', label: 'Stage 3 — Site Survey + Feasibility', default_sla: 24 },
+      { key: 'concept_design', label: 'Stage 4 — Concept Design / Drawings', default_sla: 48 },
+      { key: 'boq_internal_costing', label: 'Stage 5 — BOQ + Internal Costing', default_sla: 24 },
+      { key: 'boq_costing', label: 'Stage 6 — BOQ + Vendor Costing', default_sla: 48 },
+      { key: 'pricing_review', label: 'Stage 7 — Internal Pricing Review', default_sla: 24 },
+      { key: 'quote_submitted', label: 'Stage 8 — Quote / Bid Submission', default_sla: 24 },
+      { key: 'technical_clarification', label: 'Stage 9 — Technical Clarification', default_sla: 24 },
+      { key: 'commercial_negotiation', label: 'Stage 10 — Commercial Negotiation', default_sla: 48 },
+      { key: 'contract_signed', label: 'Stage 11 — Contract + LOI / PO', default_sla: 48 },
     ],
     rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
-      return safeAll(db, `
+      const order = steps.map(s => s.key);
+      const stageIdx = {};
+      order.forEach((k, idx) => { stageIdx[k] = idx; });
+      stageIdx['project_kickoff'] = 11;
+      stageIdx['won'] = 11;
+
+      const leads = safeAll(db, `
         SELECT id, lead_no, client_name, created_at, created_by, current_stage,
                qualified_date, meeting_date, mom_date, drawing_date, boq_date,
-               quotation_sent_date, result_date
-          FROM sales_funnel ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
-        const stamps = {
-          qualified: r.qualified_date || null, meeting: r.meeting_date || null,
-          mom: r.mom_date || null, drawing: r.drawing_date || null, boq: r.boq_date || null,
-          quotation: r.quotation_sent_date || null, result: r.result_date || null,
+               quotation_sent_date, result_date, stage_entered_at, updated_at,
+               result, lost_from_stage, dropped
+          FROM sales_funnel ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
+
+      const ids = leads.map(l => l.id);
+      const entry = {};
+      if (ids.length) {
+        for (let i = 0; i < ids.length; i += 900) {
+          const chunk = ids.slice(i, i + 900);
+          const ph = chunk.map(() => '?').join(',');
+          for (const e of safeAll(db, `
+            SELECT lead_id, stage, MIN(at) as at
+              FROM sales_funnel_audit
+             WHERE stage IS NOT NULL AND lead_id IN (${ph})
+             GROUP BY lead_id, stage`, ...chunk)) {
+            let sk = e.stage;
+            if (sk === 'mom_uploaded') sk = 'concept_design';
+            if (sk === 'boq_vendor_costing') sk = 'boq_costing';
+            if (sk === 'meeting') sk = 'site_survey';
+            if (sk === 'quotation') sk = 'quote_submitted';
+            if (sk === 'drawing') sk = 'concept_design';
+            if (sk === 'boq') sk = 'boq_costing';
+            if (sk === 'result') sk = 'contract_signed';
+            (entry[e.lead_id] = entry[e.lead_id] || {})[sk] = e.at;
+          }
+        }
+      }
+
+      const normStage = (s) => {
+        if (!s) return 'lead_capture';
+        if (s === 'new_lead') return 'lead_capture';
+        if (s === 'qualified') return 'qualification';
+        if (s === 'meeting' || s === 'meeting_assigned' || s === 'mom_uploaded') return 'site_survey';
+        if (s === 'drawing' || s === 'drawing_uploaded') return 'concept_design';
+        if (s === 'boq' || s === 'boq_created' || s === 'boq_vendor_costing') return 'boq_costing';
+        if (s === 'quotation' || s === 'quotation_sent') return 'quote_submitted';
+        if (s === 'won' || s === 'result') return 'contract_signed';
+        return s;
+      };
+
+      return leads.map(r => {
+        const en = entry[r.id] || {};
+        const curStage = normStage(r.current_stage);
+        const curIdx = stageIdx[curStage] !== undefined ? stageIdx[curStage] : 0;
+        const isLost = r.current_stage === 'lost' || r.dropped === 1 || r.result === 'lost';
+        const isClosed = isLost || curStage === 'project_kickoff';
+
+        const colDate = {
+          lead_capture: r.created_at,
+          qualification: r.qualified_date || en.qualification,
+          site_survey: r.meeting_date || r.mom_date || en.site_survey,
+          concept_design: r.drawing_date || en.concept_design,
+          boq_costing: r.boq_date || en.boq_costing,
+          quote_submitted: r.quotation_sent_date || en.quote_submitted,
+          contract_signed: (r.result === 'won' ? (r.result_date || r.updated_at) : en.contract_signed),
         };
+
+        const getEntryTime = (k, idx) => {
+          if (idx === 0) return r.created_at;
+          return en[k] || colDate[k] || null;
+        };
+
+        const stamps = {};
+        order.forEach((k, idx) => {
+          if (idx < curIdx) {
+            let compTime = null;
+            for (let nextIdx = idx + 1; nextIdx <= curIdx; nextIdx++) {
+              const nextKey = order[nextIdx] || 'project_kickoff';
+              compTime = getEntryTime(nextKey, nextIdx);
+              if (compTime) break;
+            }
+            stamps[k] = compTime || r.stage_entered_at || r.updated_at || r.created_at;
+          } else if (idx === curIdx && isClosed && !isLost) {
+            stamps[k] = r.result_date || r.stage_entered_at || r.updated_at || null;
+          } else {
+            stamps[k] = null;
+          }
+        });
+
+        let currentKey = null;
+        if (!isClosed) {
+          currentKey = (order.includes(curStage) ? curStage : firstOpen(steps, stamps));
+        }
+
         return {
-          id: r.id, title: r.lead_no || ('Lead #' + r.id), subtitle: r.client_name || '—',
-          created_at: r.created_at, owner_id: r.created_by || null, stamps,
-          current_key: r.current_stage === 'lost' ? null : firstOpen(steps, stamps),
+          id: r.id,
+          title: r.lead_no || ('Lead #' + r.id),
+          subtitle: r.client_name || '—',
+          created_at: r.created_at,
+          owner_id: r.created_by || null,
+          stamps,
+          current_key: currentKey,
         };
       });
     },
@@ -909,7 +1000,7 @@ function raciModuleWeekBreakdown(db, moduleKey, sinceDate, untilDate) {
 
 function getModuleLink(key, id) {
   switch (key) {
-    case 'sales_funnel': return '/sales-funnel';
+    case 'sales_funnel': return id ? `/leads?lead_id=${id}` : '/leads';
     case 'indent_to_dispatch': return '/procurement?tab=indents';
     case 'crm_funnel': return '/crm';
     case 'solar_funnel': return '/solar';

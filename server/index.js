@@ -598,6 +598,7 @@ app.use('/api/labour-master', require('./routes/labourMaster'));
 app.use('/api/bill-verification', require('./routes/billVerification'));
 app.use('/api/company-assets', require('./routes/companyAssets'));
 app.use('/api/push', require('./routes/push'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 // Initialise VAPID keys on boot (auto-generates on first run, then
 // persists in app_settings so PM2 restarts keep the same keys).

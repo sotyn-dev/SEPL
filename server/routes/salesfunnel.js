@@ -36,11 +36,16 @@ const STAGES = [
 const LEGACY_STAGE_MAP = {
   new_lead: 'lead_capture',
   qualified: 'qualification',
+  meeting: 'site_survey',
   meeting_assigned: 'site_survey',
+  drawing: 'concept_design',
   drawing_uploaded: 'concept_design',
+  boq: 'boq_costing',
   boq_created: 'boq_costing',
   boq_vendor_costing: 'boq_costing',
+  quotation: 'quote_submitted',
   quotation_sent: 'quote_submitted',
+  result: 'contract_signed',
   won: 'contract_signed',
 };
 const normalizeStage = (s) => LEGACY_STAGE_MAP[s] || s;

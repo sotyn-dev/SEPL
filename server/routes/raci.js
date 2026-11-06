@@ -148,6 +148,11 @@ router.put('/record/:module/:recordId', (req, res) => {
       up.run(req.params.module, +req.params.recordId, String(r.step_key),
         id(r.responsible_id), id(r.accountable_id), id(r.consulted_id), id(r.informed_id), sla(r.sla_hours), wt(r.weight), txt(r.commitment), en(r.enabled));
     }
+    // If setting whole-module default (record_id = 0), remove any incomplete per-record
+    // overrides so all active records follow the updated module defaults without phantom conflicts
+    if (+req.params.recordId === 0) {
+      db.prepare("DELETE FROM raci_assignment WHERE module=? AND record_id > 0 AND done_at IS NULL").run(req.params.module);
+    }
   });
   tx();
 

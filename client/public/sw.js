@@ -79,7 +79,20 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || '/';
+  const notifData = event.notification.data || {};
+  const targetUrl = notifData.url || '/';
+  const notificationId = notifData.notificationId;
+
+  // Best-effort server read mark
+  if (notificationId) {
+    try {
+      fetch(`/api/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        credentials: 'include'
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       // Focus an already-open ERP tab if one exists
@@ -87,7 +100,7 @@ self.addEventListener('notificationclick', (event) => {
         try {
           const u = new URL(client.url);
           if (u.origin === self.location.origin) {
-            return client.focus().then(() => client.postMessage({ type: 'navigate', url: targetUrl }));
+            return client.focus().then(() => client.postMessage({ type: 'navigate', url: targetUrl, notificationId }));
           }
         } catch {}
       }

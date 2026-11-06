@@ -59,6 +59,10 @@ export default function HelpTicket() {
   // /support route already accepts attachment_link, no API change needed.
   const submit = async (e) => {
     e.preventDefault();
+    if (!form.subject?.trim()) return toast.error('Subject is required');
+    if (!form.description?.trim()) return toast.error('Description is required');
+    if (!form.deadline_date) return toast.error('Deadline date is required');
+    if (!form.assigned_to) return toast.error('Please select an assignee');
     let payload = { ...form };
     delete payload._file;
     if (form._file) {
@@ -223,19 +227,20 @@ export default function HelpTicket() {
             <div><label className="label">Priority</label><select className="select" value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>
             <div className="col-span-2"><label className="label">Which Module?</label><input className="input" value={form.module} onChange={e => setForm({...form, module: e.target.value})} placeholder="e.g. Payment Required, DPR, Attendance..." /></div>
             <div className="col-span-2">
-              <label className="label">Assign To <span className="text-gray-400 font-normal">(optional — employee sees it on their dashboard)</span></label>
+              <label className="label">Assign To *</label>
               <SearchableSelect
                 options={employees.map(u => ({ ...u, label: `${u.name}${u.username ? ' (@' + u.username + ')' : ''}${u.department ? ' — ' + u.department : ''}` }))}
                 value={form.assigned_to || null}
                 valueKey="id" displayKey="label"
-                placeholder="— Unassigned — type to search by name"
+                placeholder="Select an assignee *"
                 onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
               />
             </div>
             <div className="col-span-2">
-              <label className="label">Deadline Date <span className="text-gray-400 font-normal text-[10px]">(optional — target completion date)</span></label>
+              <label className="label">Deadline Date *</label>
               <input
                 type="date"
+                required
                 className="input"
                 value={form.deadline_date || ''}
                 onChange={e => setForm({ ...form, deadline_date: e.target.value })}

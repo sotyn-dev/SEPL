@@ -118,6 +118,9 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type === 'navigate' && e.data.url) {
       try {
+        if (e.data.notificationId) {
+          api.put(`/notifications/${e.data.notificationId}/read`).catch(() => {});
+        }
         const target = new URL(e.data.url, window.location.origin);
         // A call belongs above the current page. Reloading to the chat URL
         // destroys every unsaved form when the user taps the notification.
