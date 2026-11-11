@@ -200,6 +200,24 @@ test('an ordinary website lead is unchanged by all this', () => withServer(async
   assert.doesNotMatch(row.remarks, /Energy Desk/);
 }));
 
+test('negative and malformed values never become valid positive report inputs', () => withServer(async ({ call }) => {
+  for (const value of ['-30000', '-3 lakh', '30.00.1', 'about 30000', '10-20', '1e5']) {
+    const leadRef = ref();
+    const res = await call('/api/public/energy-desk/reports', { method: 'POST', json: { lead_ref: leadRef, inputs: factory({ monthlyKwh: value }) } });
+    assert.equal(res.status, 422, value);
+    assert.equal(reportRows(leadRef).length, 0);
+  }
+}));
+
+test('human-readable Indian currency and grouping remain supported', () => withServer(async ({ call }) => {
+  const leadRef = ref();
+  const res = await call('/api/public/energy-desk/reports', { method: 'POST', json: { lead_ref: leadRef, inputs: factory({ monthlyKwh: '30,000', monthlyBillInr: '₹3 lakh' }) } });
+  assert.equal(res.status, 201);
+  const saved = JSON.parse(reportRows(leadRef)[0].confirmed_json);
+  assert.equal(saved.monthlyKwh, 30000);
+  assert.equal(saved.monthlyBillInr, 300000);
+}));
+
 // ── POST /fallback — no JavaScript ────────────────────────────────────────
 const nojs = (over = {}) => ({
   form_id: 'lead.solar.bill-report.nojs', name: 'No Script', phone: '9876543210', email: '', company: 'Plain Form Ltd',
