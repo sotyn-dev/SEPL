@@ -62,7 +62,7 @@ const str = (v, max) => String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').tr
 function num(v) {
   const s = String(v ?? '').trim().toLowerCase().replace(/,/g, '');
   if (!s) return null;
-  const match = s.match(/^(?:₹|rs\.?|inr)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(lakh|lakhs|lac|lacs|crore|crores|cr)?$/);
+  const match = s.match(/^(?:₹|rs\.?|inr)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(lakh|lakhs|lac|lacs|crore|crores|cr)?(?:\s*(?:kwh|kw|kva|sq\.?\s*ft|sqft|%))?$/);
   if (!match) return NaN;
   const multiplier = /^(lakh|lac)/.test(match[2] || '') ? 1e5 : /^(crore|cr)/.test(match[2] || '') ? 1e7 : 1;
   const n = Number(match[1]) * multiplier;
