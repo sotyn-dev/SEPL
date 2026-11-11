@@ -60,11 +60,13 @@ const formDay = rateLimit({ windowMs: 24 * 3600 * 1000, max: 40, keyFn: ipKey })
 const CATEGORIES = new Set(['industrial', 'commercial', 'domestic', 'other']);
 const str = (v, max) => String(v == null ? '' : v).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 function num(v) {
-  if (v === '' || v === null || v === undefined) return null;
-  const s = String(v).toLowerCase();
-  const mult = /lakh|lac/.test(s) ? 1e5 : /crore|\bcr\b/.test(s) ? 1e7 : 1;
-  const n = parseFloat(s.replace(/[^0-9.]/g, ''));
-  return Number.isFinite(n) ? n * mult : NaN;
+  const s = String(v ?? '').trim().toLowerCase().replace(/,/g, '');
+  if (!s) return null;
+  const match = s.match(/^(?:₹|rs\.?|inr)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(lakh|lakhs|lac|lacs|crore|crores|cr)?(?:\s*(?:kwh|kw|kva|sq\.?\s*ft|sqft|%))?$/);
+  if (!match) return NaN;
+  const multiplier = /^(lakh|lac)/.test(match[2] || '') ? 1e5 : /^(crore|cr)/.test(match[2] || '') ? 1e7 : 1;
+  const n = Number(match[1]) * multiplier;
+  return Number.isFinite(n) ? n : NaN;
 }
 
 function cleanInputs(raw) {
