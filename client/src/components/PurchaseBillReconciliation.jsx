@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../api';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
-import { FiCheckSquare, FiSquare, FiLayers, FiAlertCircle, FiInfo } from 'react-icons/fi';
+import { FiCheckSquare, FiSquare, FiLayers, FiAlertCircle, FiInfo, FiPercent } from 'react-icons/fi';
 
 const round = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -20,6 +20,7 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [key] = useState(() => crypto.randomUUID());
+  const [totalGstPercent, setTotalGstPercent] = useState('18');
 
   useEffect(() => {
     let active = true;
@@ -28,10 +29,16 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
       api.get('/procurement/purchase-bills/eligible', { params: { vendor_id: vendor, reconcile_bill_id: legacy?.id } })
         .then(r => {
           if (active) {
-            setData(r.data || { pos: [], debits: [] });
-            // If an initialPo was provided, ensure it remains checked
+            const fetchedData = r.data || { pos: [], debits: [] };
+            setData(fetchedData);
             if (initialPo) {
               setSelected(prev => Array.from(new Set([...prev, +initialPo])));
+            }
+            if (legacy && legacy.amount > 0) {
+              setTotalGstPercent(String(round((legacy.gst_amount / legacy.amount) * 100)));
+            } else if (fetchedData.pos?.length > 0) {
+              const firstGst = fetchedData.pos.find(p => p.gst_pct != null)?.gst_pct;
+              if (firstGst != null) setTotalGstPercent(String(firstGst));
             }
           }
         })
@@ -51,18 +58,15 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
   const rows = data.pos.filter(p => selected.includes(p.id)).flatMap(p => p.items.map(it => ({ ...it, po: p })));
   const value = (it) => ({
     quantity: edits[it.id]?.quantity ?? it.billable_qty,
-    bill_rate: edits[it.id]?.bill_rate ?? it.po_rate,
-    gst_percent: edits[it.id]?.gst_percent ?? 0
+    bill_rate: edits[it.id]?.bill_rate ?? it.po_rate
   });
-  const amounts = (it) => {
-    const v = value(it);
-    const amount = round((+v.quantity || 0) * (+v.bill_rate || 0));
-    const gst = round(amount * (+v.gst_percent || 0) / 100);
-    return { amount, gst, total: round(amount + gst) };
-  };
+  const lineBasic = (it) => round((+value(it).quantity || 0) * (+value(it).bill_rate || 0));
 
-  const subtotal = round(rows.reduce((s, it) => s + amounts(it).amount, 0));
-  const gst = round(rows.reduce((s, it) => s + amounts(it).gst, 0));
+  // Total Basic Amount across all selected PO lines
+  const subtotal = round(rows.reduce((s, it) => s + lineBasic(it), 0));
+  // GST calculated directly on the Total Basic Amount
+  const gst = round(subtotal * (+totalGstPercent || 0) / 100);
+  // Total Invoice Amount = Basic + GST on Total + Freight
   const total = round(subtotal + gst + (+freight || 0));
   const allowedDebits = data.debits.filter(d => selected.includes(d.vendor_po_id));
   const adjustment = round(allowedDebits.filter(d => debits.includes(d.id)).reduce((s, d) => s + d.amount, 0));
@@ -107,7 +111,9 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
       body.append('items', JSON.stringify(billableRows.map(it => ({
         vendor_po_id: it.po.id,
         vendor_po_item_id: it.id,
-        ...value(it)
+        quantity: value(it).quantity,
+        bill_rate: value(it).bill_rate,
+        gst_percent: +totalGstPercent || 0
       }))));
       body.append('debit_ids', JSON.stringify(allowedDebits.filter(d => debits.includes(d.id)).map(d => d.id)));
       if (file) body.append('file', file);
@@ -322,7 +328,7 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
                 <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
                   {rows.map(it => {
                     const v = value(it);
-                    const a = amounts(it);
+                    const basic = lineBasic(it);
                     const variance = round((+v.bill_rate || 0) - it.po_rate);
                     return (
                       <div
@@ -350,7 +356,7 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
                           <div>Max Billable: <b className="text-emerald-700">{it.billable_qty}</b></div>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5 text-xs">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 text-xs items-center">
                           <label>
                             <span className="text-gray-600 font-medium">Bill Qty *</span>
                             <input
@@ -388,21 +394,6 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
                             />
                           </label>
 
-                          <label>
-                            <span className="text-gray-600 font-medium">GST % *</span>
-                            <input
-                              aria-label={`GST ${it.po.po_number} ${it.description}`}
-                              className="input mt-1 w-full text-xs font-bold"
-                              required
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="any"
-                              value={v.gst_percent}
-                              onChange={e => edit(it.id, 'gst_percent', e.target.value)}
-                            />
-                          </label>
-
                           <div>
                             <span className="text-gray-500 font-medium">Rate Diff</span>
                             <div className={`mt-2 font-bold ${variance ? 'text-amber-700' : 'text-gray-400'}`}>
@@ -411,11 +402,10 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
                           </div>
 
                           <div className="text-right">
-                            <span className="text-gray-500 font-medium">Line Total</span>
-                            <div className="font-extrabold text-gray-900 mt-1">
-                              ₹{a.total.toLocaleString('en-IN')}
+                            <span className="text-gray-500 font-medium">Line Basic</span>
+                            <div className="font-extrabold text-sm text-gray-900 mt-1">
+                              ₹{basic.toLocaleString('en-IN')}
                             </div>
-                            <div className="text-[10px] text-gray-400">GST: ₹{a.gst.toLocaleString('en-IN')}</div>
                           </div>
                         </div>
                       </div>
@@ -450,28 +440,111 @@ export default function PurchaseBillReconciliation({ vendors, initialVendor, ini
               </fieldset>
             )}
 
-            {/* Financial Totals Ribbon */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 p-3 text-xs">
-              <div>
-                <span className="text-blue-800 font-medium">Taxable Subtotal</span>
-                <div className="font-bold text-sm text-blue-950 mt-0.5">₹{subtotal.toLocaleString('en-IN')}</div>
+            {/* Financial Totals Ribbon — GST on Total Basic Amount of All Selected POs */}
+            <div className="rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 p-4 text-xs shadow-xs space-y-3">
+              <div className="flex items-center justify-between border-b border-blue-200/80 pb-2">
+                <span className="font-bold text-xs text-blue-950 uppercase tracking-wide flex items-center gap-1.5">
+                  <FiPercent className="text-blue-600" />
+                  <span>Financial Totals (Consolidated Across {selected.length} Selected POs)</span>
+                </span>
+                <span className="text-[11px] text-blue-800 font-semibold">
+                  GST is applied directly on the Total Basic Amount
+                </span>
               </div>
-              <div>
-                <span className="text-blue-800 font-medium">GST Tax</span>
-                <div className="font-bold text-sm text-blue-950 mt-0.5">₹{gst.toLocaleString('en-IN')}</div>
-              </div>
-              <div>
-                <span className="text-blue-800 font-medium">Invoice Total</span>
-                <div className="font-black text-sm text-blue-950 mt-0.5">₹{total.toLocaleString('en-IN')}</div>
-              </div>
-              <div>
-                <span className="text-blue-800 font-medium">Debit Adjusted</span>
-                <div className="font-bold text-sm text-amber-800 mt-0.5">- ₹{adjustment.toLocaleString('en-IN')}</div>
-              </div>
-              <div>
-                <span className="text-blue-800 font-medium">Net Payable</span>
-                <div className="font-black text-base text-emerald-700 mt-0.5">
-                  ₹{Math.max(0, total - adjustment).toLocaleString('en-IN')}
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                {/* 1. Total Basic Amount of All Selected POs */}
+                <div className="bg-white p-3 rounded-xl border-2 border-blue-300 shadow-2xs">
+                  <span className="text-blue-900 font-bold text-[11px] block uppercase tracking-wider">
+                    Total Basic Amount
+                  </span>
+                  <div className="font-black text-lg text-blue-950 mt-1">
+                    ₹{subtotal.toLocaleString('en-IN')}
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    Sum of selected PO lines
+                  </span>
+                </div>
+
+                {/* 2. GST on Total Basic (EDITABLE HERE DIRECTLY!) */}
+                <div className="bg-white p-3 rounded-xl border-2 border-indigo-400 shadow-2xs col-span-2 sm:col-span-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-indigo-900 font-bold text-[11px] uppercase tracking-wider">
+                      GST on Total Basic
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="any"
+                        value={totalGstPercent}
+                        onChange={e => setTotalGstPercent(e.target.value)}
+                        className="w-12 text-xs font-black text-indigo-950 border border-indigo-300 rounded px-1 py-0.5 text-center bg-indigo-50/50 outline-none focus:ring-1 focus:ring-indigo-500"
+                        aria-label="GST % on total basic"
+                      />
+                      <span className="font-bold text-indigo-950 text-xs">%</span>
+                    </div>
+                  </div>
+                  <div className="font-black text-lg text-indigo-950 mt-1">
+                    ₹{gst.toLocaleString('en-IN')}
+                  </div>
+                  {/* Quick Rates for Total GST */}
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {[0, 5, 12, 18, 28].map(r => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setTotalGstPercent(String(r))}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-black transition cursor-pointer ${
+                          Number(totalGstPercent) === r
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                        }`}
+                      >
+                        {r}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Invoice Total */}
+                <div className="bg-white p-3 rounded-xl border border-blue-200 shadow-2xs">
+                  <span className="text-blue-900 font-bold text-[11px] block uppercase tracking-wider">
+                    Invoice Total
+                  </span>
+                  <div className="font-black text-lg text-blue-950 mt-1">
+                    ₹{total.toLocaleString('en-IN')}
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    Basic + GST {freight ? `+ ₹${freight} Frt` : ''}
+                  </span>
+                </div>
+
+                {/* 4. Debit Adjusted */}
+                <div className="bg-white p-3 rounded-xl border border-blue-200 shadow-2xs">
+                  <span className="text-amber-800 font-bold text-[11px] block uppercase tracking-wider">
+                    Debit Adjusted
+                  </span>
+                  <div className="font-bold text-lg text-amber-800 mt-1">
+                    - ₹{adjustment.toLocaleString('en-IN')}
+                  </div>
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    Agreed debit notes
+                  </span>
+                </div>
+
+                {/* 5. Net Payable */}
+                <div className="bg-emerald-50/80 p-3 rounded-xl border-2 border-emerald-400 shadow-2xs col-span-2 sm:col-span-1">
+                  <span className="text-emerald-900 font-black text-[11px] block uppercase tracking-wider">
+                    Net Payable
+                  </span>
+                  <div className="font-black text-xl text-emerald-700 mt-0.5">
+                    ₹{Math.max(0, total - adjustment).toLocaleString('en-IN')}
+                  </div>
+                  <span className="text-[10px] text-emerald-800 font-medium">
+                    Final payable balance
+                  </span>
                 </div>
               </div>
             </div>
