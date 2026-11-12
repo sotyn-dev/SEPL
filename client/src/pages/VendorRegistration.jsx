@@ -50,7 +50,10 @@ const DEFAULT_DOCUMENTS = [
 ];
 
 export default function VendorRegistration() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canCreate, canEdit, canDelete } = useAuth();
+  const allowCreate = isAdmin() || canCreate('vendor_registration');
+  const allowEdit = isAdmin() || canEdit('vendor_registration');
+  const allowDelete = isAdmin() || canDelete('vendor_registration');
 
   // State
   const [loading, setLoading] = useState(true);
@@ -424,30 +427,36 @@ export default function VendorRegistration() {
             <span>Refresh</span>
           </button>
 
-          <button
-            onClick={handleScanMailbox}
-            disabled={scanningMailbox}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors disabled:opacity-50 shadow-2xs"
-          >
-            <FiMail className={scanningMailbox ? 'animate-bounce' : ''} size={13} />
-            <span>{scanningMailbox ? 'Scanning...' : 'Scan Inbox'}</span>
-          </button>
+          {allowEdit && (
+            <button
+              onClick={handleScanMailbox}
+              disabled={scanningMailbox}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors disabled:opacity-50 shadow-2xs"
+            >
+              <FiMail className={scanningMailbox ? 'animate-bounce' : ''} size={13} />
+              <span>{scanningMailbox ? 'Scanning...' : 'Scan Inbox'}</span>
+            </button>
+          )}
 
-          <button
-            onClick={openSettings}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 rounded-lg border border-gray-200 transition-colors shadow-2xs"
-          >
-            <FiSettings size={13} />
-            <span>SLA & Config</span>
-          </button>
+          {allowEdit && (
+            <button
+              onClick={openSettings}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 rounded-lg border border-gray-200 transition-colors shadow-2xs"
+            >
+              <FiSettings size={13} />
+              <span>SLA & Config</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors"
-          >
-            <FiPlus size={14} />
-            <span>Add Company Portal</span>
-          </button>
+          {allowCreate && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors"
+            >
+              <FiPlus size={14} />
+              <span>Add Company Portal</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -669,7 +678,7 @@ export default function VendorRegistration() {
                             <span>{item.registration_owner_name || 'Anchal'}</span>
                           </span>
 
-                          {stage.id !== 'credentials_received' && (
+                          {allowEdit && stage.id !== 'credentials_received' && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1235,13 +1244,15 @@ export default function VendorRegistration() {
                         SOTYN is approved with {selectedRecord.company_name}. You can transfer this to the BD & Tendering pipeline.
                       </p>
                     </div>
-                    <button
-                      onClick={handleMarketingHandover}
-                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs transition-colors flex items-center gap-1.5"
-                    >
-                      <FiSend size={13} />
-                      <span>Transfer to BD</span>
-                    </button>
+                    {allowEdit && (
+                      <button
+                        onClick={handleMarketingHandover}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs transition-colors flex items-center gap-1.5"
+                      >
+                        <FiSend size={13} />
+                        <span>Transfer to BD</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1261,9 +1272,9 @@ export default function VendorRegistration() {
                   {(selectedRecord.required_documents || DEFAULT_DOCUMENTS).map(doc => (
                     <div
                       key={doc.id}
-                      onClick={() => handleChecklistToggle(doc.id)}
-                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                        doc.ready ? 'bg-emerald-50/60 border-emerald-300 text-emerald-900' : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-300'
+                      onClick={() => allowEdit && handleChecklistToggle(doc.id)}
+                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${allowEdit ? 'cursor-pointer hover:border-indigo-300' : 'cursor-default'} ${
+                        doc.ready ? 'bg-emerald-50/60 border-emerald-300 text-emerald-900' : 'bg-white border-gray-200 text-gray-700'
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -1286,22 +1297,24 @@ export default function VendorRegistration() {
             {detailTab === 'proof' && (
               <div className="space-y-4 text-xs">
                 {/* Upload Zone */}
-                <div className="p-4 border-2 border-dashed border-gray-300 rounded-xl text-center bg-gray-50/60 hover:bg-gray-50 transition-colors">
-                  <FiUploadCloud className="mx-auto text-gray-400 mb-2" size={32} />
-                  <p className="font-semibold text-gray-800">Upload Submission Screenshot or Acknowledgment PDF</p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">Captures proof of registration, reference numbers, or approval slips.</p>
-                  
-                  <label className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold cursor-pointer transition-colors shadow-2xs">
-                    <span>{uploadingProof ? 'Uploading...' : 'Select File'}</span>
-                    <input
-                      type="file"
-                      accept="image/*,application/pdf"
-                      onChange={handleProofFileUpload}
-                      disabled={uploadingProof}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
+                {allowEdit && (
+                  <div className="p-4 border-2 border-dashed border-gray-300 rounded-xl text-center bg-gray-50/60 hover:bg-gray-50 transition-colors">
+                    <FiUploadCloud className="mx-auto text-gray-400 mb-2" size={32} />
+                    <p className="font-semibold text-gray-800">Upload Submission Screenshot or Acknowledgment PDF</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">Captures proof of registration, reference numbers, or approval slips.</p>
+                    
+                    <label className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold cursor-pointer transition-colors shadow-2xs">
+                      <span>{uploadingProof ? 'Uploading...' : 'Select File'}</span>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={handleProofFileUpload}
+                        disabled={uploadingProof}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                )}
 
                 {/* Uploaded Documents List */}
                 <div className="space-y-2">
@@ -1437,12 +1450,14 @@ export default function VendorRegistration() {
                       )}
                     </div>
 
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition-colors shadow-2xs"
-                    >
-                      Save Credentials in Vault
-                    </button>
+                    {allowEdit && (
+                      <button
+                        type="submit"
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition-colors shadow-2xs"
+                      >
+                        Save Credentials in Vault
+                      </button>
+                    )}
                   </div>
                 </form>
               </div>
@@ -1497,26 +1512,28 @@ export default function VendorRegistration() {
             {detailTab === 'history' && (
               <div className="space-y-3 text-xs">
                 {/* Add Follow-up Quick Action */}
-                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl border border-gray-200">
-                  <input
-                    type="text"
-                    id="quickFollowupNote"
-                    placeholder="Log a call or follow-up note with portal helpdesk..."
-                    className="flex-1 px-3 py-1.5 border rounded-lg bg-white"
-                  />
-                  <button
-                    onClick={() => {
-                      const input = document.getElementById('quickFollowupNote');
-                      if (input && input.value.trim()) {
-                        handleRecordFollowup(input.value.trim());
-                        input.value = '';
-                      }
-                    }}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg"
-                  >
-                    Log Follow-up
-                  </button>
-                </div>
+                {allowEdit && (
+                  <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl border border-gray-200">
+                    <input
+                      type="text"
+                      id="quickFollowupNote"
+                      placeholder="Log a call or follow-up note with portal helpdesk..."
+                      className="flex-1 px-3 py-1.5 border rounded-lg bg-white"
+                    />
+                    <button
+                      onClick={() => {
+                        const input = document.getElementById('quickFollowupNote');
+                        if (input && input.value.trim()) {
+                          handleRecordFollowup(input.value.trim());
+                          input.value = '';
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg"
+                    >
+                      Log Follow-up
+                    </button>
+                  </div>
+                )}
 
                 <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                   {(selectedRecord.history || []).map(hist => (

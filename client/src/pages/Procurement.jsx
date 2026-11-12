@@ -9,6 +9,7 @@ import BalanceDeliveryModal from '../components/BalanceDeliveryModal';
 import PurchaseBillMatching from '../components/PurchaseBillMatching';
 import PurchaseBillReconciliation from '../components/PurchaseBillReconciliation';
 import DispatchDocuments from '../components/DispatchDocuments';
+import LovelySignedBillModal from '../components/LovelySignedBillModal';
 import RentalDispatchModal from '../components/RentalDispatchModal';
 import DeliveryReceivingModal from '../components/DeliveryReceivingModal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -529,6 +530,7 @@ export default function Procurement() {
   // received_qty (editable), short_reason (editable), unit, item_code,
   // master_name, make}.
   const [receiveTarget, setReceiveTarget] = useState(null);
+  const [lovelyBillTarget, setLovelyBillTarget] = useState(null);
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
   // PPE Kit category — inline "item not in the list" quick-add. Creates the
   // item in Item Master (type=PPE_KIT) on the spot and drops it straight
@@ -6320,6 +6322,7 @@ export default function Procurement() {
           }}
           readyRows={readyPg.rows} readyPagination={readyPg} readyLoading={dispReadyLoading}
           onCreateChallan={createChallan} onReceivePo={openReceivePo} setReadyPerPage={setDispReadyPerPage}
+          onLovelySignedBill={row => setLovelyBillTarget(row)}
         />;
       })()}
 
@@ -7953,6 +7956,8 @@ export default function Procurement() {
           </div>
         )}
       </Modal>
+
+      {lovelyBillTarget && <LovelySignedBillModal isOpen={!!lovelyBillTarget} deliveryNote={lovelyBillTarget} onClose={() => setLovelyBillTarget(null)} onSaved={() => { setLovelyBillTarget(null); load(); }} />}
 
       {receiveTarget && <DeliveryReceivingModal key={receiveTarget.id} row={receiveTarget} employees={employees || []} warehouses={warehouses}
         onClose={() => setReceiveTarget(null)} onSaved={() => { setReceiveTarget(null); load(); }} />}

@@ -218,6 +218,13 @@ export default function Inventory() {
             {label}
           </button>
         ))}
+        <a
+          href="/tools?tab=barcodes"
+          className="px-3.5 py-2 rounded-lg text-sm font-semibold border bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 flex items-center gap-1.5 shrink-0 transition-all shadow-sm"
+          title="Open TVS barcode printing & site scanner for RGP tools"
+        >
+          🏷️ RGP Barcodes & TVS Stickers
+        </a>
       </div>
 
       {tab === 'stock' && <StockTab stock={stock} flatStock={flatStock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} typeFilter={typeFilter} setTypeFilter={setTypeFilter} condFilter={condFilter} setCondFilter={setCondFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}

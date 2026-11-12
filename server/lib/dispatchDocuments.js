@@ -81,7 +81,8 @@ function getDispatchDocuments(db) {
     COALESCE(NULLIF(TRIM(i.raised_by_name),''), raiser.name) AS raised_by_name,
     COALESCE(NULLIF(TRIM(i.site_name),''), bb.project_name) AS site_name,
     bb.company_name AS company_name, sin.note_number AS stock_issue_number,
-    wh.name AS from_warehouse_name
+    wh.name AS from_warehouse_name,
+    lsbu.name AS lovely_signed_bill_uploaded_by_name
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by=u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id=vp.id
@@ -91,7 +92,8 @@ function getDispatchDocuments(db) {
     LEFT JOIN order_planning op ON op.id=i.planning_id
     LEFT JOIN business_book bb ON bb.id=op.business_book_id
     LEFT JOIN stock_issue_notes sin ON sin.id=dn.stock_issue_note_id
-    LEFT JOIN warehouses wh ON wh.id=sin.from_warehouse_id`).all();
+    LEFT JOIN warehouses wh ON wh.id=sin.from_warehouse_id
+    LEFT JOIN users lsbu ON lsbu.id=dn.lovely_signed_bill_uploaded_by`).all();
   const byPo = new Map();
   for (const item of db.prepare(`SELECT vpi.vendor_po_id, vpi.id AS vendor_po_item_id,
     CASE WHEN UPPER(im.type)='RENTAL' THEN 'RENTAL' ELSE ii.item_type END AS item_type, ii.description,

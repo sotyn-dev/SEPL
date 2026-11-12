@@ -6,7 +6,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload, FiUpload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload, FiUpload, FiShare2, FiCopy, FiExternalLink, FiCheckCircle } from 'react-icons/fi';
+import { LuBadgeCheck } from 'react-icons/lu';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime } from '../utils/datetime';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
@@ -59,6 +60,8 @@ export default function Vendors() {
   // Bulk import (mam 2026-06-16): add many vendors at once from an Excel sheet
   // saved as CSV. Same flow as the Item Master bulk import.
   const [bulkModal, setBulkModal] = useState(false);
+  const [shareModal, setShareModal] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
   const [importing, setImporting] = useState(false);
@@ -257,6 +260,7 @@ export default function Vendors() {
               filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.gst_number, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
             {canCreate('vendors') && <button onClick={() => { setBulkText(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>}
+            <button onClick={() => setShareModal(true)} className="btn bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 text-sm shadow-sm font-semibold" title="Generate or copy public link to send to vendors via WhatsApp/Email"><FiShare2 size={15} /> Invite Vendor (Self-Registration)</button>
             {canCreate('vendors') && <button onClick={() => { setEditing(null); setForm({ rating: 2 }); setModal('vendor'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Vendor</button>}
           </div>
 
@@ -320,6 +324,59 @@ export default function Vendors() {
               </tr>
             ))}{filtered.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
           </NumberedTable></div>
+      {/* TSK-1052: Invite Vendor Modal for Purchase Team */}
+      <Modal isOpen={shareModal} onClose={() => setShareModal(false)} title="Vendor Self-Registration Link">
+        <div className="space-y-4 text-sm">
+          <p className="text-gray-600 text-xs leading-relaxed">
+            Send this public link to prospective vendors/suppliers via WhatsApp or Email. They can register their firm, bank details, GST, and upload documents online without you having to enter details manually.
+          </p>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block mb-1">
+              Public Registration URL
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={typeof window !== 'undefined' ? `${window.location.origin}/vendor-onboarding` : 'https://securederp.in/vendor-onboarding'}
+                className="input text-xs font-mono bg-white flex-1 select-all"
+              />
+              <button
+                onClick={() => {
+                  const url = typeof window !== 'undefined' ? `${window.location.origin}/vendor-onboarding` : 'https://securederp.in/vendor-onboarding';
+                  navigator.clipboard.writeText(url);
+                  setCopiedLink(true);
+                  toast.success('Registration link copied to clipboard!');
+                  setTimeout(() => setCopiedLink(false), 3000);
+                }}
+                className="btn btn-secondary text-xs flex items-center gap-1 whitespace-nowrap"
+              >
+                {copiedLink ? <><FiCheckCircle className="text-emerald-600" /> Copied</> : <><FiCopy /> Copy Link</>}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2 pt-2">
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent("Dear Partner, please complete your vendor registration with Secured Engineers Pvt Ltd (SEPL) using the link below so we can invite you for RFQs & quotations:\n" + (typeof window !== 'undefined' ? window.location.origin + '/vendor-onboarding' : 'https://securederp.in/vendor-onboarding') + "\n- SEPL Procurement Team")}`}
+              target="_blank"
+              rel="noreferrer"
+              className="btn bg-green-600 hover:bg-green-700 text-white flex-1 flex items-center justify-center gap-2 text-xs py-2 font-semibold shadow-sm"
+            >
+              <FiShare2 size={14} /> Share on WhatsApp
+            </a>
+            <a
+              href="/vendor-onboarding"
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-secondary flex-1 flex items-center justify-center gap-1.5 text-xs py-2"
+            >
+              <FiExternalLink size={14} /> Preview Form
+            </a>
+          </div>
+        </div>
+      </Modal>
+
 
           {/* Paginator — only when there's more than one page */}
           {pageCount > 1 && (
@@ -397,6 +454,28 @@ export default function Vendors() {
               <div><span className="text-gray-400 text-xs">Turnover:</span><br/><span className="font-medium">{viewData.turnover || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Team Size:</span><br/><span className="font-medium">{viewData.team_size || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Source:</span><br/><span className="font-medium">{viewData.source || '-'}</span></div>
+              {viewData.bank_name && (
+                <div className="sm:col-span-2 md:col-span-3 pt-2 mt-1 border-t">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Bank Details (Online Registration)</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div><span className="text-gray-400">Bank:</span> <b>{viewData.bank_name}</b></div>
+                    <div><span className="text-gray-400">A/c No:</span> <b>{viewData.account_number || '-'}</b></div>
+                    <div><span className="text-gray-400">IFSC:</span> <b className="font-mono">{viewData.ifsc_code || '-'}</b></div>
+                    <div><span className="text-gray-400">Type:</span> <b>{viewData.account_type || 'Current'}</b></div>
+                  </div>
+                </div>
+              )}
+              {(viewData.gst_doc_url || viewData.cheque_doc_url || viewData.msme_doc_url || viewData.catalog_doc_url) && (
+                <div className="sm:col-span-2 md:col-span-3 pt-2 mt-1 border-t">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">Uploaded Documents</h4>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {viewData.gst_doc_url && <a href={viewData.gst_doc_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1 border border-blue-200 bg-blue-50 px-2 py-1 rounded"><FiExternalLink size={12}/> GST Certificate</a>}
+                    {viewData.cheque_doc_url && <a href={viewData.cheque_doc_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1 border border-blue-200 bg-blue-50 px-2 py-1 rounded"><FiExternalLink size={12}/> Cancelled Cheque</a>}
+                    {viewData.msme_doc_url && <a href={viewData.msme_doc_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1 border border-blue-200 bg-blue-50 px-2 py-1 rounded"><FiExternalLink size={12}/> MSME Proof</a>}
+                    {viewData.catalog_doc_url && <a href={viewData.catalog_doc_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1 border border-blue-200 bg-blue-50 px-2 py-1 rounded"><FiExternalLink size={12}/> Product Catalog</a>}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

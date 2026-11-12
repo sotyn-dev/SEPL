@@ -596,7 +596,20 @@ router.get('/:groupId', (req, res) => {
   // loop that hammered the server and caused intermittent chat errors
   // (mam 2026-06-19). New messages still emit from POST; read receipts refresh
   // via the other members' poll / next message.
-  res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents, last_read_id: lastReadId });
+  let pinnedMessages = [];
+  try {
+    pinnedMessages = db.prepare(`
+      SELECT pm.id as pin_id, pm.pinned_at, pm.pinned_by, pm.pinned_by_name,
+             m.id as message_id, m.body, m.attachment_url, m.attachment_name,
+             m.sender_id, m.sender_name, m.created_at
+      FROM chat_pinned_messages pm
+      JOIN chat_messages m ON m.id = pm.message_id
+      WHERE pm.group_id = ? AND m.deleted_at IS NULL
+      ORDER BY pm.pinned_at DESC
+    `).all(g);
+  } catch (_) {}
+
+  res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents, last_read_id: lastReadId, pinned_messages: pinnedMessages });
 });
 
 // Per-user send backpressure (2026-07): caps one user to 40 messages / 10 s → 429,
@@ -820,6 +833,166 @@ router.post('/:groupId/messages/:msgId/reactions', (req, res) => {
   emitChat(g, 'reaction', { message_id: msgId, group_id: g, reactions: allReactions });
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true, reactions: allReactions });
+});
+
+
+// ─── PINNED MESSAGES (Always visible on top & 1-click jump) ───────────────
+router.get('/:groupId/pins', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+  try {
+    const pins = db.prepare(`
+      SELECT pm.id as pin_id, pm.pinned_at, pm.pinned_by, pm.pinned_by_name,
+             m.id as message_id, m.body, m.attachment_url, m.attachment_name,
+             m.sender_id, m.sender_name, m.created_at
+      FROM chat_pinned_messages pm
+      JOIN chat_messages m ON m.id = pm.message_id
+      WHERE pm.group_id = ? AND m.deleted_at IS NULL
+      ORDER BY pm.pinned_at DESC
+    `).all(g);
+    res.json(pins);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:groupId/messages/:msgId/pin', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId; const msgId = +req.params.msgId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+  const msg = db.prepare('SELECT id, deleted_at, is_system FROM chat_messages WHERE id=? AND group_id=?').get(msgId, g);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+  if (msg.deleted_at || msg.is_system) return res.status(400).json({ error: 'Cannot pin this message' });
+
+  db.prepare(`
+    INSERT INTO chat_pinned_messages (group_id, message_id, pinned_by, pinned_by_name)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(group_id, message_id) DO UPDATE SET pinned_at=CURRENT_TIMESTAMP
+  `).run(g, msgId, req.user.id, req.user.name || '');
+
+  const allPins = db.prepare(`
+    SELECT pm.id as pin_id, pm.pinned_at, pm.pinned_by, pm.pinned_by_name,
+           m.id as message_id, m.body, m.attachment_url, m.attachment_name,
+           m.sender_id, m.sender_name, m.created_at
+    FROM chat_pinned_messages pm
+    JOIN chat_messages m ON m.id = pm.message_id
+    WHERE pm.group_id = ? AND m.deleted_at IS NULL
+    ORDER BY pm.pinned_at DESC
+  `).all(g);
+
+  emitChat(g, 'pinned', { groupId: g, message_id: msgId, action: 'pin', pins: allPins });
+  emitChat(g, 'changed', { groupId: g });
+  res.json({ ok: true, pins: allPins });
+});
+
+router.delete('/:groupId/messages/:msgId/pin', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId; const msgId = +req.params.msgId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+  db.prepare('DELETE FROM chat_pinned_messages WHERE group_id=? AND message_id=?').run(g, msgId);
+
+  const allPins = db.prepare(`
+    SELECT pm.id as pin_id, pm.pinned_at, pm.pinned_by, pm.pinned_by_name,
+           m.id as message_id, m.body, m.attachment_url, m.attachment_name,
+           m.sender_id, m.sender_name, m.created_at
+    FROM chat_pinned_messages pm
+    JOIN chat_messages m ON m.id = pm.message_id
+    WHERE pm.group_id = ? AND m.deleted_at IS NULL
+    ORDER BY pm.pinned_at DESC
+  `).all(g);
+
+  emitChat(g, 'pinned', { groupId: g, message_id: msgId, action: 'unpin', pins: allPins });
+  emitChat(g, 'changed', { groupId: g });
+  res.json({ ok: true, pins: allPins });
+});
+
+// ─── FULL SERVER-SIDE MESSAGE SEARCH ──────────────────────────────────────
+router.get('/:groupId/messages/search', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) return res.json({ results: [], total: 0 });
+
+  const param = '%' + q + '%';
+  const rows = db.prepare(`
+    SELECT m.id, m.group_id, m.body, m.attachment_url, m.attachment_name,
+           m.sender_id, m.sender_name, m.created_at, m.reply_to_id
+    FROM chat_messages m
+    WHERE m.group_id = ?
+      AND m.deleted_at IS NULL
+      AND (LOWER(m.body) LIKE ? OR LOWER(COALESCE(m.attachment_name, '')) LIKE ?)
+    ORDER BY m.id DESC
+    LIMIT 100
+  `).all(g, param, param);
+
+  res.json({ results: rows, total: rows.length, query: q });
+});
+
+// ─── JUMP TO CONTEXT OF ANY MESSAGE (Older search match / Pinned message) ──
+router.get('/:groupId/messages/:msgId/context', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId; const msgId = +req.params.msgId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+
+  const target = db.prepare('SELECT * FROM chat_messages WHERE id=? AND group_id=?').get(msgId, g);
+  if (!target) return res.status(404).json({ error: 'Target message not found' });
+
+  // 30 before, 30 after
+  const beforeRows = db.prepare('SELECT * FROM chat_messages WHERE group_id=? AND id < ? ORDER BY id DESC LIMIT 30').all(g, msgId).reverse();
+  const afterRows = db.prepare('SELECT * FROM chat_messages WHERE group_id=? AND id > ? ORDER BY id ASC LIMIT 30').all(g, msgId);
+
+  let combined = [...beforeRows, target, ...afterRows];
+  const strip = (m) => m.deleted_at ? { ...m, body: null, attachment_url: null, attachment_name: null } : m;
+  combined = combined.map(strip);
+
+  // Attach reactions
+  const msgIds = combined.map(m => m.id);
+  if (msgIds.length) {
+    try {
+      const ph = msgIds.map(() => '?').join(',');
+      const rRows = db.prepare(`SELECT message_id, user_id, user_name, emoji FROM chat_message_reactions WHERE message_id IN (${ph}) ORDER BY id ASC`).all(...msgIds);
+      const reactionsByMsg = {};
+      for (const r of rRows) {
+        if (!reactionsByMsg[r.message_id]) reactionsByMsg[r.message_id] = [];
+        reactionsByMsg[r.message_id].push(r);
+      }
+      combined = combined.map(m => ({ ...m, reactions: reactionsByMsg[m.id] || [] }));
+    } catch (_) {}
+  }
+
+  res.json({ target_id: msgId, messages: combined });
+});
+
+// ─── MOBILE REACTIONS DETAIL LIST ─────────────────────────────────────────
+router.get('/:groupId/messages/:msgId/reactions', (req, res) => {
+  const db = getChatDb(); const erp = getDb(); const g = +req.params.groupId; const msgId = +req.params.msgId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+
+  const reactions = db.prepare(`
+    SELECT id, message_id, group_id, user_id, user_name, emoji, created_at
+    FROM chat_message_reactions
+    WHERE message_id = ?
+    ORDER BY id ASC
+  `).all(msgId);
+
+  // Enrich with user avatar_url from ERP DB
+  const userIds = [...new Set(reactions.map(r => r.user_id))];
+  const avatarMap = {};
+  if (userIds.length) {
+    try {
+      const ph = userIds.map(() => '?').join(',');
+      const users = erp.prepare(`SELECT id, avatar_url, role, department FROM users WHERE id IN (${ph})`).all(...userIds);
+      for (const u of users) {
+        avatarMap[u.id] = u;
+      }
+    } catch (_) {}
+  }
+
+  const enriched = reactions.map(r => ({
+    ...r,
+    avatar_url: avatarMap[r.user_id]?.avatar_url || null,
+    department: avatarMap[r.user_id]?.department || null,
+    is_me: r.user_id === req.user.id
+  }));
+
+  res.json({ message_id: msgId, reactions: enriched });
 });
 
 module.exports = router;

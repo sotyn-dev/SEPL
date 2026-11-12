@@ -571,6 +571,8 @@ app.use('/api/hr', require('./routes/hr'));
 // candidates can accept / decline via /offer/:token without
 // logging in to the ERP.
 app.use('/api/public', require('./routes/publicHr'));
+// TSK-1052: Public vendor self-registration link (unauthenticated)
+app.use('/api/public/vendor-registration', require('./routes/publicVendor'));
 // Public webhooks (securedengineers.com website leads) — secured via x-webhook-secret
 app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/public/leads', require('./routes/webhooks'));

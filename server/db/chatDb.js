@@ -90,6 +90,16 @@ function getChatDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_cmr_msg ON chat_message_reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_cmr_group ON chat_message_reactions(group_id);
+    CREATE TABLE IF NOT EXISTS chat_pinned_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      message_id INTEGER NOT NULL,
+      pinned_by INTEGER NOT NULL,
+      pinned_by_name TEXT,
+      pinned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(group_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cpm_group ON chat_pinned_messages(group_id, pinned_at DESC);
   `);
   // is_dm marks a 1-on-1 direct message (mam 2026-06-19) — same tables as a
   // group, but exactly 2 members and shown as the other person's name.

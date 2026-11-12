@@ -6,6 +6,8 @@ import { io } from 'socket.io-client';
 import api from '../api';
 import ChatSharedAttachment from '../components/ChatSharedAttachment';
 import ChatShareStatusModal from '../components/ChatShareStatusModal';
+import ChatPinnedBanner from '../components/ChatPinnedBanner';
+import ChatReactionsModal from '../components/ChatReactionsModal';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
@@ -18,6 +20,7 @@ import {
   FiArchive, FiRotateCcw, FiMoreVertical, FiSmile, FiChevronUp, FiType, FiMaximize2, FiMinimize2
 } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
+import { BsPinAngle, BsPinAngleFill } from 'react-icons/bs';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
 import { getToken } from '../lib/tokenStore';
@@ -285,7 +288,7 @@ function previewOf(m) {
   return { icon: '📎', label: name || 'Attachment', text };
 }
 
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, activeSearchMsgId, searchQuery, onReply, onInfo, onDelete, onEdit, onForward, onReact, onImageClick }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, activeSearchMsgId, searchQuery, pinnedMsgIds, onPin, onUnpin, onViewReactions, onReply, onInfo, onDelete, onEdit, onForward, onReact, onImageClick }) {
   const [reactMsgId, setReactMsgId] = useState(null);
 
   useEffect(() => {
@@ -383,10 +386,17 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             // Edit is offered only on your OWN text message, within 15 min of sending
             // (reuse the single `now` read at the top — no per-row clock read).
             const canEdit = own && m.body && (now - new Date(m.created_at + 'Z').getTime()) < 15 * 60 * 1000;
+            const isPinned = pinnedMsgIds ? pinnedMsgIds.has(m.id) : false;
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
                 <div className={`group relative max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''} ${activeSearchMsgId === m.id ? 'ring-2 ring-amber-500 shadow-md !bg-amber-100/90' : ''}`}>
+                  {isPinned && (
+                    <div className="flex items-center gap-1 text-[10px] text-amber-700 font-semibold mb-1 select-none border-b border-amber-200/60 pb-0.5">
+                      <BsPinAngleFill size={10} className="rotate-45 shrink-0 text-amber-600" />
+                      <span>Pinned message</span>
+                    </div>
+                  )}
                   {/* Floating quick emoji reaction popup */}
                   {reactMsgId === m.id && (
                     <div
@@ -457,14 +467,17 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                     const groups = Object.values(map);
                     if (!groups.length) return null;
                     return (
-                      <div className="flex flex-wrap gap-1 mt-1 select-none">
+                      <div className="flex flex-wrap items-center gap-1 mt-1 select-none">
                         {groups.map(g => (
                           <button
                             key={g.emoji}
                             type="button"
-                            onClick={() => onReact?.(m.id, g.emoji)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewReactions ? onViewReactions(m, g.emoji) : onReact?.(m.id, g.emoji);
+                            }}
                             title={g.names.map(n => (n === (members.find(x => x.user_id === userId)?.name) ? 'You' : n)).join(', ')}
-                            className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition cursor-pointer ${
+                            className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition cursor-pointer active:scale-95 ${
                               g.hasMine
                                 ? 'bg-blue-100/90 border-blue-300 text-blue-900 font-semibold shadow-xs'
                                 : 'bg-white/90 border-gray-200 text-gray-700 hover:bg-gray-100'
@@ -474,11 +487,32 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                             <span className="font-semibold">{g.count}</span>
                           </button>
                         ))}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewReactions?.(m);
+                          }}
+                          className="text-[10px] text-gray-500 hover:text-blue-600 px-1 py-0.5 rounded hover:bg-black/[0.04] transition inline-flex items-center font-bold"
+                          title="View all who reacted"
+                        >
+                          •••
+                        </button>
                       </div>
                     );
                   })()}
 
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => (isPinned ? onUnpin?.(m.id) : onPin?.(m.id))}
+                      className={`opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-colors ${
+                        isPinned ? 'text-amber-600 hover:text-amber-700' : 'text-gray-400 hover:text-amber-500'
+                      }`}
+                      title={isPinned ? 'Unpin message' : 'Pin message to top'}
+                    >
+                      {isPinned ? <BsPinAngleFill size={11} className="text-amber-600" /> : <BsPinAngle size={11} />}
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -643,6 +677,11 @@ export default function SiteChat() {
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const [threadSearchQuery, setThreadSearchQuery] = useState('');
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
+  const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearchingHistory, setIsSearchingHistory] = useState(false);
+  const searchDebounceRef = useRef(null);
+  const [reactionsModalData, setReactionsModalData] = useState(null);
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
   const [editingId, setEditingId] = useState(null);   // id of the message being edited inline
   const [busy, setBusy] = useState(false);
@@ -796,6 +835,7 @@ export default function SiteChat() {
       } else {
         setMsgs(incoming); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
         setQuotedParents(qp); setHasMore(!!r.data.hasMore);
+        if (Array.isArray(r.data.pinned_messages)) setPinnedMessages(r.data.pinned_messages);
         // archived_at re-syncs here too, so a group archived by someone else while
         // you had it open turns read-only on the next reconcile rather than on reload.
         if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm, archived_at: r.data.group.archived_at || null } : s));
@@ -857,6 +897,14 @@ export default function SiteChat() {
         return s;
       });
     });
+    socket.on('pinned', ({ groupId, pins }) => {
+      setSel(s => {
+        if (s && s.id === groupId) {
+          setPinnedMessages(pins || []);
+        }
+        return s;
+      });
+    });
     // 'changed' (read receipts, deletes, membership, last-message) still needs a
     // reconcile fetch, but a BURST of them now collapses into a single trailing
     // reload instead of one-reload-per-event — that reload storm was what made
@@ -897,6 +945,7 @@ export default function SiteChat() {
     justSentRef.current = { body: '', at: 0 };
     setMsgs([]); setThreadLoading(true);
     setThreadSearchOpen(false); setThreadSearchQuery(''); setSearchMatchIndex(0);
+    setPinnedMessages([]); setSearchResults([]);
   }, [sel?.id]);
   useEffect(() => {
     if (!sel) return;
@@ -1034,21 +1083,124 @@ export default function SiteChat() {
     }, 20);
   };
 
-  const matchingMsgIds = useMemo(() => {
-    if (!threadSearchQuery.trim()) return [];
-    const qLower = threadSearchQuery.toLowerCase().trim();
-    return msgs.filter(m => (m.body || '').toLowerCase().includes(qLower)).map(m => m.id);
-  }, [msgs, threadSearchQuery]);
+  const handlePinMessage = useCallback(async (msgId) => {
+    if (!sel || !msgId) return;
+    try {
+      const res = await api.post(`/site-chat/${sel.id}/messages/${msgId}/pin`);
+      if (res.data?.pins) setPinnedMessages(res.data.pins);
+      toast.success('Message pinned to top');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to pin message');
+    }
+  }, [sel]);
 
-  const activeSearchMsgId = matchingMsgIds[searchMatchIndex] || null;
+  const handleUnpinMessage = useCallback(async (msgId) => {
+    if (!sel || !msgId) return;
+    try {
+      const res = await api.delete(`/site-chat/${sel.id}/messages/${msgId}/pin`);
+      if (res.data?.pins) setPinnedMessages(res.data.pins);
+      toast.success('Message unpinned');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to unpin message');
+    }
+  }, [sel]);
+
+  const handleJumpToMessage = useCallback(async (msgId) => {
+    if (!sel || !msgId) return;
+    const targetId = Number(msgId);
+    const existingEl = document.getElementById(`msg-${targetId}`);
+    if (existingEl) {
+      existingEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      existingEl.classList.add('ring-4', 'ring-amber-400', '!bg-amber-100/90', 'transition-all');
+      setTimeout(() => {
+        existingEl.classList.remove('ring-4', 'ring-amber-400', '!bg-amber-100/90');
+      }, 2500);
+      return;
+    }
+
+    try {
+      setThreadLoading(true);
+      const res = await api.get(`/site-chat/${sel.id}/messages/${targetId}/context`);
+      if (res.data?.messages?.length) {
+        setMsgs(res.data.messages);
+        setHasMore(true);
+        setTimeout(() => {
+          const el = document.getElementById(`msg-${targetId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('ring-4', 'ring-amber-400', '!bg-amber-100/90', 'transition-all');
+            setTimeout(() => {
+              el.classList.remove('ring-4', 'ring-amber-400', '!bg-amber-100/90');
+            }, 2500);
+          }
+        }, 120);
+      }
+    } catch (err) {
+      toast.error('Could not load message context');
+    } finally {
+      setThreadLoading(false);
+    }
+  }, [sel]);
+
+  const handleOpenReactions = useCallback(async (msg, initialEmoji) => {
+    if (!sel || !msg) return;
+    try {
+      const res = await api.get(`/site-chat/${sel.id}/messages/${msg.id}/reactions`);
+      setReactionsModalData({
+        message: msg,
+        reactions: res.data?.reactions || [],
+        initialEmoji
+      });
+    } catch (err) {
+      setReactionsModalData({
+        message: msg,
+        reactions: msg.reactions || [],
+        initialEmoji
+      });
+    }
+  }, [sel]);
+
+  // Full server-side search across all historical messages in this group
+  useEffect(() => {
+    if (!sel?.id || !threadSearchOpen) {
+      setSearchResults([]);
+      setSearchMatchIndex(0);
+      return;
+    }
+    const q = threadSearchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchMatchIndex(0);
+      return;
+    }
+    clearTimeout(searchDebounceRef.current);
+    setIsSearchingHistory(true);
+    searchDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/site-chat/${sel.id}/messages/search`, { params: { q } });
+        const results = res.data?.results || [];
+        setSearchResults(results);
+        setSearchMatchIndex(0);
+        if (results.length > 0) {
+          handleJumpToMessage(results[0].id);
+        }
+      } catch (err) {
+        console.error('Search failed', err);
+      } finally {
+        setIsSearchingHistory(false);
+      }
+    }, 250);
+    return () => clearTimeout(searchDebounceRef.current);
+  }, [threadSearchQuery, sel?.id, threadSearchOpen, handleJumpToMessage]);
+
+  const activeSearchMsgId = searchResults[searchMatchIndex]?.id || null;
 
   const jumpSearchMatch = (delta) => {
-    if (!matchingMsgIds.length) return;
-    const nextIdx = (searchMatchIndex + delta + matchingMsgIds.length) % matchingMsgIds.length;
+    if (!searchResults.length) return;
+    const nextIdx = (searchMatchIndex + delta + searchResults.length) % searchResults.length;
     setSearchMatchIndex(nextIdx);
-    const targetId = matchingMsgIds[nextIdx];
-    const el = document.getElementById('msg-' + targetId);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const targetId = searchResults[nextIdx].id;
+    handleJumpToMessage(targetId);
   };
 
   const handleReact = useCallback(async (msgId, emoji) => {
@@ -1891,36 +2043,47 @@ export default function SiteChat() {
                   <input
                     type="text"
                     className="input text-xs flex-1 py-1 px-2 border-0 bg-transparent focus:ring-0"
-                    placeholder="Search messages in this chat…"
+                    placeholder="Search all historical messages in this chat…"
                     value={threadSearchQuery}
                     onChange={e => {
                       setThreadSearchQuery(e.target.value);
                       setSearchMatchIndex(0);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        jumpSearchMatch(e.shiftKey ? -1 : 1);
+                      } else if (e.key === 'Escape') {
+                        setThreadSearchOpen(false);
+                        setThreadSearchQuery('');
+                      }
                     }}
                     autoFocus
                   />
                   {threadSearchQuery.trim() && (
                     <div className="flex items-center gap-1 text-xs text-gray-500 shrink-0 select-none">
                       <span className="text-[11px] font-medium mr-1">
-                        {matchingMsgIds.length > 0
-                          ? `${searchMatchIndex + 1} of ${matchingMsgIds.length}`
+                        {isSearchingHistory
+                          ? 'Searching history…'
+                          : searchResults.length > 0
+                          ? `${searchMatchIndex + 1} of ${searchResults.length}`
                           : 'No matches'}
                       </span>
                       <button
                         type="button"
-                        disabled={matchingMsgIds.length <= 1}
+                        disabled={searchResults.length <= 1}
                         onClick={() => jumpSearchMatch(-1)}
                         className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer"
-                        title="Previous match"
+                        title="Previous match (Shift+Enter)"
                       >
                         <FiChevronUp size={15} />
                       </button>
                       <button
                         type="button"
-                        disabled={matchingMsgIds.length <= 1}
+                        disabled={searchResults.length <= 1}
                         onClick={() => jumpSearchMatch(1)}
                         className="p-1 rounded hover:bg-gray-100 disabled:opacity-30 cursor-pointer"
-                        title="Next match"
+                        title="Next match (Enter)"
                       >
                         <FiChevronDown size={15} />
                       </button>
@@ -1940,6 +2103,12 @@ export default function SiteChat() {
                 </div>
               )}
               <div className="relative flex-1 flex flex-col min-h-0">
+                <ChatPinnedBanner
+                  pins={pinnedMessages}
+                  onJump={handleJumpToMessage}
+                  onUnpin={handleUnpinMessage}
+                  canManage={true}
+                />
                 <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#f4f5f7' }}
                   onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
                   onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
@@ -1957,7 +2126,30 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} activeSearchMsgId={activeSearchMsgId} searchQuery={threadSearchQuery} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} onReact={handleReact} onImageClick={openImagePreview} />
+                    <MessageList
+                        msgs={msgs}
+                        userId={user?.id}
+                        members={members}
+                        reads={reads}
+                        isDm={sel.is_dm}
+                        userAvatars={userAvatars}
+                        msgById={msgById}
+                        isAdmin={isAdmin()}
+                        editingId={editingId}
+                        activeSearchMsgId={activeSearchMsgId}
+                        searchQuery={threadSearchQuery}
+                        pinnedMsgIds={new Set(pinnedMessages.map(p => p.message_id))}
+                        onPin={handlePinMessage}
+                        onUnpin={handleUnpinMessage}
+                        onViewReactions={handleOpenReactions}
+                        onReply={setReplyTo}
+                        onInfo={setInfoMsg}
+                        onDelete={delMsg}
+                        onEdit={startEdit}
+                        onForward={openForward}
+                        onReact={handleReact}
+                        onImageClick={openImagePreview}
+                      />
                   </div>
 
                   <div ref={endRef} />
@@ -2414,6 +2606,23 @@ export default function SiteChat() {
         );
       })()}
       <ChatShareStatusModal isOpen={shareSetupOpen} onClose={() => setShareSetupOpen(false)} />
+
+      {/* ── Mobile & Rich Reactions Detail Modal ── */}
+      <ChatReactionsModal
+        isOpen={!!reactionsModalData}
+        onClose={() => setReactionsModalData(null)}
+        message={reactionsModalData?.message}
+        reactions={reactionsModalData?.reactions || []}
+        initialEmoji={reactionsModalData?.initialEmoji}
+        onReact={async (msgId, emoji) => {
+          await handleReact(msgId, emoji);
+          try {
+            const res = await api.get(`/site-chat/${sel.id}/messages/${msgId}/reactions`);
+            setReactionsModalData(prev => prev ? { ...prev, reactions: res.data?.reactions || [] } : null);
+          } catch (_) {}
+        }}
+        currentUserId={user?.id}
+      />
 
       {/* ── Image preview Lightbox (with clear header buttons, download & mobile Back button support) ── */}
       {previewImage && (

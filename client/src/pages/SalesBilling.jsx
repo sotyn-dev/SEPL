@@ -533,11 +533,12 @@ export default function SalesBilling() {
                   <th className="px-3 py-2 text-right">Items</th>
                   <th className="px-3 py-2 text-right">Value</th>
                   <th className="px-3 py-2 text-left">Sales Bill</th>
+                  <th className="px-3 py-2 text-left">Lovely Stamped Bill (Saman)</th>
                 </tr>
               </thead>
               <tbody>
                 {material.length === 0 ? (
-                  <tr><td colSpan="8" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
+                  <tr><td colSpan="9" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
                 ) : materialPager.pageItems.map(m => (
                   <tr key={m.id} className="border-t border-gray-100 hover:bg-blue-50/40">
                     <td className="px-3 py-2 font-medium whitespace-nowrap">{m.indent_number || '-'}</td>
