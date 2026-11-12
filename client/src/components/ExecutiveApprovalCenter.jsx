@@ -4,11 +4,12 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import Modal from './Modal';
-import ProofPreview from './ProofPreview';
+import ImageViewerModal from './ImageViewerModal';
 import {
   FiCheckCircle, FiXCircle, FiClock, FiAlertTriangle, FiFileText,
   FiExternalLink, FiChevronRight, FiCheck, FiX, FiShield, FiRefreshCw,
-  FiUser, FiCalendar, FiArrowRight, FiInfo
+  FiUser, FiCalendar, FiArrowRight, FiInfo, FiChevronDown, FiChevronUp,
+  FiDownload
 } from 'react-icons/fi';
 
 export function parseProofUrls(raw) {
@@ -26,6 +27,8 @@ export function parseProofUrls(raw) {
 export default function ExecutiveApprovalCenter({ isDark = false }) {
   const { user, isAdmin } = useAuth();
   const [data, setData] = useState({
+    scope: 'my',
+    canViewAll: false,
     totalCount: 0,
     delegationsCount: 0,
     extensionsCount: 0,
@@ -36,22 +39,38 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
   });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all'); // 'all', 'delegations', 'extensions', 'tickets'
+  const [scope, setScope] = useState('my'); // Strictly 'my' by default (only user's own approvals)
   const [actionBusy, setActionBusy] = useState(null); // id of item being processed
   const [rejectModal, setRejectModal] = useState(null); // { type: 'delegation'|'extension'|'ticket', item, reason: '' }
-  const [previewModal, setPreviewModal] = useState(null); // { url, title }
+  const [previewModal, setPreviewModal] = useState(null); // { url, title, isImage, isPdf }
 
-  const isMDOrAdmin = useMemo(() => {
-    if (!user) return false;
-    const email = String(user.email || '').trim().toLowerCase();
-    const role = String(user.role || '').trim().toLowerCase();
-    return role === 'admin' || email === 'director@securedengineers.com' || isAdmin();
-  }, [user, isAdmin]);
-
-  const loadApprovals = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+  // Section collapse state (remembered across visits via localStorage)
+  const [isCollapsed, setIsCollapsed] = useState(() => {
     try {
-      const res = await api.get('/dashboard/executive-approvals');
+      return localStorage.getItem('sotyn_approvals_collapsed') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+
+  const toggleCollapse = () => {
+    setIsCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sotyn_approvals_collapsed', String(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
+  const loadApprovals = useCallback(async (silent = false, customScope = null) => {
+    if (!silent) setLoading(true);
+    const activeScope = customScope !== null ? customScope : scope;
+    try {
+      const res = await api.get(`/dashboard/executive-approvals?scope=${activeScope}`);
       setData(res.data || {
+        scope: activeScope,
+        canViewAll: false,
         totalCount: 0,
         delegationsCount: 0,
         extensionsCount: 0,
@@ -65,7 +84,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     loadApprovals();
@@ -74,6 +93,11 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
     }, 20000);
     return () => clearInterval(interval);
   }, [loadApprovals]);
+
+  const handleScopeToggle = (targetScope) => {
+    setScope(targetScope);
+    loadApprovals(false, targetScope);
+  };
 
   // Fast 1-Click Approve Handlers
   const handleApproveDelegation = async (d) => {
@@ -182,13 +206,27 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
     }
   };
 
+  // Open Proof Preview Helper (Distinguishes Images vs PDFs)
+  const openProofPreview = (url, title) => {
+    if (!url) return;
+    const ext = url.split(/[?#]/)[0].split('.').pop().toLowerCase();
+    const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'svg'].includes(ext) || url.startsWith('data:image/');
+    const isPdf = ext === 'pdf' || url.startsWith('data:application/pdf');
+    setPreviewModal({
+      url,
+      title: title || 'Proof Preview',
+      isImage: isImg,
+      isPdf: isPdf
+    });
+  };
+
   // Format waiting time badge
   const renderAgingBadge = (hours) => {
     if (hours == null) return null;
     const h = Number(hours);
     if (h >= 48) {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-rose-600 text-white animate-pulse shadow-sm">
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-rose-600 text-white animate-pulse shadow-xs">
           <FiAlertTriangle size={12} />
           Overdue: Waiting {Math.round(h / 24)}d ({Math.round(h)}h)
         </span>
@@ -196,7 +234,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
     }
     if (h >= 24) {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500 text-white shadow-sm">
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500 text-white shadow-xs">
           <FiClock size={12} />
           Waiting {Math.round(h)}h
         </span>
@@ -212,6 +250,69 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
 
   const hasAnyItems = data.totalCount > 0;
 
+  // COLLAPSED VIEW: Sleek, compact 44px badge bar
+  if (isCollapsed) {
+    return (
+      <section
+        id="executive-approvals"
+        aria-label="Executive Approval Center"
+        className="rounded-xl overflow-hidden transition-all shadow-sm border border-amber-300/80 bg-gradient-to-r from-amber-600 via-amber-700 to-indigo-900 text-white"
+      >
+        <div className="flex items-center justify-between px-4 py-2.5 gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="p-1 rounded-lg bg-white/20 text-white flex-shrink-0">
+              <FiShield size={16} />
+            </span>
+            <span className="font-bold text-xs sm:text-sm truncate">
+              Approvals Awaiting Your Sign-off
+            </span>
+            {hasAnyItems ? (
+              <span className="bg-rose-500 text-white text-[11px] font-black px-2 py-0.5 rounded-full shadow-xs flex-shrink-0 animate-pulse">
+                {data.totalCount} Pending
+              </span>
+            ) : (
+              <span className="bg-emerald-500 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0">
+                All Clear
+              </span>
+            )}
+            {hasAnyItems && (
+              <span className="hidden md:inline-flex items-center gap-2 text-[11px] text-amber-200">
+                <span>•</span>
+                <span>{data.delegationsCount} Delegated</span>
+                <span>•</span>
+                <span>{data.extensionsCount} Extensions</span>
+                <span>•</span>
+                <span>{data.ticketsCount} Tickets</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => loadApprovals()}
+              disabled={loading}
+              className="p-1.5 hover:bg-white/20 rounded-lg text-white transition-colors"
+              title="Refresh approvals"
+            >
+              <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              className="flex items-center gap-1 px-3 py-1 text-xs font-bold bg-white text-slate-800 hover:bg-amber-50 rounded-lg transition-colors shadow-xs active:scale-95"
+              title="Expand approval center"
+              aria-expanded={false}
+            >
+              <FiChevronDown size={14} className="stroke-[3]" />
+              <span>Expand</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // EXPANDED VIEW
   return (
     <section
       id="executive-approvals"
@@ -247,7 +348,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
           </div>
         </div>
 
-        {/* Quick links & refresh */}
+        {/* Quick controls, Collapse button & refresh */}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -261,27 +362,38 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
           </button>
           <Link
             to="/delegations"
-            className="text-xs text-amber-100 hover:text-white underline font-medium px-2 py-1"
+            className="hidden sm:inline-block text-xs text-amber-100 hover:text-white underline font-medium px-2 py-1"
           >
             All Delegations →
           </Link>
           <Link
             to="/help-tickets"
-            className="text-xs text-amber-100 hover:text-white underline font-medium px-2 py-1"
+            className="hidden sm:inline-block text-xs text-amber-100 hover:text-white underline font-medium px-2 py-1"
           >
             Help Tickets →
           </Link>
+          {/* Collapse button */}
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all bg-white/20 hover:bg-white/30 text-white border border-white/25 active:scale-95"
+            title="Collapse section to view other dashboard areas"
+            aria-expanded={true}
+          >
+            <FiChevronUp size={14} className="stroke-[3]" />
+            <span>Collapse</span>
+          </button>
         </div>
       </div>
 
-      {/* Tabs / Filter strip */}
+      {/* Tabs / Filter strip & Scope Toggle */}
       <div className="bg-slate-50/80 px-5 py-2.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setActiveTab('all')}
             className={`px-3 py-1 rounded-full font-bold transition-all ${activeTab === 'all'
-                ? 'bg-amber-600 text-white shadow-sm'
+                ? 'bg-amber-600 text-white shadow-xs'
                 : 'text-slate-600 hover:bg-slate-200/60'
               }`}
           >
@@ -291,7 +403,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             type="button"
             onClick={() => setActiveTab('delegations')}
             className={`px-3 py-1 rounded-full font-bold transition-all flex items-center gap-1.5 ${activeTab === 'delegations'
-                ? 'bg-purple-600 text-white shadow-sm'
+                ? 'bg-purple-600 text-white shadow-xs'
                 : 'text-slate-600 hover:bg-slate-200/60'
               }`}
           >
@@ -304,7 +416,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             type="button"
             onClick={() => setActiveTab('extensions')}
             className={`px-3 py-1 rounded-full font-bold transition-all flex items-center gap-1.5 ${activeTab === 'extensions'
-                ? 'bg-amber-500 text-white shadow-sm'
+                ? 'bg-amber-500 text-white shadow-xs'
                 : 'text-slate-600 hover:bg-slate-200/60'
               }`}
           >
@@ -317,7 +429,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             type="button"
             onClick={() => setActiveTab('tickets')}
             className={`px-3 py-1 rounded-full font-bold transition-all flex items-center gap-1.5 ${activeTab === 'tickets'
-                ? 'bg-blue-600 text-white shadow-sm'
+                ? 'bg-blue-600 text-white shadow-xs'
                 : 'text-slate-600 hover:bg-slate-200/60'
               }`}
           >
@@ -327,17 +439,44 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             </span>
           </button>
         </div>
-        <div className="text-[11px] text-slate-500 font-medium">
-          Auto-refreshes · Zero navigation sign-off
-        </div>
+
+        {/* Scope Pill Selector for Admins / Directors (Strictly 'my' by default) */}
+        {data.canViewAll && (
+          <div className="flex items-center bg-white border border-slate-300 rounded-lg p-0.5 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => handleScopeToggle('my')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors ${
+                scope === 'my'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+              title="Show only tasks and tickets created by you requiring sign-off"
+            >
+              My Approvals
+            </button>
+            <button
+              type="button"
+              onClick={() => handleScopeToggle('all')}
+              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors ${
+                scope === 'all'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+              title="View company-wide approval queue"
+            >
+              All Company Queue
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Main Content Area */}
+      {/* Main Content Area - Scrollable Container with max height so other dashboard sections remain visible */}
       <div className="p-4 sm:p-5">
         {loading && (
           <div className="py-8 text-center text-slate-400 text-sm flex items-center justify-center gap-2">
             <FiRefreshCw className="animate-spin text-amber-600" />
-            Loading pending executive approvals...
+            Loading pending approvals...
           </div>
         )}
 
@@ -348,21 +487,25 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             </div>
             <div>
               <h3 className="font-bold text-emerald-900 text-base">
-                All Delegated Tasks & Tickets Approved — Up to Date!
+                {scope === 'my'
+                  ? 'No Approvals Awaiting Your Sign-off!'
+                  : 'All Delegated Tasks & Tickets Approved — Up to Date!'}
               </h3>
               <p className="text-xs text-emerald-700 max-w-md mx-auto mt-0.5">
-                No submitted completion proofs or deadline extensions are currently waiting for executive sign-off.
+                {scope === 'my'
+                  ? 'None of your created tasks or tickets have pending completion proofs or extension requests.'
+                  : 'No submitted completion proofs or deadline extensions are currently waiting for executive sign-off.'}
               </p>
             </div>
           </div>
         )}
 
         {!loading && hasAnyItems && (
-          <div className="space-y-4">
+          <div className="space-y-4 max-h-[520px] overflow-y-auto pr-1">
             {/* 1. Delegated Tasks Awaiting Sign-off */}
             {(activeTab === 'all' || activeTab === 'delegations') && data.delegations.length > 0 && (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-xs font-bold text-purple-900 uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-xs font-bold text-purple-900 uppercase tracking-wider sticky top-0 bg-white/95 backdrop-blur-xs py-1 z-10">
                   <span className="w-2 h-2 rounded-full bg-purple-600" />
                   <span>Delegated Tasks Awaiting Your Review ({data.delegations.length})</span>
                 </div>
@@ -373,7 +516,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                     return (
                       <article
                         key={`deleg-${d.id}`}
-                        className="bg-white border-2 border-purple-200/90 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden"
+                        className="bg-white border-2 border-purple-200/90 rounded-xl p-4 shadow-xs hover:shadow-md transition-shadow relative overflow-hidden"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -427,8 +570,8 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                                 <button
                                   key={idx}
                                   type="button"
-                                  onClick={() => setPreviewModal({ url, title: `Proof #${idx + 1} for Task #${d.id}` })}
-                                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors"
+                                  onClick={() => openProofPreview(url, `Proof #${idx + 1} for Task #${d.id}`)}
+                                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors"
                                 >
                                   <FiFileText size={13} />
                                   <span>View Proof {proofs.length > 1 ? `#${idx + 1}` : ''}</span>
@@ -449,7 +592,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                               type="button"
                               disabled={isBusy}
                               onClick={() => setRejectModal({ type: 'delegation', item: d, reason: '' })}
-                              className="px-3 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors flex items-center gap-1 shadow-sm"
+                              className="px-3 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
                               title="Send back to assignee with feedback"
                             >
                               <FiX size={13} />
@@ -459,7 +602,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                               type="button"
                               disabled={isBusy}
                               onClick={() => handleApproveDelegation(d)}
-                              className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-95"
+                              className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-95"
                               title="Approve proof and complete task"
                             >
                               <FiCheck size={14} className="stroke-[3]" />
@@ -477,7 +620,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             {/* 2. Deadline Extension Requests */}
             {(activeTab === 'all' || activeTab === 'extensions') && data.extensions.length > 0 && (
               <div className="space-y-3 pt-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-900 uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-900 uppercase tracking-wider sticky top-0 bg-white/95 backdrop-blur-xs py-1 z-10">
                   <span className="w-2 h-2 rounded-full bg-amber-500" />
                   <span>Deadline Extension Requests ({data.extensions.length})</span>
                 </div>
@@ -487,7 +630,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                     return (
                       <article
                         key={`ext-${d.id}`}
-                        className="bg-white border-2 border-amber-200/90 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
+                        className="bg-white border-2 border-amber-200/90 rounded-xl p-4 shadow-xs hover:shadow-md transition-shadow"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -535,7 +678,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                             type="button"
                             disabled={isBusy}
                             onClick={() => handleApproveExtension(d)}
-                            className="px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5"
+                            className="px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-xs transition-all flex items-center gap-1.5"
                           >
                             <FiCheck size={14} className="stroke-[3]" />
                             <span>{isBusy ? 'Saving...' : 'Grant Extension'}</span>
@@ -551,7 +694,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             {/* 3. Help Tickets with Submitted Proof */}
             {(activeTab === 'all' || activeTab === 'tickets') && data.tickets.length > 0 && (
               <div className="space-y-3 pt-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-blue-900 uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-xs font-bold text-blue-900 uppercase tracking-wider sticky top-0 bg-white/95 backdrop-blur-xs py-1 z-10">
                   <span className="w-2 h-2 rounded-full bg-blue-600" />
                   <span>Help Tickets Proof Submitted — Awaiting Approval ({data.tickets.length})</span>
                 </div>
@@ -562,7 +705,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                     return (
                       <article
                         key={`ticket-${t.id}`}
-                        className="bg-white border-2 border-blue-200/90 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
+                        className="bg-white border-2 border-blue-200/90 rounded-xl p-4 shadow-xs hover:shadow-md transition-shadow"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -615,8 +758,8 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                                 <button
                                   key={idx}
                                   type="button"
-                                  onClick={() => setPreviewModal({ url, title: `Proof #${idx + 1} for ${t.ticket_no}` })}
-                                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors"
+                                  onClick={() => openProofPreview(url, `Proof #${idx + 1} for ${t.ticket_no}`)}
+                                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors"
                                 >
                                   <FiFileText size={13} />
                                   <span>View Proof {proofs.length > 1 ? `#${idx + 1}` : ''}</span>
@@ -638,7 +781,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                               type="button"
                               disabled={isBusy}
                               onClick={() => setRejectModal({ type: 'ticket', item: t, reason: '' })}
-                              className="px-3 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors flex items-center gap-1 shadow-sm"
+                              className="px-3 py-1.5 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors flex items-center gap-1 shadow-xs"
                             >
                               <FiX size={13} />
                               <span>Request Changes</span>
@@ -647,7 +790,7 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
                               type="button"
                               disabled={isBusy}
                               onClick={() => handleApproveTicket(t)}
-                              className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-95"
+                              className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-95"
                             >
                               <FiCheck size={14} className="stroke-[3]" />
                               <span>{isBusy ? 'Closing...' : 'Approve & Close Ticket'}</span>
@@ -669,12 +812,14 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
         <Modal
           isOpen={true}
           onClose={() => setRejectModal(null)}
-          title={`Request Changes / Send Back · ${rejectModal.item.title || rejectModal.item.subject || rejectModal.item.ticket_no}`}
+          title={`Request Changes: ${rejectModal.item.title || rejectModal.item.ticket_no}`}
         >
           <form onSubmit={handleSubmitReject} className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-              <span className="font-bold block mb-1">Feedback will be sent directly to the assignee:</span>
-              <span>{rejectModal.item.assigned_to_name} will be notified with your feedback and required to submit revised proof.</span>
+              <span className="font-bold block mb-1">
+                ⚠️ Sending back to assignee
+              </span>
+              The assignee will receive your detailed reason, their task will revert to in-progress status, and they will need to correct the work and re-upload proof.
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
@@ -709,26 +854,110 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
         </Modal>
       )}
 
-      {/* Proof Preview Modal */}
-      {previewModal && (
-        <Modal
-          isOpen={true}
+      {/* Image Proof Viewer: Interactive Zoom (+, -, wheel, pinch, pan, 100%) */}
+      {previewModal && previewModal.isImage && (
+        <ImageViewerModal
+          src={previewModal.url}
+          name={previewModal.title}
+          downloadUrl={previewModal.url}
           onClose={() => setPreviewModal(null)}
-          title={previewModal.title}
-        >
-          <div className="space-y-3">
-            <ProofPreview url={previewModal.url} reviewOnly={true} />
-            <div className="flex justify-end pt-2">
+        />
+      )}
+
+      {/* PDF / Document Proof Viewer: Large Viewport-Centered Modal */}
+      {previewModal && !previewModal.isImage && (
+        <div className="!m-0 fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-50 flex-shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                <span className="p-1.5 rounded-lg bg-indigo-100 text-indigo-700">
+                  <FiFileText size={18} />
+                </span>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate">
+                    {previewModal.title}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Full view · Scroll inside or open in a new tab for native controls
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <a
+                  href={previewModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg transition-colors"
+                  title="Open full page in a new browser tab"
+                >
+                  <FiExternalLink size={13} />
+                  <span className="hidden sm:inline">Open in New Tab</span>
+                </a>
+                <a
+                  href={previewModal.url}
+                  download
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg transition-colors"
+                  title="Download proof file"
+                >
+                  <FiDownload size={13} />
+                  <span className="hidden sm:inline">Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewModal(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                  aria-label="Close"
+                >
+                  <FiX size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Viewport */}
+            <div className="flex-1 w-full bg-slate-900 p-2 overflow-hidden flex flex-col">
+              {previewModal.isPdf ? (
+                <iframe
+                  src={previewModal.url}
+                  title={previewModal.title}
+                  className="w-full h-full rounded-lg border-0 bg-white"
+                />
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-white p-6 text-center space-y-3">
+                  <FiFileText size={48} className="text-slate-400" />
+                  <p className="text-sm font-medium">This document cannot be previewed directly inside the frame.</p>
+                  <a
+                    href={previewModal.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-primary text-xs"
+                  >
+                    Open / Download Document
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between px-5 py-2.5 border-t border-slate-200 bg-slate-50 flex-shrink-0 text-xs">
+              <span className="text-slate-500 text-[11px]">
+                💡 Press <kbd className="px-1.5 py-0.5 bg-slate-200 rounded font-mono text-[10px]">Esc</kbd> or click Close to return.
+              </span>
               <button
                 type="button"
                 onClick={() => setPreviewModal(null)}
-                className="btn btn-secondary text-xs"
+                className="btn btn-secondary text-xs px-4 py-1.5"
               >
                 Close Preview
               </button>
             </div>
           </div>
-        </Modal>
+        </div>
       )}
     </section>
   );
@@ -749,7 +978,8 @@ export function ExecutiveApprovalHeaderButton() {
   const fetchCount = useCallback(async () => {
     if (!isMDOrAdmin) return;
     try {
-      const res = await api.get('/dashboard/executive-approvals');
+      // By default counts strictly user's own approvals
+      const res = await api.get('/dashboard/executive-approvals?scope=my');
       setCount(res.data?.totalCount || 0);
     } catch (_) { }
   }, [isMDOrAdmin]);
@@ -777,8 +1007,8 @@ export function ExecutiveApprovalHeaderButton() {
           window.location.href = '/#executive-approvals';
         }
       }}
-      className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-extrabold bg-gradient-to-r from-amber-500/15 to-rose-500/15 text-amber-800 hover:from-amber-500/25 hover:to-rose-500/25 border border-amber-300 rounded-full transition-all shadow-sm"
-      title={`${count} tasks/tickets awaiting executive approval`}
+      className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-extrabold bg-gradient-to-r from-amber-500/15 to-rose-500/15 text-amber-800 hover:from-amber-500/25 hover:to-rose-500/25 border border-amber-300 rounded-full transition-all shadow-2xs"
+      title={`${count} tasks/tickets created by you awaiting approval`}
     >
       <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
       <span className="hidden sm:inline">Approvals</span>
@@ -788,4 +1018,3 @@ export function ExecutiveApprovalHeaderButton() {
     </button>
   );
 }
-
