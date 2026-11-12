@@ -19,16 +19,21 @@ router.get('/active-projects', (req, res) => {
 });
 
 
-// TK-01554: Executive Action & Approval Center for MD Sir & Management
-// Pulls all pending items requiring executive sign-off:
-// 1. Delegated tasks where assignee uploaded completion proof
-// 2. Deadline extension requests on delegated tasks
-// 3. Help tickets where assignee submitted resolution proof
+// TK-01554: Executive Action & Approval Center
+// Pulls pending items strictly requiring sign-off by the logged-in user:
+// 1. Delegated tasks created by the user where assignee uploaded completion proof (d.assigned_by = uid)
+// 2. Deadline extension requests on tasks created by the user (d.assigned_by = uid)
+// 3. Help tickets raised by the user where assignee submitted resolution proof (t.user_id = uid)
+// Defaults strictly to scope='my' for all users, including Admins.
 router.get('/executive-approvals', (req, res) => {
   const db = getDb();
   const uid = req.user.id;
   const isAdmin = req.user.role === 'admin';
-  const isMD = isAdmin || String(req.user.email || '').toLowerCase() === 'director@securedengineers.com';
+  const isMD = String(req.user.email || '').toLowerCase() === 'director@securedengineers.com';
+
+  // Strictly enforce user's own approvals by default.
+  // Only if explicitly requested via ?scope=all AND user has admin/director privileges, allow company-wide.
+  const scope = (req.query.scope === 'all' && (isAdmin || isMD)) ? 'all' : 'my';
 
   try {
     // 1. Delegated tasks awaiting proof review
@@ -55,7 +60,7 @@ router.get('/executive-approvals', (req, res) => {
       WHERE d.status = 'submitted'
     `;
     const delegParams = [];
-    if (!isMD) {
+    if (scope !== 'all') {
       delegSql += ' AND d.assigned_by = ?';
       delegParams.push(uid);
     }
@@ -67,6 +72,7 @@ router.get('/executive-approvals', (req, res) => {
       SELECT 
         d.id,
         d.title,
+        d.assigned_by,
         d.assigned_to,
         d.due_date,
         d.requested_due_date,
@@ -80,7 +86,7 @@ router.get('/executive-approvals', (req, res) => {
       WHERE d.extension_status = 'pending'
     `;
     const extParams = [];
-    if (!isMD) {
+    if (scope !== 'all') {
       extSql += ' AND d.assigned_by = ?';
       extParams.push(uid);
     }
@@ -102,6 +108,8 @@ router.get('/executive-approvals', (req, res) => {
         t.proof_submitted_at,
         t.deadline_date,
         t.module,
+        t.user_id,
+        t.assigned_to,
         u_to.name as assigned_to_name,
         u_by.name as user_name,
         ROUND((julianday('now') - julianday(COALESCE(t.proof_submitted_at, 'now'))) * 24, 1) as hours_waiting
@@ -111,9 +119,9 @@ router.get('/executive-approvals', (req, res) => {
       WHERE t.status = 'submitted'
     `;
     const ticketsParams = [];
-    if (!isMD) {
-      ticketsSql += ' AND (t.user_id = ? OR t.assigned_to = ?)';
-      ticketsParams.push(uid, uid);
+    if (scope !== 'all') {
+      ticketsSql += ' AND t.user_id = ?';
+      ticketsParams.push(uid);
     }
     ticketsSql += ' ORDER BY t.proof_submitted_at ASC';
     const tickets = db.prepare(ticketsSql).all(...ticketsParams);
@@ -121,6 +129,8 @@ router.get('/executive-approvals', (req, res) => {
     const totalCount = delegations.length + extensions.length + tickets.length;
 
     res.json({
+      scope,
+      canViewAll: isAdmin || isMD,
       totalCount,
       delegationsCount: delegations.length,
       extensionsCount: extensions.length,
