@@ -432,6 +432,7 @@ export default function Procurement() {
   // allowed }. Saturday-only raising with an admin one-day emergency override.
   const [raiseWindow, setRaiseWindow] = useState(null);
   const [purchaseBills, setPurchaseBills] = useState([]);
+  const [newlyAddedBillId, setNewlyAddedBillId] = useState(null);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [vendors, setVendors] = useState([]);
   // Vendor-picker options (mam 2026-06-19: "use vendor firm name"). Show
@@ -2560,7 +2561,17 @@ export default function Procurement() {
       if (asd) {
         toast.success(`Auto short-supply debit ${asd.dn_number} · ₹${Math.round(asd.amount).toLocaleString('en-IN')}${r.data?.vendor_mailed ? ' · vendor emailed for the shortfall' : ''}`, { duration: 6000 });
       }
-      setModal(false); setBillItems(null); setBillRecv({}); load();
+      setModal(false); setBillItems(null); setBillRecv({});
+      setBillsSubTab('bills');
+      setBillsListPage(1);
+      setBillsListSearch('');
+      if (r.data?.id) {
+        setNewlyAddedBillId(r.data.id);
+        setTimeout(() => setNewlyAddedBillId(null), 8000);
+      }
+      await fetchBillsListPage();
+      await fetchBillsFuPage();
+      load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -7720,7 +7731,31 @@ export default function Procurement() {
 
       {matchingTarget && <PurchaseBillMatching key={`${matchingTarget.kind}-${matchingTarget.id}`} target={matchingTarget} canApprove={canApprove('procurement')} onClose={()=>setMatchingTarget(null)} onSaved={()=>fetchBillsListPage()} />}
       {balanceBill && <BalanceDeliveryModal key={balanceBill.id} bill={balanceBill} onClose={() => setBalanceBill(null)} onSaved={() => { setBalanceBill(null); fetchBillsListPage(); load(); }} />}
-      {(modal === 'bill' || reconcileBill) && <PurchaseBillReconciliation vendors={vendors} initialVendor={form.vendor_id} initialPo={form.vendor_po_id} legacy={reconcileBill} onClose={() => { setModal(false); setReconcileBill(null); }} onSaved={() => { setModal(false); setReconcileBill(null); fetchBillsListPage(); fetchBillsFuPage(); load(); }} />}
+      {(modal === 'bill' || reconcileBill) && (
+        <PurchaseBillReconciliation
+          vendors={vendors}
+          initialVendor={form.vendor_id}
+          initialPo={form.vendor_po_id}
+          legacy={reconcileBill}
+          onClose={() => { setModal(false); setReconcileBill(null); }}
+          onSaved={async (newBill) => {
+            setModal(false);
+            setReconcileBill(null);
+            // Instantly switch to Purchase Bills sub-tab so newly uploaded bill is visible immediately
+            setBillsSubTab('bills');
+            setBillsListPage(1);
+            setBillsListSearch('');
+            if (newBill?.id) {
+              setNewlyAddedBillId(newBill.id);
+              setTimeout(() => setNewlyAddedBillId(null), 8000);
+            }
+            await fetchBillsListPage();
+            await fetchBillsFuPage();
+            load();
+            window.dispatchEvent(new CustomEvent('sepl:bill-uploaded', { detail: newBill }));
+          }}
+        />
+      )}
       {/* Purchase Bill Modal */}
       <Modal isOpen={modal === 'legacy-bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
         <form onSubmit={savePurchaseBill} className="space-y-4">

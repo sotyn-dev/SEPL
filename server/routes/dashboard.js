@@ -18,6 +18,123 @@ router.get('/active-projects', (req, res) => {
   }))());
 });
 
+
+// TK-01554: Executive Action & Approval Center for MD Sir & Management
+// Pulls all pending items requiring executive sign-off:
+// 1. Delegated tasks where assignee uploaded completion proof
+// 2. Deadline extension requests on delegated tasks
+// 3. Help tickets where assignee submitted resolution proof
+router.get('/executive-approvals', (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  const isMD = isAdmin || String(req.user.email || '').toLowerCase() === 'director@securedengineers.com';
+
+  try {
+    // 1. Delegated tasks awaiting proof review
+    let delegSql = `
+      SELECT 
+        d.id,
+        d.title,
+        d.description,
+        d.assigned_by,
+        d.assigned_to,
+        d.due_date,
+        d.status,
+        d.proof_url,
+        d.proof_remarks,
+        d.submitted_at,
+        d.project_name,
+        d.attachment_url,
+        u_to.name as assigned_to_name,
+        u_by.name as assigned_by_name,
+        ROUND((julianday('now') - julianday(COALESCE(d.submitted_at, 'now'))) * 24, 1) as hours_waiting
+      FROM delegations d
+      LEFT JOIN users u_to ON u_to.id = d.assigned_to
+      LEFT JOIN users u_by ON u_by.id = d.assigned_by
+      WHERE d.status = 'submitted'
+    `;
+    const delegParams = [];
+    if (!isMD) {
+      delegSql += ' AND d.assigned_by = ?';
+      delegParams.push(uid);
+    }
+    delegSql += ' ORDER BY d.submitted_at ASC';
+    const delegations = db.prepare(delegSql).all(...delegParams);
+
+    // 2. Deadline extension requests on delegated tasks
+    let extSql = `
+      SELECT 
+        d.id,
+        d.title,
+        d.assigned_to,
+        d.due_date,
+        d.requested_due_date,
+        d.extension_reason,
+        d.extension_count,
+        u_to.name as assigned_to_name,
+        u_by.name as assigned_by_name
+      FROM delegations d
+      LEFT JOIN users u_to ON u_to.id = d.assigned_to
+      LEFT JOIN users u_by ON u_by.id = d.assigned_by
+      WHERE d.extension_status = 'pending'
+    `;
+    const extParams = [];
+    if (!isMD) {
+      extSql += ' AND d.assigned_by = ?';
+      extParams.push(uid);
+    }
+    extSql += ' ORDER BY d.id DESC';
+    const extensions = db.prepare(extSql).all(...extParams);
+
+    // 3. Help tickets with submitted proof awaiting review / resolution
+    let ticketsSql = `
+      SELECT 
+        t.id,
+        t.ticket_no,
+        t.subject,
+        t.description,
+        t.category,
+        t.priority,
+        t.status,
+        t.proof_url,
+        t.proof_notes,
+        t.proof_submitted_at,
+        t.deadline_date,
+        t.module,
+        u_to.name as assigned_to_name,
+        u_by.name as user_name,
+        ROUND((julianday('now') - julianday(COALESCE(t.proof_submitted_at, 'now'))) * 24, 1) as hours_waiting
+      FROM support_tickets t
+      LEFT JOIN users u_to ON u_to.id = t.assigned_to
+      LEFT JOIN users u_by ON u_by.id = t.user_id
+      WHERE t.status = 'submitted'
+    `;
+    const ticketsParams = [];
+    if (!isMD) {
+      ticketsSql += ' AND (t.user_id = ? OR t.assigned_to = ?)';
+      ticketsParams.push(uid, uid);
+    }
+    ticketsSql += ' ORDER BY t.proof_submitted_at ASC';
+    const tickets = db.prepare(ticketsSql).all(...ticketsParams);
+
+    const totalCount = delegations.length + extensions.length + tickets.length;
+
+    res.json({
+      totalCount,
+      delegationsCount: delegations.length,
+      extensionsCount: extensions.length,
+      ticketsCount: tickets.length,
+      delegations,
+      extensions,
+      tickets
+    });
+  } catch (err) {
+    console.error('[DashboardExecutiveApprovals] Error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch executive approvals' });
+  }
+});
+
 router.get('/', (req, res) => {
   const db = getDb();
   const stats = {

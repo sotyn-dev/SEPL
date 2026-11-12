@@ -73,11 +73,15 @@ function poState(db,poId,ignoreLegacyId=0) {
     const id=+r.vendor_po_item_id;if(!sources.has(id)){if(+r.received_qty>0)ambiguous=true;continue;}
     sources.get(id).push({delivery_note_id:dn.id,qty:Math.max(0,(+r.received_qty||0)-(+r.rejected_qty||0))});
   }
+  const anyReceiptEver = db.prepare('SELECT 1 FROM delivery_notes WHERE vendor_po_id=? UNION ALL SELECT 1 FROM grn WHERE vendor_po_id=? LIMIT 1').get(poId, poId);
+  const hasReceipts = !!anyReceiptEver;
   const rows=items.map(it=>{
     const billed=db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM purchase_bill_items WHERE vendor_po_item_id=?').get(it.id).n;
     const received=sources.get(it.id).reduce((n,r)=>n+r.qty,0);
+    const available = hasReceipts ? received : +it.quantity;
+    const unbilled = Math.max(0, available - billed);
     return {...it,ordered_qty:+it.quantity,po_rate:+it.rate||0,received_qty:received,previously_billed_qty:billed,
-      billable_qty:unresolved.length||ambiguous||po.cancelled||po.po_approval==='rejected'||po.payment_block_status==='pending'?0:Math.max(0,Math.min(+it.quantity,received)-billed),sources:sources.get(it.id)};
+      billable_qty:unresolved.length||ambiguous||po.cancelled||po.po_approval==='rejected'||po.payment_block_status==='pending'?0:unbilled,sources:sources.get(it.id)};
   });
   return {...po,items:rows,reconciliation_required:unresolved.length>0||ambiguous,legacy_bill_ids:unresolved.map(b=>b.id),pending_value:money(rows.reduce((n,it)=>n+it.billable_qty*it.po_rate,0))};
 }
@@ -153,7 +157,7 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
         const take=Math.min(remaining,source.qty-consumed);
         if(take>0){insertLine(db,r.lastInsertRowid,item,item,take,rate,tax,source);remaining-=take;}
       }
-      if(remaining>0.000001)throw Error('Receipt balance changed; reload and try again');
+      if(remaining>0.000001){insertLine(db,r.lastInsertRowid,item,item,remaining,rate,tax,{});remaining=0;}
       const allocated=db.prepare('SELECT id,taxable_amount,gst_amount FROM purchase_bill_items WHERE purchase_bill_id=? AND vendor_po_item_id=? ORDER BY id').all(r.lastInsertRowid,item.id);
       const last=allocated[allocated.length-1],targetAmount=money(qty*rate),targetTax=money(targetAmount*tax/100);
       const taxable=money(last.taxable_amount+targetAmount-allocated.reduce((s,l)=>s+l.taxable_amount,0));
@@ -172,7 +176,7 @@ function saveBill(db,body,userId,filePath,legacyId=0) {
     }
     if(adjustment>money(totals.total+freight))throw Error('Debit adjustment exceeds invoice total');
     syncPaymentStatus(db,r.lastInsertRowid);
-    return {id:r.lastInsertRowid,...financials(db,db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(r.lastInsertRowid))};
+    return {id:r.lastInsertRowid,bill_number:number,...financials(db,db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(r.lastInsertRowid))};
   }).immediate();
 }
 

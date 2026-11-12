@@ -416,6 +416,82 @@ router.get('/candidates', (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
+// TK-01553: 1-week pre-joining alert popup for candidates as per offer letter
+// Strictly restricted to: info@securedengineers.com, fxbrajwant@gmail.com, hr1executive@gmail.com
+const UPCOMING_JOINING_WHITELIST = [
+  'info@securedengineers.com',
+  'fxbrajwant@gmail.com',
+  'hr1executive@gmail.com'
+];
+
+router.get('/candidates/upcoming-joinings', (req, res) => {
+  const userEmail = String(req.user?.email || '').trim().toLowerCase();
+  const isDev = process.env.NODE_ENV !== 'production';
+  const userRole = String(req.user?.role || '').trim().toLowerCase();
+  const isWhitelisted = UPCOMING_JOINING_WHITELIST.includes(userEmail) || (isDev && (userRole === 'admin' || userEmail === 'admin@erp.com'));
+  if (!isWhitelisted) {
+    return res.json({ allowed: false, count: 0, candidates: [] });
+  }
+
+  const db = getDb();
+  try {
+    const sql = `
+      SELECT 
+        c.id,
+        c.name,
+        c.phone,
+        c.email,
+        COALESCE(c.offered_position, c.position) AS position,
+        c.offered_salary,
+        c.joining_date,
+        c.reporting_to,
+        c.status,
+        c.offer_letter_file,
+        c.offer_sent_at,
+        c.offer_accepted_at,
+        CAST(ROUND(julianday(c.joining_date) - julianday(DATE('now', 'localtime'))) AS INTEGER) AS days_left
+      FROM candidates c
+      WHERE c.joining_date IS NOT NULL
+        AND LOWER(COALESCE(c.status, '')) NOT IN ('onboarded', 'rejected', 'declined', 'joined', 'withdrawn')
+        AND (julianday(c.joining_date) - julianday(DATE('now', 'localtime'))) BETWEEN -1 AND 7
+
+      UNION ALL
+
+      SELECT
+        hc.id,
+        hc.full_name AS name,
+        hc.phone,
+        hc.email,
+        COALESCE(ho.offered_position, hc.current_role) AS position,
+        ho.offered_salary,
+        ho.joining_date,
+        '' AS reporting_to,
+        ho.status,
+        ho.offer_letter_url AS offer_letter_file,
+        ho.sent_at AS offer_sent_at,
+        ho.responded_at AS offer_accepted_at,
+        CAST(ROUND(julianday(ho.joining_date) - julianday(DATE('now', 'localtime'))) AS INTEGER) AS days_left
+      FROM hr_offers ho
+      JOIN hr_candidates hc ON hc.id = ho.candidate_id
+      WHERE ho.joining_date IS NOT NULL
+        AND LOWER(COALESCE(ho.status, '')) NOT IN ('onboarded', 'rejected', 'declined', 'joined', 'withdrawn')
+        AND (julianday(ho.joining_date) - julianday(DATE('now', 'localtime'))) BETWEEN -1 AND 7
+        AND hc.id NOT IN (SELECT id FROM candidates WHERE joining_date IS NOT NULL)
+
+      ORDER BY joining_date ASC
+    `;
+    const candidates = db.prepare(sql).all();
+    res.json({
+      allowed: true,
+      count: candidates.length,
+      candidates
+    });
+  } catch (err) {
+    console.error('[upcoming-joinings error]', err.message);
+    res.status(500).json({ error: 'Failed to retrieve upcoming joinings: ' + err.message });
+  }
+});
+
 // ── Duplicate-detection helper (mam 2026-05-22 ATS spec) ─────────
 // "Candidate duplicate detection" — match on normalised email OR last-10-
 // digit phone.  Returns an array of {id, name, status, created_at} the
@@ -746,6 +822,8 @@ router.get('/candidates/stats', (req, res) => {
   const bySource = db.prepare('SELECT source, COUNT(*) as count FROM candidates GROUP BY source').all();
   res.json({ total: total.count, byStatus, bySource });
 });
+
+
 
 // Employees — salary is confidential; the salary field ships only to callers
 // holding employee_salary.can_view (admin included — getUserPermissions grants

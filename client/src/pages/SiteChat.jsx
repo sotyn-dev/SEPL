@@ -8,6 +8,7 @@ import ChatSharedAttachment from '../components/ChatSharedAttachment';
 import ChatShareStatusModal from '../components/ChatShareStatusModal';
 import ChatPinnedBanner from '../components/ChatPinnedBanner';
 import ChatReactionsModal from '../components/ChatReactionsModal';
+import ImageViewerModal from '../components/ImageViewerModal';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
@@ -2624,83 +2625,14 @@ export default function SiteChat() {
         currentUserId={user?.id}
       />
 
-      {/* ── Image preview Lightbox (with clear header buttons, download & mobile Back button support) ── */}
+      {/* ── Image preview Lightbox (with interactive Zoom In/Out, Pan, Wheel & Pinch) ── */}
       {previewImage && (
-        <div
-          className="fixed inset-0 z-[100] flex flex-col justify-between select-none"
-          style={{ backgroundColor: 'rgba(5, 8, 16, 0.98)', backdropFilter: 'blur(8px)' }}
-          onClick={closeImagePreview}
-        >
-          {/* Header Bar: Solid, high-contrast dark bar with crisp, colorful buttons */}
-          <div
-            className="flex items-center justify-between px-3 sm:px-6 py-2.5 z-10 shrink-0 shadow-lg"
-            style={{ backgroundColor: '#0f172a', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Left: Close Button with Back Arrow + File Title */}
-            <div className="flex items-center gap-2.5 min-w-0 pr-2">
-              <button
-                type="button"
-                onClick={closeImagePreview}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-white font-semibold text-xs sm:text-sm border border-gray-600 shadow-md transition touch-manipulation cursor-pointer"
-                title="Close image (or press phone Back)"
-                aria-label="Close image"
-              >
-                <FiArrowLeft size={18} className="text-white shrink-0" />
-                <span>Close</span>
-              </button>
-              <span className="text-white text-xs sm:text-sm font-semibold truncate max-w-[140px] sm:max-w-md">
-                {previewImage.name || 'Photo preview'}
-              </span>
-            </div>
-
-            {/* Right: Download Button + Big Red Close Button */}
-            <div className="flex items-center gap-2 shrink-0">
-              <a
-                href={previewImage.downloadUrl || previewImage.url}
-                download={previewImage.name || 'image'}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-md transition touch-manipulation cursor-pointer"
-                title="Download image"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <FiDownload size={15} className="shrink-0" />
-                <span>Download</span>
-              </a>
-              <button
-                type="button"
-                onClick={closeImagePreview}
-                className="p-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-md transition touch-manipulation cursor-pointer flex items-center justify-center"
-                title="Close (✕)"
-                aria-label="Close"
-              >
-                <FiX size={18} />
-              </button>
-            </div>
-          </div>
-
-          {/* Centered Image */}
-          <div className="flex-1 flex items-center justify-center p-2 sm:p-4 min-h-0 overflow-auto">
-            <img
-              src={previewImage.url}
-              alt={previewImage.name || 'Preview'}
-              className="max-h-[82vh] max-w-[96vw] object-contain rounded-lg shadow-2xl transition-transform"
-              onClick={(e) => e.stopPropagation()}
-            />
-          </div>
-
-          {/* Footer Bar / Mobile hint: Solid bar, high legibility */}
-          <div
-            className="px-4 py-2 text-center shrink-0"
-            style={{ backgroundColor: '#0f172a', borderTop: '1px solid rgba(255, 255, 255, 0.12)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-xs text-gray-300 font-medium">
-              Tap <span className="font-bold text-white bg-rose-600/80 px-1.5 py-0.5 rounded text-[11px]">✕ Close</span> or press the <span className="font-bold text-white underline">Back</span> button on your phone
-            </div>
-          </div>
-        </div>
+        <ImageViewerModal
+          src={previewImage.url}
+          name={previewImage.name}
+          downloadUrl={previewImage.downloadUrl}
+          onClose={closeImagePreview}
+        />
       )}
     </div>
   );
