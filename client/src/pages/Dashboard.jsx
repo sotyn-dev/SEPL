@@ -8,6 +8,7 @@ import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare
 import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
 import DashHero3D from '../components/DashHero3D';
+import ExecutiveApprovalCenter from '../components/ExecutiveApprovalCenter';
 import DashboardHelpTickets from '../components/DashboardHelpTickets';
 import DashboardAssignments from '../components/DashboardAssignments';
 import DashboardRaci from '../components/DashboardRaci';
@@ -72,6 +73,10 @@ export default function Dashboard() {
       {/* Daily SOTYN.AI-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
       <ErpMantraBanner />
+
+      {/* TK-01554: Executive Action & Approval Center for MD Sir & Admins */}
+      <ExecutiveApprovalCenter />
+
       <ActiveProjectsMetric />
 
       {/* Team Performance — LAST completed week, straight from the Champions

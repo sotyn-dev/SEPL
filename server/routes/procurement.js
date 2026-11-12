@@ -5960,6 +5960,10 @@ function attachDeliveryBalance(db, row) {
   const match = require('../lib/purchaseBillMatching').review(db, row);
   row.match_status = match.status; row.match_hold = match.hold_amount; row.payable_now = match.payable_now;
   row.linked_pos = db.prepare('SELECT vp.id,vp.po_number FROM purchase_bill_pos bp JOIN vendor_pos vp ON vp.id=bp.vendor_po_id WHERE bp.purchase_bill_id=?').all(row.id);
+  if (!row.linked_pos.length && row.vendor_po_id) {
+    const p = db.prepare('SELECT id, po_number FROM vendor_pos WHERE id=?').get(row.vendor_po_id);
+    if (p) row.linked_pos = [p];
+  }
 
   if (row.delivery_mode === 'partial' && row.vendor_po_id) {
     row.pending_delivery_lines = require('../lib/partialDeliveries').balanceItems(db, row.vendor_po_id).filter(it => it.remaining_qty > 0).length;
@@ -6049,7 +6053,7 @@ router.get('/purchase-bills', (req, res) => {
       FROM purchase_bills pb
       LEFT JOIN vendors v ON pb.vendor_id = v.id
       ${whereSql}
-      ORDER BY pb.created_at DESC
+      ORDER BY pb.id DESC
       LIMIT ? OFFSET ?
     `).all(...params, limitNum, offset);
 
@@ -6070,7 +6074,7 @@ router.get('/purchase-bills', (req, res) => {
     FROM purchase_bills pb
     LEFT JOIN vendors v ON pb.vendor_id = v.id
     ${whereSql}
-    ORDER BY pb.created_at DESC
+    ORDER BY pb.id DESC
   `).all(...params);
 
   for (const row of rows) attachDeliveryBalance(db, row);
@@ -6307,6 +6311,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, freight_amount, filePath, materialStatus, req.user?.id || null);
 
     if (staged) db.prepare("UPDATE purchase_bills SET delivery_mode='partial' WHERE id=?").run(r.lastInsertRowid);
+    if (vendor_po_id) db.prepare('INSERT OR IGNORE INTO purchase_bill_pos (purchase_bill_id, vendor_po_id) VALUES (?, ?)').run(r.lastInsertRowid, vendor_po_id);
 
     // Mam (2026-06-02): "in rec. against delivery note show here ok
     // site name also show here delivery note number and against it

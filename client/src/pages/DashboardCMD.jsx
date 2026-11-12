@@ -27,6 +27,7 @@ import {
   FunnelBar, TicksList, HBar, Row, ConstraintBanner, StageTabs, DataGap,
 } from '../components/cmdDashboardUi';
 import { fmtDateTime } from '../utils/datetime';
+import ExecutiveApprovalCenter from '../components/ExecutiveApprovalCenter';
 
 const tooltipStyle = {
   contentStyle: { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, color: C.ink, fontSize: 11 },
@@ -119,6 +120,7 @@ export default function DashboardCMD() {
       <StageTabs active="op" onChange={(t) => t === 'toc' && nav('/dashboard/cmd-toc')} />
 
       <div style={{ padding: 14, display: 'grid', gap: 12, maxWidth: 1500, margin: '0 auto' }}>
+        <ExecutiveApprovalCenter isDark />
 
         {/* ============ PULSE 8 ============ */}
         <SectionHead first>Pulse · 8 numbers that decide today</SectionHead>

@@ -11,6 +11,8 @@ import EnablePushButton from './EnablePushButton';
 import TrainingVideoButton from './TrainingVideoButton';
 import AIAgentChat from './AIAgentChat';
 import DailyStandupModal, { DailyFocusHeaderButton } from './DailyStandupModal';
+import CandidateJoiningAlertModal, { CandidateJoiningHeaderButton } from './CandidateJoiningAlertModal';
+import { ExecutiveApprovalHeaderButton } from './ExecutiveApprovalCenter';
 import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
@@ -1125,6 +1127,8 @@ export default function Layout() {
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
           {/* Daily Standup & Focus Briefing trigger pill */}
+          <ExecutiveApprovalHeaderButton />
+          <CandidateJoiningHeaderButton />
           <DailyFocusHeaderButton />
           {/* Mam (2026-05-22): unified inbox bell. */}
           <AnnouncementBell />
@@ -1219,6 +1223,7 @@ export default function Layout() {
           Tickets is still reachable from the sidebar page. */}
       <AIAgentChat />
       <DailyStandupModal />
+      <CandidateJoiningAlertModal />
     </div>
     </CallProvider>
   );
