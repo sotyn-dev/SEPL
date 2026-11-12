@@ -8,6 +8,7 @@
 //                              (powers Supervisor MIS KPI)
 
 const express = require('express');
+const QRCode = require('qrcode');
 const router = express.Router();
 const { getDb } = require('../db/schema');
 const { statusFilter } = require('../lib/statusFilter');
@@ -24,6 +25,22 @@ try { getDb().exec('ALTER TABLE tools ADD COLUMN item_master_id INTEGER REFERENC
 const toolColumns = getDb().prepare('PRAGMA table_info(tools)').all().map(c => c.name);
 if (!toolColumns.includes('quantity')) getDb().exec('ALTER TABLE tools ADD COLUMN quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0)');
 if (!toolColumns.includes('unit')) getDb().exec('ALTER TABLE tools ADD COLUMN unit TEXT');
+// Tools Barcode & TVS Sticker columns migration (TSK-0514)
+try {
+  const db = getDb();
+  const cols = db.prepare('PRAGMA table_info(tools)').all().map(c => c.name);
+  if (!cols.includes('barcode')) db.exec('ALTER TABLE tools ADD COLUMN barcode TEXT');
+  if (!cols.includes('sticker_status')) db.exec("ALTER TABLE tools ADD COLUMN sticker_status TEXT DEFAULT 'pending_print'");
+  if (!cols.includes('sticker_printed_at')) db.exec('ALTER TABLE tools ADD COLUMN sticker_printed_at DATETIME');
+  if (!cols.includes('sticker_printed_by')) db.exec('ALTER TABLE tools ADD COLUMN sticker_printed_by INTEGER REFERENCES users(id)');
+  if (!cols.includes('sticker_pasted_at')) db.exec('ALTER TABLE tools ADD COLUMN sticker_pasted_at DATETIME');
+  if (!cols.includes('sticker_pasted_by')) db.exec('ALTER TABLE tools ADD COLUMN sticker_pasted_by INTEGER REFERENCES users(id)');
+  if (!cols.includes('sticker_photo_url')) db.exec('ALTER TABLE tools ADD COLUMN sticker_photo_url TEXT');
+  if (!cols.includes('sticker_notes')) db.exec('ALTER TABLE tools ADD COLUMN sticker_notes TEXT');
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_tools_barcode ON tools(barcode)'); } catch (_) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_tools_sticker_status ON tools(sticker_status)'); } catch (_) {}
+} catch (_) {}
+
 
 // Preserve assigned serials; fill older blank records once with the next number.
 getDb().transaction(() => {
@@ -61,7 +78,7 @@ router.post('/rgp-sync', adminOnly, (req, res) => {
 router.get('/', requirePermission('tools', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { category, status, site_id, user_id, search } = req.query;
+    const { category, status, site_id, user_id, search, sticker_status } = req.query;
     let sql = `
       SELECT t.*,
              im.item_code as item_master_code,
@@ -72,11 +89,15 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
              im.photo_link as item_photo_link,
              s.name as current_site_name,
              u.name as current_user_name,
+             np.name as sticker_printed_by_name,
+             ap.name as sticker_pasted_by_name,
              cu.name as created_by_name
       FROM tools t
       LEFT JOIN item_master im ON im.id = t.item_master_id
       LEFT JOIN sites s ON s.id = t.current_site_id
       LEFT JOIN users u ON u.id = t.current_user_id
+      LEFT JOIN users np ON np.id = t.sticker_printed_by
+      LEFT JOIN users ap ON ap.id = t.sticker_pasted_by
       LEFT JOIN users cu ON cu.id = t.created_by
       WHERE 1=1
     `;
@@ -87,10 +108,14 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
     if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
     if (site_id) { sql += ' AND t.current_site_id = ?'; params.push(site_id); }
     if (user_id) { sql += ' AND t.current_user_id = ?'; params.push(user_id); }
+    if (sticker_status) {
+      sql += ' AND COALESCE(t.sticker_status, "pending_print") = ?';
+      params.push(sticker_status);
+    }
     if (search) {
-      sql += ` AND (LOWER(t.name) LIKE ? OR LOWER(t.tool_code) LIKE ? OR LOWER(t.serial_no) LIKE ? OR LOWER(im.item_code) LIKE ? OR LOWER(im.specification) LIKE ?)`;
+      sql += ` AND (LOWER(t.name) LIKE ? OR LOWER(t.tool_code) LIKE ? OR LOWER(COALESCE(t.barcode, '')) LIKE ? OR LOWER(COALESCE(t.brand, '')) LIKE ? OR LOWER(t.serial_no) LIKE ? OR LOWER(COALESCE(im.item_code, '')) LIKE ? OR LOWER(COALESCE(im.specification, '')) LIKE ?)`;
       const q = `%${search.toLowerCase()}%`;
-      params.push(q, q, q, q, q);
+      params.push(q, q, q, q, q, q, q);
     }
     sql += ' ORDER BY t.created_at DESC';
     res.json(db.prepare(sql).all(...params));
@@ -108,7 +133,12 @@ router.get('/stats', requirePermission('tools', 'view'), (req, res) => {
     const calibrationDue = db.prepare(`SELECT COUNT(*) as c FROM tools WHERE next_calibration_date IS NOT NULL AND next_calibration_date <= date('now', '+30 days')`).get().c;
     const totalValue = db.prepare(`SELECT COALESCE(SUM(purchase_price), 0) as s FROM tools WHERE status != 'scrapped'`).get().s;
     const bySite = db.prepare(TOOLS_SITE_SUMMARY_SQL).all();
-    res.json({ total, by_status: byStatus, by_category: byCategory, by_site: bySite, calibration_due_30d: calibrationDue, total_value: totalValue });
+    const byStickerStatus = db.prepare(`
+      SELECT COALESCE(sticker_status, 'pending_print') as status, COUNT(*) as c
+      FROM tools
+      GROUP BY COALESCE(sticker_status, 'pending_print')
+    `).all();
+    res.json({ total, by_status: byStatus, by_category: byCategory, by_site: bySite, by_sticker_status: byStickerStatus, calibration_due_30d: calibrationDue, total_value: totalValue });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -125,6 +155,195 @@ router.get('/lookup/rgp-items', requirePermission('tools', 'view'), (req, res) =
        ORDER BY item_code
     `).all();
     res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// Fast barcode scanner / mobile lookup (TSK-0514)
+router.get('/barcode/:code', async (req, res) => {
+  try {
+    const db = getDb();
+    const raw = String(req.params.code || '').trim();
+    if (!raw) return res.status(400).json({ error: 'Please provide a barcode or tool code' });
+
+    const tool = db.prepare(`
+      SELECT t.*,
+             im.item_code as item_master_code,
+             im.specification as item_specification,
+             im.size as item_size,
+             im.uom as item_uom,
+             COALESCE(NULLIF(TRIM(t.unit), ''), 'Nos') as resolved_unit,
+             im.photo_link as item_photo_link,
+             s.name as current_site_name,
+             s.address as current_site_address,
+             se.name as site_engineer_name,
+             se.phone as site_engineer_phone,
+             u.name as current_user_name,
+             u.phone as current_user_phone,
+             u.department as current_user_department,
+             np.name as sticker_printed_by_name,
+             ap.name as sticker_pasted_by_name,
+             cu.name as created_by_name
+      FROM tools t
+      LEFT JOIN item_master im ON im.id = t.item_master_id
+      LEFT JOIN sites s ON s.id = t.current_site_id
+      LEFT JOIN users se ON se.id = s.site_engineer_id
+      LEFT JOIN users u ON u.id = t.current_user_id
+      LEFT JOIN users np ON np.id = t.sticker_printed_by
+      LEFT JOIN users ap ON ap.id = t.sticker_pasted_by
+      LEFT JOIN users cu ON cu.id = t.created_by
+      WHERE UPPER(TRIM(COALESCE(t.barcode, ''))) = UPPER(?)
+         OR UPPER(TRIM(t.tool_code)) = UPPER(?)
+         OR UPPER(TRIM(COALESCE(t.serial_no, ''))) = UPPER(?)
+    `).get(raw, raw, raw);
+
+    if (!tool) {
+      return res.status(404).json({ error: `No tool found matching barcode / code "${raw}"` });
+    }
+
+    const movements = db.prepare(`
+      SELECT tm.*,
+             fs.name as from_site_name, ts.name as to_site_name,
+             fu.name as from_user_name, tu.name as to_user_name,
+             cb.name as created_by_name
+      FROM tool_movements tm
+      LEFT JOIN sites fs ON fs.id = tm.from_site_id
+      LEFT JOIN sites ts ON ts.id = tm.to_site_id
+      LEFT JOIN users fu ON fu.id = tm.from_user_id
+      LEFT JOIN users tu ON tu.id = tm.to_user_id
+      LEFT JOIN users cb ON cb.id = tm.created_by
+      WHERE tm.tool_id = ?
+      ORDER BY tm.created_at DESC
+      LIMIT 20
+    `).all(tool.id);
+
+    let qrDataUrl = null;
+    try {
+      qrDataUrl = await QRCode.toDataURL(tool.barcode || tool.tool_code, { width: 180, margin: 1, errorCorrectionLevel: 'M' });
+    } catch (_) {}
+
+    res.json({ ...tool, movements, qrDataUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Single tool label data + QR code for TVS Label Printer (TSK-0514)
+router.get('/:id/label-data', requirePermission('tools', 'view'), async (req, res) => {
+  try {
+    const db = getDb();
+    const tool = db.prepare(`
+      SELECT t.*,
+             s.name as current_site_name,
+             u.name as current_user_name
+      FROM tools t
+      LEFT JOIN sites s ON s.id = t.current_site_id
+      LEFT JOIN users u ON u.id = t.current_user_id
+      WHERE t.id = ?
+    `).get(req.params.id);
+
+    if (!tool) return res.status(404).json({ error: 'Tool not found' });
+    const code = tool.barcode || tool.tool_code;
+    const qrDataUrl = await QRCode.toDataURL(code, { width: 180, margin: 1, errorCorrectionLevel: 'M' });
+    res.json({ ...tool, qrDataUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Nancy batch-printing stickers on TVS printer (TSK-0514)
+router.post('/stickers/batch-print', requirePermission('tools', 'edit'), async (req, res) => {
+  try {
+    const db = getDb();
+    const { tool_ids } = req.body;
+    if (!Array.isArray(tool_ids) || !tool_ids.length) {
+      return res.status(400).json({ error: 'Select at least one tool to print' });
+    }
+    const updateStmt = db.prepare(`
+      UPDATE tools SET
+        sticker_status = 'printed',
+        sticker_printed_at = CURRENT_TIMESTAMP,
+        sticker_printed_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `);
+    const tx = db.transaction(() => {
+      for (const id of tool_ids) {
+        updateStmt.run(req.user.id, id);
+      }
+    });
+    tx();
+
+    // In-app alert for Ajmer / Plant & Machinery team
+    try {
+      const ajmerUsers = db.prepare(`
+        SELECT id FROM users
+        WHERE active=1 AND (
+          LOWER(name) LIKE '%ajmer%'
+          OR LOWER(department) LIKE '%machinery%'
+          OR LOWER(department) LIKE '%plant%'
+        )
+      `).all();
+      const notifStmt = db.prepare(`
+        INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+        VALUES (?, 'rgp_sticker_printed', ?, ?, '/tools?tab=barcodes', 'in_app', ?)
+      `);
+      for (const u of ajmerUsers) {
+        try {
+          notifStmt.run(
+            u.id,
+            `${tool_ids.length} Tool Barcode Stickers Printed`,
+            `Nancy has printed TVS barcode stickers for ${tool_ids.length} tools. Please paste them on the physical machines & upload photo proof.`,
+            `rgp-stickers-batch-${Date.now()}-${u.id}`
+          );
+        } catch (_) {}
+      }
+    } catch (notifErr) {
+      console.warn('[tools] notification error:', notifErr.message);
+    }
+
+    res.json({ success: true, count: tool_ids.length, message: `Marked ${tool_ids.length} tool stickers as printed by Nancy` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ajmer sticker pasted & physical photo verification (TSK-0514)
+router.post('/:id/sticker-pasted', (req, res, next) => {
+  if (req.user.role === 'admin' || req.user.id === 1001444 || (req.user.department && /plant|machinery|store|godown/i.test(req.user.department))) return next();
+  requirePermission('tools', 'edit')(req, res, next);
+}, (req, res) => {
+  try {
+    const db = getDb();
+    const { photo_url, notes, condition } = req.body;
+    if (!photo_url) return res.status(400).json({ error: 'Photo showing sticker pasted on tool is required' });
+
+    const tool = db.prepare('SELECT * FROM tools WHERE id=?').get(req.params.id);
+    if (!tool) return res.status(404).json({ error: 'Tool not found' });
+
+    const tx = db.transaction(() => {
+      db.prepare(`
+        UPDATE tools SET
+          sticker_status = 'pasted',
+          sticker_photo_url = ?,
+          sticker_pasted_at = CURRENT_TIMESTAMP,
+          sticker_pasted_by = ?,
+          sticker_notes = COALESCE(?, sticker_notes),
+          condition = COALESCE(?, condition),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(photo_url, req.user.id, notes || null, condition || null, req.params.id);
+
+      db.prepare(`
+        INSERT INTO tool_movements (tool_id, action, condition_at_action, notes, photo_url, created_by)
+        VALUES (?, 'maintenance', ?, ?, ?, ?)
+      `).run(req.params.id, condition || tool.condition, notes ? `Sticker pasted: ${notes}` : 'Physical barcode sticker pasted & verified with photo proof', photo_url, req.user.id);
+    });
+    tx();
+
+    res.json({ success: true, message: 'Sticker pasted and verified with photo proof' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -158,33 +377,60 @@ router.get('/:id', requirePermission('tools', 'view'), (req, res) => {
 });
 
 function createTool(db, b, createdBy) {
-    if (!b.item_master_id) throw Object.assign(new Error('Select an RGP item from Item Master'), { status: 400 });
-    const master = db.prepare(`SELECT id, item_name, department, current_price, uom FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
-    if (!master) throw Object.assign(new Error('The selected Item Master entry must be RGP type'), { status: 400 });
+    let master = null;
+    if (b.item_master_id) {
+      master = db.prepare(`SELECT id, item_name, department, current_price, uom, make FROM item_master WHERE id=?`).get(b.item_master_id);
+    }
+    const toolName = (b.name || (master ? master.item_name : '')).trim();
+    if (!toolName) throw Object.assign(new Error('Tool name or RGP item from Item Master is required'), { status: 400 });
+
     const quantity = b.quantity === undefined ? 1 : b.quantity;
-    const unit = b.unit === undefined ? 'Nos' : b.unit;
+    const unit = b.unit === undefined ? (master?.uom || 'Nos') : b.unit;
     if (!validQuantity(quantity)) throw Object.assign(new Error('Quantity must be greater than zero'), { status: 400 });
     if (!validUnit(unit)) throw Object.assign(new Error('Enter a unit (up to 30 characters)'), { status: 400 });
     const yr = new Date().getFullYear();
-    const tool_code = b.tool_code || nextSequence(db, 'tools', 'tool_code', `T-${yr}-`, { startFrom: 0, pad: 4 });
-    const serial_no = nextSequence(db, 'tools', 'serial_no', '');
+    const tool_code = b.tool_code || nextSequence(db, 'tools', 'tool_code', `T-${yr}-`, { startFrom: 1, pad: 4 });
+    const serial_no = b.serial_no || nextSequence(db, 'tools', 'serial_no', '');
+    const barcode = (b.barcode || tool_code).trim();
+    const brand = (b.brand || (master ? master.make : '') || '').trim() || null;
+    const model = (b.model || '').trim() || null;
+
     const r = db.prepare(`
       INSERT INTO tools (
-        item_master_id, tool_code, name, category, brand, model, serial_no,
+        item_master_id, tool_code, barcode, name, category, brand, model, serial_no,
         purchase_date, purchase_price, condition, status,
         current_site_id, current_user_id,
         last_calibration_date, next_calibration_date,
-        photo_url, notes, created_by, quantity, unit
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        photo_url, notes, created_by, quantity, unit,
+        sticker_status
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      master.id, tool_code, master.item_name, master.department || null, null, null, serial_no,
-      b.purchase_date || null, b.purchase_price ?? master.current_price ?? 0, b.condition || 'good', b.status || 'available',
-      b.current_site_id || null, b.current_user_id || null,
-      b.last_calibration_date || null, b.next_calibration_date || null,
-      b.photo_url || null, b.notes || null, createdBy, Number(quantity), unit.trim()
+      master ? master.id : null,
+      tool_code,
+      barcode,
+      toolName,
+      b.category || (master ? master.department : null) || 'Other',
+      brand,
+      model,
+      serial_no,
+      b.purchase_date || null,
+      b.purchase_price ?? master?.current_price ?? 0,
+      b.condition || 'good',
+      b.status || 'available',
+      b.current_site_id || null,
+      b.current_user_id || null,
+      b.last_calibration_date || null,
+      b.next_calibration_date || null,
+      b.photo_url || null,
+      b.notes || null,
+      createdBy,
+      Number(quantity),
+      unit.trim(),
+      b.sticker_status || 'pending_print'
     );
-    return { id: r.lastInsertRowid, tool_code, serial_no };
+    return { id: r.lastInsertRowid, tool_code, serial_no, barcode };
 }
+
 
 router.post('/', requirePermission('tools', 'create'), (req, res) => {
   try {
@@ -236,7 +482,12 @@ router.put('/:id', requirePermission('tools', 'edit'), (req, res) => {
       b.name = master.item_name;
       b.category = master.department || null;
     }
-    const fields = ['quantity','unit','item_master_id','name','category','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','photo_url','notes'];
+    const fields = [
+      'quantity','unit','item_master_id','name','category','brand','model','barcode',
+      'purchase_date','purchase_price','condition','status','current_site_id','current_user_id',
+      'last_calibration_date','next_calibration_date','photo_url','notes',
+      'sticker_status','sticker_printed_at','sticker_printed_by','sticker_pasted_at','sticker_pasted_by','sticker_photo_url','sticker_notes'
+    ];
     const sets = [];
     const vals = [];
     for (const f of fields) {

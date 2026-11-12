@@ -3,8 +3,9 @@ import NumberedTable from '../components/NumberedTable';
 // multimeters, safety gear) with its current location (site / user),
 // condition, and movement history. Plus weekly tools-list submission
 // per site that powers the Supervisor MIS scorecard KPI.
+// TSK-0514: TVS Barcode sticker printing (Nancy) & Physical Pasting / Photo Verification (Ajmer)
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -13,8 +14,18 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard, FiImage, FiX } from 'react-icons/fi';
+import {
+  FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle,
+  FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard,
+  FiImage, FiX, FiPrinter, FiTag, FiCamera, FiCheckCircle,
+  FiCheckSquare, FiSquare, FiEye
+} from 'react-icons/fi';
 import { fmtDateTime } from '../utils/datetime';
+import { generateCode128Svg } from '../utils/barcode128';
+import TvsBarcodeModal from '../components/TvsBarcodeModal';
+import AjmerStickerPasteModal from '../components/AjmerStickerPasteModal';
+import ToolInspectionModal from '../components/ToolInspectionModal';
+import BarcodeScanner from '../components/BarcodeScanner';
 
 const CATEGORIES = ['Drilling', 'Cutting', 'Measurement', 'Safety', 'Power', 'Hand', 'Lifting', 'Electrical', 'Other'];
 const STATUSES = ['available', 'in_use', 'maintenance', 'lost', 'scrapped'];
@@ -43,7 +54,7 @@ const lastMonday = () => {
 };
 
 function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
-  const newRow = () => ({ key: crypto.randomUUID(), item_master_id: '', quantity: 1, unit: 'Nos', condition: 'good', status: 'available', purchase_price: 0, notes: '', photo_url: '' });
+  const newRow = () => ({ key: crypto.randomUUID(), item_master_id: '', name: '', brand: '', quantity: 1, unit: 'Nos', condition: 'good', status: 'available', purchase_price: 0, notes: '', photo_url: '' });
   const [rows, setRows] = useState(() => [newRow()]);
   const [siteId, setSiteId] = useState(null);
   const [userId, setUserId] = useState(null);
@@ -64,8 +75,8 @@ function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
     event.preventDefault();
     if (busy) return;
     if (!siteId) return toast.error('Select a site');
-    const missing = rows.findIndex(row => !row.item_master_id);
-    if (missing >= 0) return toast.error(`Row ${missing + 1}: select an RGP item`);
+    const missing = rows.findIndex(row => !row.item_master_id && !row.name?.trim());
+    if (missing >= 0) return toast.error(`Row ${missing + 1}: enter a tool name or pick an RGP item`);
     setBusy(true);
     try {
       const { data } = await api.post('/tools/bulk', { site_id: siteId, user_id: userId, items: rows.map(({ key, ...row }) => row) });
@@ -81,10 +92,23 @@ function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
           <div><label className="label">Site Name *</label><SearchableSelect options={sites} value={siteId} valueKey="id" displayKey="name" placeholder="Pick site…" onChange={site => setSiteId(site?.id || null)} /></div>
           <div><label className="label">Issued To (optional)</label><SearchableSelect options={users} value={userId} valueKey="id" displayKey="name" placeholder="Pick employee…" onChange={user => setUserId(user?.id || null)} /></div>
         </div>
-        <p className="text-xs text-gray-500">All entries will be saved to this site. Each entry receives its own automatic serial number.</p>
+        <p className="text-xs text-gray-500">All entries will be saved to this site. Each entry receives its own automatic serial number and barcode.</p>
         {rows.map((row, index) => <div key={row.key} className="border rounded-lg p-3 space-y-3">
           <div className="flex justify-between items-center"><h3 className="font-semibold text-sm">Item {index + 1}</h3><button type="button" disabled={rows.length === 1} onClick={() => setRows(previous => previous.filter(item => item.key !== row.key))} className="text-sm text-red-600 disabled:opacity-30">Remove</button></div>
-          <div><label className="label">RGP Item *</label><SearchableSelect options={items} value={row.item_master_id || null} valueKey="id" displayKey="label" placeholder="Pick an RGP item…" onChange={item => update(row.key, { item_master_id: item?.id || '', purchase_price: item?.current_price || 0 })} /></div>
+          <div className="grid sm:grid-cols-2 gap-2">
+            <div>
+              <label className="label">Tool / Machine Name *</label>
+              <input className="input" placeholder="e.g. Bosch Rotary Hammer" value={row.name} onChange={e => update(row.key, { name: e.target.value })} required={!row.item_master_id} />
+            </div>
+            <div>
+              <label className="label">Make / Company (Brand)</label>
+              <input className="input" placeholder="e.g. Bosch, Makita" value={row.brand} onChange={e => update(row.key, { brand: e.target.value })} />
+            </div>
+          </div>
+          <div>
+            <label className="label">Link RGP Item Master (Optional)</label>
+            <SearchableSelect options={items} value={row.item_master_id || null} valueKey="id" displayKey="label" placeholder="Pick an RGP item…" onChange={item => update(row.key, { item_master_id: item?.id || '', name: row.name || item?.item_name || '', brand: row.brand || item?.make || '', purchase_price: item?.current_price || 0 })} />
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <label><span className="label">Quantity *</span><input type="number" required min="0.000001" step="any" className="input" value={row.quantity} onChange={e => update(row.key, { quantity: e.target.value })} /></label>
             <label><span className="label">Unit *</span><input required maxLength={30} className="input" value={row.unit} onChange={e => update(row.key, { unit: e.target.value })} /></label>
@@ -115,7 +139,7 @@ export default function Tools() {
   const [users, setUsers] = useState([]);
   const [rgpItems, setRgpItems] = useState([]);
   const [imagePreview, setImagePreview] = useState(null);
-  const [filters, setFilters] = useState({ category: '', status: [], search: '' });
+  const [filters, setFilters] = useState({ category: '', status: [], search: '', sticker_status: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -126,21 +150,30 @@ export default function Tools() {
   const [submissions, setSubmissions] = useState([]);
   const [submissionWeek, setSubmissionWeek] = useState(lastMonday());
   const [submitForm, setSubmitForm] = useState({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' });
-  // Windows the catalog table only — `tools` itself stays the full filtered
-  // list (the weekly-submission modal's picker needs every tool).
-  const toolsPager = usePagination(tools, { resetKey: [filters.search, filters.category, filters.status] });
+
+  // TSK-0514: TVS Barcode sticker & scanning state
+  const [tvsModalTools, setTvsModalTools] = useState(null);
+  const [selectedForPrint, setSelectedForPrint] = useState([]);
+  const [pasteModalTool, setPasteModalTool] = useState(null);
+  const [inspectModalTool, setInspectModalTool] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [barcodeFilter, setBarcodeFilter] = useState('all');
+
+  // Windows the catalog table only
+  const toolsPager = usePagination(tools, { resetKey: [filters.search, filters.category, filters.status, filters.sticker_status] });
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (filters.category) params.set('category', filters.category);
     if (filters.status.length) params.set('status', filters.status.join(','));
     if (filters.search) params.set('search', filters.search);
+    if (filters.sticker_status) params.set('sticker_status', filters.sticker_status);
     api.get(`/tools?${params}`).then(r => setTools(r.data)).catch(() => { });
     api.get('/tools/stats').then(r => setStats(r.data)).catch(() => { });
   }, [filters]);
 
   useEffect(() => {
-    if (tab === 'catalog' || tab === 'dashboard') load();
+    if (tab === 'catalog' || tab === 'dashboard' || tab === 'barcodes') load();
     if (tab === 'submissions') {
       api.get(`/tools/submissions/list?week_start=${submissionWeek}`).then(r => setSubmissions(r.data)).catch(() => { });
     }
@@ -153,7 +186,7 @@ export default function Tools() {
   }, [tab, load, submissionWeek]);
 
   useEffect(() => {
-    if (admin && (tab === 'dashboard' || tab === 'catalog')) {
+    if (admin && (tab === 'dashboard' || tab === 'catalog' || tab === 'barcodes')) {
       api.get('/tools/rgp-sync').then(r => setRgpSync(r.data)).catch(() => toast.error('Could not load RGP import status'));
     }
   }, [admin, tab]);
@@ -172,7 +205,11 @@ export default function Tools() {
   const save = async (e) => {
     e.preventDefault();
     if (uploadingPhoto) return;
-    const payload = { ...form, quantity: form.quantity ?? 1, unit: form.unit ?? form.resolved_unit ?? 'Nos' };
+    const payload = {
+      ...form,
+      quantity: form.quantity ?? 1,
+      unit: form.unit ?? form.resolved_unit ?? 'Nos'
+    };
     try {
       if (form.id) {
         await api.put(`/tools/${form.id}`, payload);
@@ -235,28 +272,81 @@ export default function Tools() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Filtered tools for barcodes tab
+  const barcodeFilteredTools = useMemo(() => {
+    if (barcodeFilter === 'pending_print') return tools.filter(t => (t.sticker_status || 'pending_print') === 'pending_print');
+    if (barcodeFilter === 'printed') return tools.filter(t => t.sticker_status === 'printed');
+    if (barcodeFilter === 'pasted') return tools.filter(t => t.sticker_status === 'pasted');
+    return tools;
+  }, [tools, barcodeFilter]);
+
+  const pendingCount = tools.filter(t => (t.sticker_status || 'pending_print') === 'pending_print').length;
+  const printedCount = tools.filter(t => t.sticker_status === 'printed').length;
+  const pastedCount = tools.filter(t => t.sticker_status === 'pasted').length;
+
+  const toggleSelectForPrint = (id) => {
+    setSelectedForPrint(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const selectAllPendingPrint = () => {
+    const ids = barcodeFilteredTools.map(t => t.id);
+    if (selectedForPrint.length === ids.length) {
+      setSelectedForPrint([]);
+    } else {
+      setSelectedForPrint(ids);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><FiTool className="text-blue-600" /> Tools Management</h1>
-          <p className="text-sm text-gray-500">Returnable assets — catalog, issue, return, weekly site submissions.</p>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <FiTool className="text-blue-600" /> Tools & RGP Management
+          </h1>
+          <p className="text-sm text-gray-500">
+            Returnable assets catalog, TVS barcode sticker printing, Ajmer physical pasting, and site barcode scanning.
+          </p>
         </div>
-        {canCreate('tools') && tab === 'catalog' && (
-          <div className="flex gap-2 flex-wrap">
-          <button onClick={() => { setForm({ condition: 'good', status: 'available', quantity: 1, unit: 'Nos' }); setModal('add'); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Tool</button>
-          <button onClick={() => setModal('bulk')} className="btn btn-secondary flex items-center gap-1"><FiPlus size={14} /> Add Multiple Tools</button>
-          </div>
-        )}
-        {canCreate('tools') && tab === 'submissions' && (
-          <button onClick={() => { setSubmitForm({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' }); setModal('submit'); }} className="btn btn-primary flex items-center gap-1"><FiClipboard size={14} /> Submit Weekly List</button>
-        )}
+        <div className="flex gap-2 flex-wrap items-center">
+          <button
+            onClick={() => setScannerOpen(true)}
+            className="btn bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm font-semibold text-xs py-2 px-3.5"
+            title="Open camera or barcode gun scanner"
+          >
+            <FiCamera size={15} /> Scan Tool Barcode
+          </button>
+          {canCreate('tools') && tab === 'catalog' && (
+            <>
+              <button onClick={() => { setForm({ condition: 'good', status: 'available', quantity: 1, unit: 'Nos', brand: '' }); setModal('add'); }} className="btn btn-primary flex items-center gap-1 text-xs py-2 px-3">
+                <FiPlus size={14} /> Add Tool
+              </button>
+              <button onClick={() => setModal('bulk')} className="btn btn-secondary flex items-center gap-1 text-xs py-2 px-3">
+                <FiPlus size={14} /> Add Multiple Tools
+              </button>
+            </>
+          )}
+          {canCreate('tools') && tab === 'submissions' && (
+            <button onClick={() => { setSubmitForm({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' }); setModal('submit'); }} className="btn btn-primary flex items-center gap-1 text-xs">
+              <FiClipboard size={14} /> Submit Weekly List
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap text-sm">
-        {['dashboard', 'catalog', 'submissions'].map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
-            {t === 'dashboard' ? 'Dashboard' : t === 'catalog' ? 'All Tools' : 'Weekly Submissions'}
+        {[
+          { id: 'dashboard', label: 'Dashboard' },
+          { id: 'catalog', label: 'All Tools' },
+          { id: 'barcodes', label: `🏷️ RGP Barcodes & TVS Stickers ${pendingCount > 0 ? `(${pendingCount} pending)` : ''}` },
+          { id: 'submissions', label: 'Weekly Submissions' }
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'} ${t.id === 'barcodes' && pendingCount > 0 ? 'ring-2 ring-amber-400' : ''}`}
+          >
+            {t.label}
           </button>
         ))}
       </div>
@@ -264,7 +354,7 @@ export default function Tools() {
       {/* Dashboard */}
       {(tab === 'dashboard' || tab === 'catalog') && admin && rgpSync && <details className="card p-4">
         <summary className="cursor-pointer font-semibold">RGP challan imports: {rgpSync.imported} tool entries linked · {rgpSync.review.length} challans need review</summary>
-        <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate (or indent rate for zero-value RGP challans). Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
+        <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate. Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
         <button disabled={syncBusy} onClick={() => retryRgp()} className="btn btn-secondary mb-3">{syncBusy ? 'Checking…' : 'Retry old / unresolved RGP challans'}</button>
         {!!rgpSync.review.length && <div className="overflow-x-auto"><NumberedTable className="w-full text-sm">
           <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th></tr></thead>
@@ -292,7 +382,7 @@ export default function Tools() {
           <div className="card p-0 overflow-hidden">
             <div className="p-4 border-b">
               <h3 className="font-bold text-sm">Site-wise Tools</h3>
-              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Count totals recorded quantities. Amount is the recorded total value of tool entries, excluding scrapped tools. RGP imports use dispatched quantity × recorded rate.</p>
+              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Count totals recorded quantities.</p>
             </div>
             <div className="overflow-x-auto">
               <NumberedTable className="w-full">
@@ -317,28 +407,279 @@ export default function Tools() {
               </NumberedTable>
             </div>
           </div>
+        </>
+      )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="card p-4">
-              <h3 className="font-bold text-sm mb-3">By Status</h3>
-              {stats.by_status.map(s => (
-                <div key={s.status} className="flex justify-between text-sm py-1.5 border-b last:border-0">
-                  <span className={`px-2 py-0.5 rounded text-[10px] ${STATUS_PILL[s.status] || 'bg-gray-100'}`}>{s.status.replace('_', ' ')}</span>
-                  <span className="font-semibold">{s.c}</span>
-                </div>
-              ))}
-            </div>
-            <div className="card p-4">
-              <h3 className="font-bold text-sm mb-3">By Category</h3>
-              {stats.by_category.map(c => (
-                <div key={c.category} className="flex justify-between text-sm py-1.5 border-b last:border-0">
-                  <span>{c.category}</span>
-                  <span className="font-semibold">{c.c}</span>
-                </div>
-              ))}
+      {/* TAB: RGP Barcodes & TVS Stickers (Nancy & Ajmer Workflow) */}
+      {tab === 'barcodes' && (
+        <div className="space-y-4">
+          {/* Workflow Role Header Banner */}
+          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-5 shadow-lg border border-blue-700/50">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <span className="text-[10px] font-bold tracking-widest uppercase bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full inline-block mb-1.5">
+                  TVS Machine Barcode Workflow (TSK-0514)
+                </span>
+                <h2 className="text-xl font-black">Nancy Printing &rarr; Ajmer Pasting &rarr; Site Barcode Scanning</h2>
+                <p className="text-xs text-blue-200 mt-1 max-w-3xl leading-relaxed">
+                  1. <strong>Nancy</strong> batch prints TVS barcode stickers (50×25mm) for all RGP tools & machines.<br />
+                  2. <strong>Ajmer Sir</strong> distributes stickers to sites, pastes them on machines/godown tools, and uploads photo proof.<br />
+                  3. Anyone at any site can scan the barcode using their phone or gun to immediately see Tool #, purchase date, make, and assigned site.
+                </p>
+              </div>
+              <div className="flex gap-2 flex-wrap shrink-0">
+                <button
+                  onClick={() => setInspectModalTool({})}
+                  className="btn bg-white/10 hover:bg-white/20 text-white border border-white/30 text-xs flex items-center gap-1.5"
+                >
+                  <FiSearch size={14} /> Lookup by Code
+                </button>
+                <button
+                  onClick={() => setScannerOpen(true)}
+                  className="btn bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow"
+                >
+                  <FiCamera size={14} /> Open Camera Scanner
+                </button>
+              </div>
             </div>
           </div>
-        </>
+
+          {/* Metric Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="card p-3.5 border-l-4 border-slate-600 bg-white">
+              <span className="text-slate-500 font-medium">Total RGP Assets</span>
+              <div className="text-2xl font-black text-slate-900 mt-1">{tools.length}</div>
+            </div>
+            <div className="card p-3.5 border-l-4 border-amber-500 bg-amber-50/40">
+              <span className="text-amber-800 font-semibold flex items-center gap-1">
+                <FiPrinter size={13} /> Pending Nancy Print
+              </span>
+              <div className="text-2xl font-black text-amber-900 mt-1">{pendingCount}</div>
+            </div>
+            <div className="card p-3.5 border-l-4 border-blue-500 bg-blue-50/40">
+              <span className="text-blue-800 font-semibold flex items-center gap-1">
+                <FiTag size={13} /> Printed (Ready for Ajmer)
+              </span>
+              <div className="text-2xl font-black text-blue-900 mt-1">{printedCount}</div>
+            </div>
+            <div className="card p-3.5 border-l-4 border-emerald-500 bg-emerald-50/40">
+              <span className="text-emerald-800 font-semibold flex items-center gap-1">
+                <FiCheckCircle size={13} /> Pasted & Verified Photo
+              </span>
+              <div className="text-2xl font-black text-emerald-900 mt-1">{pastedCount}</div>
+            </div>
+          </div>
+
+          {/* Filter Bar & Batch Printing Action */}
+          <div className="card p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="flex gap-1.5 flex-wrap">
+              {[
+                { id: 'all', label: `All (${tools.length})` },
+                { id: 'pending_print', label: `🖨️ Pending Nancy Print (${pendingCount})` },
+                { id: 'printed', label: `📦 Printed — Ready for Ajmer (${printedCount})` },
+                { id: 'pasted', label: `✅ Pasted & Photo Verified (${pastedCount})` }
+              ].map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => setBarcodeFilter(p.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    barcodeFilter === p.id
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={selectAllPendingPrint}
+                className="btn btn-secondary text-xs flex items-center gap-1.5 py-1.5 px-3"
+              >
+                {selectedForPrint.length === barcodeFilteredTools.length && barcodeFilteredTools.length > 0 ? (
+                  <><FiCheckSquare /> Deselect All</>
+                ) : (
+                  <><FiSquare /> Select Visible ({barcodeFilteredTools.length})</>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={selectedForPrint.length === 0}
+                onClick={() => {
+                  const toPrint = tools.filter(t => selectedForPrint.includes(t.id));
+                  setTvsModalTools(toPrint);
+                }}
+                className="btn bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold flex items-center gap-1.5 py-1.5 px-3.5 disabled:opacity-40 shadow-sm"
+              >
+                <FiPrinter size={14} />
+                Batch Print on TVS ({selectedForPrint.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Barcodes & Stickers Table */}
+          <div className="card p-0 overflow-hidden">
+            <div className="table-responsive">
+              <NumberedTable className="min-w-[900px]">
+                <thead>
+                  <tr>
+                    <th className="w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedForPrint.length > 0 && selectedForPrint.length === barcodeFilteredTools.length}
+                        onChange={selectAllPendingPrint}
+                        className="rounded text-blue-600 cursor-pointer"
+                      />
+                    </th>
+                    <th>Tool Code & Barcode</th>
+                    <th>Machine / Tool Name</th>
+                    <th>Make / Company</th>
+                    <th>Purchase Date</th>
+                    <th>Current Location & Holder</th>
+                    <th>Sticker Status</th>
+                    <th>Sticker Photo Proof</th>
+                    <th className="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {barcodeFilteredTools.length === 0 && (
+                    <tr>
+                      <td colSpan="9" className="text-center py-10 text-slate-400 text-sm">
+                        No tools found matching this sticker filter.
+                      </td>
+                    </tr>
+                  )}
+                  {barcodeFilteredTools.map(t => {
+                    const isSelected = selectedForPrint.includes(t.id);
+                    const code = t.barcode || t.tool_code;
+                    const miniSvg = generateCode128Svg(code, { height: 20, barWidth: 1.1, showText: false });
+
+                    return (
+                      <tr key={t.id} className={`hover:bg-slate-50 ${isSelected ? 'bg-blue-50/50' : ''}`}>
+                        <td className="text-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectForPrint(t.id)}
+                            className="rounded text-blue-600 cursor-pointer"
+                          />
+                        </td>
+                        <td>
+                          <div className="font-mono font-bold text-xs text-blue-700">{t.tool_code}</div>
+                          <div className="mt-0.5" dangerouslySetInnerHTML={{ __html: miniSvg }} />
+                          <div className="font-mono text-[10px] text-slate-500 font-semibold">{code}</div>
+                        </td>
+                        <td>
+                          <div className="font-semibold text-xs text-slate-900">{t.name}</div>
+                          <div className="text-[11px] text-slate-500">{t.category || 'Tool'} · {t.quantity || 1} {t.resolved_unit || t.unit || 'Nos'}</div>
+                        </td>
+                        <td>
+                          <span className="font-bold text-slate-800 text-xs">
+                            {t.brand || t.make || 'SEPL'}
+                          </span>
+                          {t.model && <div className="text-[10px] font-mono text-slate-500">{t.model}</div>}
+                        </td>
+                        <td className="text-xs">
+                          <span className="font-medium text-slate-700">{t.purchase_date || '—'}</span>
+                          {t.purchase_price ? <div className="text-[10px] text-emerald-700 font-semibold">₹ {Number(t.purchase_price).toLocaleString('en-IN')}</div> : null}
+                        </td>
+                        <td className="text-xs">
+                          <div className="font-semibold text-slate-800">
+                            📍 {t.current_site_name || 'SEPL Godown (Central)'}
+                          </div>
+                          {t.current_user_name && (
+                            <div className="text-[11px] text-slate-500">
+                              👤 {t.current_user_name}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {t.sticker_status === 'pasted' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <FiCheckCircle /> Pasted & Verified
+                            </span>
+                          ) : t.sticker_status === 'printed' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200" title={`Printed by ${t.sticker_printed_by_name || 'Nancy'}`}>
+                              <FiTag /> Printed — To Ajmer
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              <FiPrinter /> Pending Nancy Print
+                            </span>
+                          )}
+                          {t.sticker_printed_at && (
+                            <div className="text-[9px] text-slate-400 mt-0.5">
+                              P: {t.sticker_printed_at.slice(0, 10)}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {t.sticker_photo_url ? (
+                            <button
+                              type="button"
+                              onClick={() => setImagePreview({ url: t.sticker_photo_url, name: `Sticker Proof: ${t.tool_code}` })}
+                              className="group relative inline-block"
+                              title="Click to view sticker photo"
+                            >
+                              <img
+                                src={t.sticker_photo_url}
+                                alt="Sticker Proof"
+                                className="w-10 h-10 object-cover rounded border border-slate-200 shadow-sm group-hover:ring-2 group-hover:ring-emerald-400 cursor-zoom-in"
+                              />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setPasteModalTool(t)}
+                              className="text-[11px] text-blue-600 hover:text-blue-800 underline font-medium"
+                            >
+                              + Upload Proof
+                            </button>
+                          )}
+                        </td>
+                        <td className="text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Nancy Print Single Sticker Button */}
+                            <button
+                              onClick={() => setTvsModalTools([t])}
+                              className="btn btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 text-slate-700 hover:text-blue-700"
+                              title="Print Sticker on TVS Machine"
+                            >
+                              <FiPrinter size={12} /> Print
+                            </button>
+                            {/* Ajmer Paste & Upload Photo Button */}
+                            <button
+                              onClick={() => setPasteModalTool(t)}
+                              className={`btn text-xs px-2.5 py-1 flex items-center gap-1 ${
+                                t.sticker_status === 'pasted'
+                                  ? 'btn-secondary text-emerald-700'
+                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white font-semibold'
+                              }`}
+                              title="Ajmer: Paste Sticker & Upload Photo Proof"
+                            >
+                              <FiCheckCircle size={12} /> {t.sticker_status === 'pasted' ? 'Proof' : 'Paste'}
+                            </button>
+                            {/* Inspect Card */}
+                            <button
+                              onClick={() => setInspectModalTool(t)}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 rounded"
+                              title="Inspect Tool Identity Card"
+                            >
+                              <FiEye size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </NumberedTable>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Catalog */}
@@ -353,7 +694,6 @@ export default function Tools() {
               <option value="">All categories</option>
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
             </select>
-{/* Status - tick as many as you like (mam 2026-09-12). */}
             <div className="w-[248px]">
               <StatusMultiSelect
                 options={STATUSES.map(s => ({ id: s, name: s.replace('_', ' ') }))}
@@ -369,9 +709,9 @@ export default function Tools() {
               <NumberedTable start={(toolsPager.page - 1) * toolsPager.perPage + 1} className="min-w-[800px]">
                 <thead>
                   <tr>
-                    <th>Code</th>
+                    <th>Code & Barcode</th>
                     <th>Name</th>
-                    <th>Item Master Code</th>
+                    <th>Make / Brand</th>
                     <th>Specification / Size</th>
                     <th>Qty</th>
                     <th>Unit</th>
@@ -386,7 +726,10 @@ export default function Tools() {
                   {tools.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No tools yet — click "Add Tool" to start the catalog</td></tr>}
                   {toolsPager.pageItems.map(t => (
                     <tr key={t.id} className="hover:bg-gray-50">
-                      <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
+                      <td>
+                        <div className="font-bold text-blue-700 text-xs">{t.tool_code}</div>
+                        {t.barcode && <div className="text-[10px] font-mono text-gray-400">{t.barcode}</div>}
+                      </td>
                       <td className="font-medium">
                         <div className="flex items-center gap-2">
                           {(t.photo_url || t.item_photo_link) ? (
@@ -397,7 +740,7 @@ export default function Tools() {
                           <span>{t.name}</span>
                         </div>
                       </td>
-                      <td className="text-xs font-medium text-blue-700">{t.item_master_code || 'Legacy tool'}</td>
+                      <td className="text-xs font-semibold text-slate-800">{t.brand || t.make || '—'}</td>
                       <td className="text-xs">{[t.item_specification, t.item_size].filter(Boolean).join(' / ') || '—'}</td>
                       <td className="text-sm font-semibold">{t.quantity ?? 1}</td>
                       <td className="text-xs">{t.resolved_unit || t.unit || 'Nos'}</td>
@@ -410,7 +753,11 @@ export default function Tools() {
                         {!t.current_user_name && !t.current_site_name && <span className="text-gray-300">Stored</span>}
                       </td>
                       <td className="whitespace-nowrap">
-                        <div className="flex gap-1">
+                        <div className="flex gap-1 items-center">
+                          {/* TVS Print Sticker */}
+                          <button onClick={() => setTvsModalTools([t])} className="btn btn-secondary text-[10px] px-2 py-1" title="Print TVS Barcode Sticker"><FiPrinter size={11} /></button>
+                          {/* Inspect Card */}
+                          <button onClick={() => setInspectModalTool(t)} className="btn btn-secondary text-[10px] px-2 py-1" title="Inspect Tool Barcode Card"><FiEye size={11} /></button>
                           {canEdit('tools') && t.status === 'available' && (
                             <button onClick={() => { setActionTool(t); setActionType('issue'); setActionForm({}); }} className="btn btn-success text-[10px] px-2 py-1" title="Issue"><FiTruck size={11} /></button>
                           )}
@@ -418,9 +765,7 @@ export default function Tools() {
                             <button onClick={() => { setActionTool(t); setActionType('return'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Return"><FiArrowDownCircle size={11} /></button>
                           )}
                           {canEdit('tools') && t.status !== 'scrapped' && (
-                            <>
-                              <button onClick={() => { setActionTool(t); setActionType('maintenance'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Maintenance"><FiAlertCircle size={11} /></button>
-                            </>
+                            <button onClick={() => { setActionTool(t); setActionType('maintenance'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Maintenance"><FiAlertCircle size={11} /></button>
                           )}
                           <button onClick={() => setHistoryTool(t)} className="btn btn-secondary text-[10px] px-2 py-1" title="History">📜</button>
                           {canEdit('tools') && (
@@ -478,16 +823,70 @@ export default function Tools() {
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="col-span-1 sm:col-span-2">
-              <label className="label">RGP Item *</label>
+              <label className="label">Tool / Machine Name *</label>
+              <input
+                type="text"
+                required
+                className="input"
+                placeholder="e.g. Bosch Rotary Hammer Drill 26mm"
+                value={form.name || ''}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div className="col-span-1 sm:col-span-2">
+              <label className="label">Link RGP Item Master (Optional)</label>
               <SearchableSelect
                 options={rgpItems}
                 value={form.item_master_id || null}
                 valueKey="id"
                 displayKey="label"
-                placeholder="Pick an RGP item from Item Master…"
-                onChange={(i) => setForm(f => ({ ...f, item_master_id: i?.id || '', name: i?.item_name || '', purchase_price: i?.current_price || 0, unit: f.unit ?? 'Nos' }))}
+                placeholder="Pick an RGP item from Item Master (optional)…"
+                onChange={(i) => setForm(f => ({
+                  ...f,
+                  item_master_id: i?.id || '',
+                  name: f.name || i?.item_name || '',
+                  category: f.category || i?.department || 'Other',
+                  brand: f.brand || i?.make || '',
+                  purchase_price: f.purchase_price || i?.current_price || 0,
+                  unit: f.unit ?? i?.uom ?? 'Nos'
+                }))}
               />
-              <p className="text-[10px] text-gray-400 mt-1">Only Item Master entries with type RGP are available.</p>
+            </div>
+            <div>
+              <label className="label">Make / Company * (kis company k hai)</label>
+              <input
+                type="text"
+                className="input"
+                placeholder="e.g. Bosch, Makita, Hilti, Stanley, DeWalt"
+                value={form.brand || ''}
+                onChange={e => setForm(f => ({ ...f, brand: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Model / Machine Number</label>
+              <input
+                type="text"
+                className="input"
+                placeholder="e.g. GBH 2-26 DRE"
+                value={form.model || ''}
+                onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Barcode (Auto if empty)</label>
+              <input
+                type="text"
+                className="input font-mono"
+                placeholder="Leave empty for auto code"
+                value={form.barcode || ''}
+                onChange={e => setForm(f => ({ ...f, barcode: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Category</label>
+              <select className="select" value={form.category || 'Drilling'} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
             </div>
             <div><label htmlFor="tool-quantity" className="label">Quantity *</label><input id="tool-quantity" type="number" step="any" min="0.000001" required className="input" value={form.quantity ?? 1} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} /></div>
             <div><label htmlFor="tool-unit" className="label">Unit *</label><input id="tool-unit" className="input" required maxLength={30} value={form.unit ?? form.resolved_unit ?? 'Nos'} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="e.g. Nos, SET, MTR" /><p className="text-xs text-gray-500 mt-1">Defaults to Nos. Change if needed.</p></div>
@@ -508,8 +907,6 @@ export default function Tools() {
             </div>
             <div><label className="label">Last Calibration</label><input type="date" className="input" value={form.last_calibration_date || ''} onChange={e => setForm(f => ({ ...f, last_calibration_date: e.target.value }))} /></div>
             <div><label className="label">Next Calibration</label><input type="date" className="input" value={form.next_calibration_date || ''} onChange={e => setForm(f => ({ ...f, next_calibration_date: e.target.value }))} /></div>
-            {/* Site / user assignment — mam: lets her correct where a tool
-                is parked without going through the Issue / Return flow. */}
             <div>
               <label className="label">Site Name / Current Site</label>
               <SearchableSelect
@@ -517,7 +914,7 @@ export default function Tools() {
                 value={form.current_site_id || null}
                 valueKey="id"
                 displayKey="name"
-                placeholder="Pick site…"
+                placeholder="Pick site or godown…"
                 onChange={(s) => setForm(f => ({ ...f, current_site_id: s?.id || '' }))}
               />
             </div>
@@ -592,6 +989,7 @@ export default function Tools() {
         {historyTool && <ToolHistory id={historyTool.id} />}
       </Modal>
 
+      {/* Image Preview Modal */}
       {imagePreview && (
         <div className="!m-0 fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setImagePreview(null)}>
           <img src={imagePreview.url} alt={imagePreview.name} className="max-w-full max-h-full rounded shadow-2xl" onClick={e => e.stopPropagation()} />
@@ -629,6 +1027,43 @@ export default function Tools() {
           </div>
         </form>
       </Modal>
+
+      {/* TSK-0514: TVS Barcode Label Printing Modal (Nancy) */}
+      <TvsBarcodeModal
+        isOpen={!!tvsModalTools}
+        onClose={() => setTvsModalTools(null)}
+        tools={tvsModalTools || []}
+        onPrinted={() => {
+          load();
+          setSelectedForPrint([]);
+        }}
+      />
+
+      {/* TSK-0514: Ajmer Physical Sticker Pasting & Photo Proof Modal */}
+      <AjmerStickerPasteModal
+        isOpen={!!pasteModalTool}
+        onClose={() => setPasteModalTool(null)}
+        tool={pasteModalTool}
+        onSaved={load}
+      />
+
+      {/* TSK-0514: Tool Inspection Card Modal */}
+      <ToolInspectionModal
+        isOpen={!!inspectModalTool}
+        onClose={() => setInspectModalTool(null)}
+        tool={inspectModalTool?.id ? inspectModalTool : null}
+        code={inspectModalTool?.code || ''}
+      />
+
+      {/* TSK-0514: Camera / Gun Barcode Scanner */}
+      <BarcodeScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScan={(scannedCode) => {
+          setScannerOpen(false);
+          setInspectModalTool({ code: scannedCode });
+        }}
+      />
     </div>
   );
 }
@@ -645,6 +1080,7 @@ function ToolHistory({ id }) {
     scrap: { color: 'bg-red-100 text-red-700', icon: '🗑️' },
     transfer: { color: 'bg-purple-100 text-purple-700', icon: '🔄' },
     calibration: { color: 'bg-indigo-100 text-indigo-700', icon: '📏' },
+    sticker_pasted: { color: 'bg-emerald-100 text-emerald-800', icon: '🏷️' }
   };
   return (
     <div className="space-y-2 max-h-[60vh] overflow-y-auto">

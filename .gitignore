@@ -15,4 +15,5 @@ client/public/*.xlsx
 client/dist/*.xlsx
 /outputs/
 /scratch/
-
+/uploads/*
+!/uploads/.gitkeep

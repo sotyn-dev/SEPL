@@ -55,6 +55,7 @@ const ALL_MODULES = [
   // granted it. Convert also needs 'leads' Create — it writes a real funnel lead.
   { key: 'sotyn_leads', label: 'Sotyn Leads — sotyn.ai website enquiries · Create=Convert to a Sales Funnel lead (also needs Sales Funnel Create) · Edit=status/owner/remarks · Delete=bin junk' },
   { key: 'fire_noc', label: 'Fire NOC Renewal' },
+  { key: 'vendor_registration', label: 'Vendor Registration (Empanelment & Portals)' },
   { key: 'rental_tools', label: 'Rental Tools' },
   { key: 'influencers', label: 'Influencers' },
   { key: 'crm_kitting', label: 'CRM Full Kitting' },

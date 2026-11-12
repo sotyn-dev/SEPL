@@ -9,6 +9,7 @@ import { MAKES } from '../data/makes';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
+import { LuBrain } from 'react-icons/lu';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight, FiImage } from 'react-icons/fi';
 
 const PAGE_SIZE = 100;
@@ -155,6 +156,26 @@ export default function ItemMaster() {
   // server also refuses a blank reason, so the button alone can't reject.
   const [rejecting, setRejecting] = useState(null);      // item being rejected
   const [rejectReason, setRejectReason] = useState('');
+  const [aiAuditing, setAiAuditing] = useState(false);
+  const [auditingId, setAuditingId] = useState(null);
+
+  // TSK-0470: Item approval must be from AI agent only
+  const runAiApproval = async (item) => {
+    setAuditingId(item.id);
+    try {
+      const r = await api.post(`/item-master/${item.id}/approve`);
+      if (r.data?.approval_status === 'approved') {
+        toast.success(r.data?.message || 'Approved by AI Agent');
+      } else {
+        toast.error(r.data?.message || 'Rejected by AI Agent');
+      }
+      load(); loadPendingCount();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Audit failed');
+    } finally {
+      setAuditingId(null);
+    }
+  };
   const setApproval = async (item, action, reason) => {
     if (action === 'reject' && reason === undefined) { setRejecting(item); setRejectReason(''); return; }
     try {
@@ -171,12 +192,14 @@ export default function ItemMaster() {
     setApproval(rejecting, 'reject', reason);
   };
   const approveAllPending = async () => {
-    if (!window.confirm(`Approve all ${pendingCount} pending item(s)?`)) return;
+    if (!window.confirm(`Run AI Agent audit on all ${pendingCount} pending item(s)?`)) return;
+    setAiAuditing(true);
     try {
       const r = await api.post('/item-master/approval/approve-all');
-      toast.success(r.data?.message || 'Approved');
+      toast.success(r.data?.message || 'AI Agent audit finished');
       load(); loadPendingCount();
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setAiAuditing(false); }
   };
 
   // Auto-open the Edit modal when launched via ?edit=CODE (from the PO/FOC ✎).
@@ -760,16 +783,23 @@ export default function ItemMaster() {
         </div>
       </div>
 
-      {/* Pending-approval review banner — new items wait for an Admin's OK. */}
+      {/* Pending-approval review banner — AI Agent item approval (TSK-0470) */}
       {pendingCount > 0 && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">
-          <div className="text-sm text-amber-900">
-            <span className="font-bold">{pendingCount}</span> item{pendingCount > 1 ? 's' : ''} awaiting approval.
-            {admin ? ' Review and approve so the item master stays correct.' : ' An Admin (e.g. Ankur Kaplesh) will approve them.'}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-purple-50 border border-purple-300 rounded-lg px-4 py-3">
+          <div className="text-sm text-purple-950 flex items-center gap-2">
+            <LuBrain className="text-purple-600 text-lg flex-shrink-0" />
+            <div>
+              <span className="font-bold">{pendingCount}</span> item{pendingCount > 1 ? 's' : ''} awaiting approval.
+              <span className="text-purple-800 ml-1">Per policy (TSK-0470), item approvals are audited by the <strong>AI Agent only</strong>.</span>
+            </div>
           </div>
           <div className="flex gap-2">
             <button onClick={() => setApprovalFilter('pending')} className="btn btn-secondary text-xs whitespace-nowrap">Review pending</button>
-            {admin && <button onClick={approveAllPending} className="btn btn-primary text-xs whitespace-nowrap">Approve all</button>}
+            {admin && (
+              <button onClick={approveAllPending} disabled={aiAuditing} className="btn bg-purple-700 hover:bg-purple-800 text-white text-xs whitespace-nowrap flex items-center gap-1.5 shadow-sm">
+                <LuBrain size={14} /> {aiAuditing ? 'AI Auditing...' : 'AI Approve All'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -864,9 +894,18 @@ export default function ItemMaster() {
                             <span className="text-[10px] text-red-700 max-w-[160px] whitespace-normal text-left" title={`Rejected${i.approved_by_name ? ' by ' + i.approved_by_name : ''}: ${i.rejection_reason}`}>{i.rejection_reason}</span>
                           )}
                           {admin && st !== 'approved' && (
-                            <div className="flex gap-1">
-                              <button onClick={() => setApproval(i, 'approve')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700">Approve</button>
-                              {st !== 'rejected' && <button onClick={() => setApproval(i, 'reject')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-white text-red-600 border border-red-300 hover:bg-red-50">Reject</button>}
+                            <div className="flex gap-1 items-center">
+                              <button
+                                onClick={() => runAiApproval(i)}
+                                disabled={auditingId === i.id}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-700 text-white hover:bg-purple-800 flex items-center gap-1 shadow-sm"
+                                title="Audit and approve via AI Agent (TSK-0470)"
+                              >
+                                <LuBrain size={10} /> {auditingId === i.id ? 'Auditing...' : 'AI Approve'}
+                              </button>
+                              {st !== 'rejected' && (
+                                <button onClick={() => setApproval(i, 'reject')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-white text-red-600 border border-red-300 hover:bg-red-50">Reject</button>
+                              )}
                             </div>
                           )}
                         </div>

@@ -623,8 +623,15 @@ export default function Layout() {
   // the user lands on a deep route.
   useEffect(() => {
     const path = location.pathname;
+    const resolvedPath =
+      ['/sales-funnel', '/salesfunnel', '/sales', '/sales-tracking'].includes(path) ? '/leads' :
+      ['/cash-flow', '/cashflow', '/cash', '/cashflow-tracker', '/cash-tracker', '/cash-flow-forecast', '/cash-flow-daily', '/cash-flow-management'].includes(path) ? '/cash-flow-tracker' :
+      ['/cheque-fms', '/chequefms', '/cheques-fms', '/cheque'].includes(path) ? '/cheques' :
+      ['/collection-engine', '/collections-engine', '/collection', '/sop16', '/sop-16'].includes(path) ? '/collections' :
+      path;
+
     for (const g of SIDEBAR_GROUPS) {
-      if (g.items.some(it => it.path.split('?')[0] === path)) {
+      if (g.items.some(it => it.path.split('?')[0] === resolvedPath)) {
         setOpenGroups(prev => {
           if (prev.has(g.id)) return prev;
           const next = new Set(prev);
@@ -705,10 +712,17 @@ export default function Layout() {
         || VENDOR_TREDS_TABS.find(item => canView(item.permission));
       return { group: 'CRM', label: 'Vendor & TReDS Management', module: tab?.permission || 'vendor_treds_dashboard' };
     }
-    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
+    const effectivePath =
+      ['/sales-funnel', '/salesfunnel', '/sales', '/sales-tracking'].includes(location.pathname) ? '/leads' :
+      ['/cash-flow', '/cashflow', '/cash', '/cashflow-tracker', '/cash-tracker', '/cash-flow-forecast', '/cash-flow-daily', '/cash-flow-management'].includes(location.pathname) ? '/cash-flow-tracker' :
+      ['/cheque-fms', '/chequefms', '/cheques-fms', '/cheque'].includes(location.pathname) ? '/cheques' :
+      ['/collection-engine', '/collections-engine', '/collection', '/sop16', '/sop-16'].includes(location.pathname) ? '/collections' :
+      location.pathname;
+
+    if (SIDEBAR_DASHBOARD.path === effectivePath) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
     for (const g of SIDEBAR_GROUPS) {
-      if (g.path === location.pathname) return { group: null, label: g.label, module: g.module };
-      const it = g.items.find(m => m.path === location.pathname);
+      if (g.path === effectivePath) return { group: null, label: g.label, module: g.module };
+      const it = g.items.find(m => m.path === effectivePath);
       if (it) return { group: g.label, label: it.label, module: it.module };
     }
     const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
@@ -843,7 +857,14 @@ export default function Layout() {
             );
             const isOpen = isGroupOpen(g.id);
             const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
-            const navItemActive = item => location.pathname === item.path;
+            const navItemActive = item => {
+              if (location.pathname === item.path) return true;
+              if (item.path === '/leads' && ['/sales-funnel', '/salesfunnel', '/sales', '/sales-tracking'].includes(location.pathname)) return true;
+              if (item.path === '/cash-flow-tracker' && ['/cashflow', '/cash-flow', '/cash', '/cashflow-tracker', '/cash-tracker', '/cash-flow-forecast', '/cash-flow-daily', '/cash-flow-management'].includes(location.pathname)) return true;
+              if (item.path === '/cheques' && ['/cheque-fms', '/chequefms', '/cheques-fms', '/cheque'].includes(location.pathname)) return true;
+              if (item.path === '/collections' && ['/collection-engine', '/collections-engine', '/collection', '/sop16', '/sop-16'].includes(location.pathname)) return true;
+              return false;
+            };
             const hasActiveChild = childItems.some(navItemActive);
             return (
               <div key={g.id} className="pt-0.5">

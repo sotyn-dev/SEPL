@@ -313,10 +313,12 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
                        (SELECT sbn.file_path FROM delivery_notes sbn
                          WHERE sbn.document_type='sales_bill' AND sbn.document_number=dn.sales_bill_number LIMIT 1)
               ) AS sales_bill_file,
-              COALESCE(vp.indent_id, dn.indent_id) AS indent_id, i.indent_number, i.site_name
+              COALESCE(vp.indent_id, dn.indent_id) AS indent_id, i.indent_number, i.site_name,
+              dn.lovely_signed_bill_file, dn.lovely_signed_bill_uploaded_at, lsb_u.name AS lovely_signed_bill_uploaded_by_name, dn.saman_dispatched
          FROM delivery_notes dn
          LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
          LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
+         LEFT JOIN users lsb_u ON lsb_u.id = dn.lovely_signed_bill_uploaded_by
         WHERE dn.document_type = 'challan' AND COALESCE(dn.source,'') <> 'rgp'
         ORDER BY dn.id DESC LIMIT 500`
     ).all();

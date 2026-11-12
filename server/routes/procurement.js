@@ -36,6 +36,22 @@ const normUnit = (u) => {
 const router = express.Router();
 const { makeDeliveryBillResolver } = require('../lib/indentDeliveryBill');
 router.use(authMiddleware);
+
+// TSK-0784 migration: Bill cut hoke stamp lagke or CRM ke sign hoke Ajmer Sir upload karenge and then saman jayega
+try {
+  const db = getDb();
+  const dnCols = db.prepare('PRAGMA table_info(delivery_notes)').all().map(c => c.name);
+  if (!dnCols.includes('lovely_signed_bill_file')) db.exec('ALTER TABLE delivery_notes ADD COLUMN lovely_signed_bill_file TEXT');
+  if (!dnCols.includes('lovely_signed_bill_uploaded_by')) db.exec('ALTER TABLE delivery_notes ADD COLUMN lovely_signed_bill_uploaded_by INTEGER REFERENCES users(id)');
+  if (!dnCols.includes('lovely_signed_bill_uploaded_at')) db.exec('ALTER TABLE delivery_notes ADD COLUMN lovely_signed_bill_uploaded_at DATETIME');
+  if (!dnCols.includes('lovely_signed_bill_notes')) db.exec('ALTER TABLE delivery_notes ADD COLUMN lovely_signed_bill_notes TEXT');
+  if (!dnCols.includes('saman_dispatched')) db.exec('ALTER TABLE delivery_notes ADD COLUMN saman_dispatched INTEGER DEFAULT 0');
+  if (!dnCols.includes('saman_dispatched_at')) db.exec('ALTER TABLE delivery_notes ADD COLUMN saman_dispatched_at DATETIME');
+  if (!dnCols.includes('saman_dispatched_by')) db.exec('ALTER TABLE delivery_notes ADD COLUMN saman_dispatched_by INTEGER REFERENCES users(id)');
+} catch (e) {
+  console.warn('[procurement] migration delivery_notes lovely_signed_bill:', e.message);
+}
+
 router.use('/indent-help', require('./indentHelp')({ canSeeAllIndents }));
 
 // Build the merge context for an indent email event (mam 2026-06-03 email
@@ -66,7 +82,7 @@ function buildIndentContext(db, indentId, extra = {}) {
       crmOwnerEmail = u?.email || null;
     }
     let director = null;
-    try { director = getEmailConfig().director; } catch {}
+    try { director = getEmailConfig().director; } catch { }
     return {
       indent_no: row.indent_number,
       category: row.indent_category,
@@ -99,7 +115,7 @@ const needsApprove = requirePermission('procurement', 'approve');
 // gate settings tables. Every "who may act here" question routes through it.
 const approvalGates = require('../utils/indentToDispatchGates');
 const raiserApproval = require('../lib/indentRaiserApproval');
-try { raiserApproval.migrate(getDb()); } catch (_) {}
+try { raiserApproval.migrate(getDb()); } catch (_) { }
 
 // Who may act at an indent gate, as a LIST (2026-07-23).
 //   1. ⚙ Workflow Settings — authoritative the moment anyone is named there.
@@ -359,7 +375,7 @@ const parseBoqExcel = (filePath) => {
 // Vendors
 // Mam (2026-06-15): per-vendor list of brands / makes the vendor deals in
 // (up to 10), entered with a "+ Add" on the form. Stored comma-joined.
-try { getDb().exec('ALTER TABLE vendors ADD COLUMN makes TEXT'); } catch (_) {}
+try { getDb().exec('ALTER TABLE vendors ADD COLUMN makes TEXT'); } catch (_) { }
 // Normalise the form's makes (array OR string) → a clean comma-joined string
 // capped at 10 brands.
 function normaliseMakes(m) {
@@ -452,7 +468,7 @@ router.post('/vendors/bulk', requirePermission('procurement', 'create'), (req, r
   const insert = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
   // Columns the sheet can fill. makes/rating are normalised separately.
-  const PLAIN = ['name','firm_name','contact_person','phone','email','district','state','address','category','deals_in','authorized_dealer','type','turnover','team_size','payment_terms','credit_days','gst_number','source','category_wise','sub_category','existing_vendor'];
+  const PLAIN = ['name', 'firm_name', 'contact_person', 'phone', 'email', 'district', 'state', 'address', 'category', 'deals_in', 'authorized_dealer', 'type', 'turnover', 'team_size', 'payment_terms', 'credit_days', 'gst_number', 'source', 'category_wise', 'sub_category', 'existing_vendor'];
 
   let added = 0, updated = 0;
   const skipped = [];
@@ -1390,7 +1406,7 @@ router.put('/approval-settings', (req, res) => {
     // they're absent readAll returns the unchanged gates, keeping the response
     // shape identical either way. A body carrying neither section is the only
     // real "nothing to save", and is rejected below.
-    const hasGates   = req.body?.gates   != null;
+    const hasGates = req.body?.gates != null;
     const hasStandin = req.body?.standin != null;
     if (!hasGates && !hasStandin) {
       return res.status(400).json({ error: 'No settings supplied' });
@@ -1491,7 +1507,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
     if (lockedSite && req.user?.role !== 'admin') {
       return res.status(403).json({ error: `Cost booking is locked on site "${lockedSite.name}" under SOP-15.1 (Handover in progress). No new indents allowed.` });
     }
-  } catch (_) {}
+  } catch (_) { }
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
@@ -1532,13 +1548,13 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   //                         total rental MUST stay below qty × current_price
   const VALID_CATEGORIES = ['material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental', 'ppe_kit'];
   const category = VALID_CATEGORIES.includes(indent_category) ? indent_category : 'material';
-  const isExtraSchedule    = category === 'extra_schedule';
+  const isExtraSchedule = category === 'extra_schedule';
   const isExtraNonSchedule = category === 'extra_non_schedule';
-  const isRental           = category === 'rental';
-  const isRgp              = category === 'rgp';
+  const isRental = category === 'rental';
+  const isRgp = category === 'rgp';
   // PPE Kit — no BOQ, Item Master type='PPE_KIT' only. Off-BOQ, pick from
   // Item Master shape (same as RGP/Rental), mirrored end-to-end below.
-  const isPpeKit            = category === 'ppe_kit';
+  const isPpeKit = category === 'ppe_kit';
 
   // Category lock REMOVED (mam 2026-08-26, 3rd revision: "no need … every
   // one indent on wednesday and saturday material rgp all category is
@@ -1597,7 +1613,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
       if (!poId) continue;  // manual entries don't have a BOQ link
       const t = String(it.item_type || '').toUpperCase();
       const bucket = subItemsPerBoq.get(poId) || { po: 0, foc: 0, rgp: 0 };
-      if (t === 'PO')       bucket.po++;
+      if (t === 'PO') bucket.po++;
       else if (t === 'FOC') bucket.foc++;
       else if (t === 'RGP') bucket.rgp++;
       subItemsPerBoq.set(poId, bucket);
@@ -2075,7 +2091,7 @@ router.put('/indents/:id', (req, res) => {
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
       const l2On = l2Enabled(db);   // ERP-wide L2 switch — ⚙ Workflow Settings (rule: mam 2026-07-21)
       const canRevoke = isAdminActor
-        || ( l2On && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id))
+        || (l2On && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id))
         || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id));
       // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
       // already-APPROVED one (re-confirm — mam 2026-06-04 wanted it on
@@ -2206,7 +2222,7 @@ router.put('/indents/:id', (req, res) => {
         // the linked Client PO so the billable line tracks in the project's
         // revenue pipeline.
         if (status === 'approved' && cur2.approval_policy === 'crm_two_level'
-            && cur2.crm_status === 'pending') {
+          && cur2.crm_status === 'pending') {
           if (!canActCrm) {
             const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
             // Mention BOTH ways in, since both are live: the crm_funnel role and
@@ -2315,7 +2331,7 @@ router.put('/indents/:id', (req, res) => {
           // For crm_two_level we mapped crm_approved → submitted above so
           // the L1 branch reuses without changes.
           if (effectiveStatus === 'submitted' && cur2.l1_status === 'pending'
-              && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
+            && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
             // L1 approve — gated by the L1 approver list / admin.
             if (!canActL1) {
               // Surface WHO is blocked and WHY so admin can fix it from
@@ -2661,9 +2677,11 @@ router.put('/indents/:id', (req, res) => {
             error: `From-store qty (${fromStore}) exceeds office stock (${officeStock}) for "${row.description}". Correct the inventory or reduce the from-store qty.`,
           });
         }
-        storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
+        storePlans.push({
+          itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
           description: row.description, specification: row.specification, size: row.size,
-          make: row.make, item_code: row.item_code, item_name: row.item_name || '', unit: row.unit, item_type: row.item_type });
+          make: row.make, item_code: row.item_code, item_name: row.item_name || '', unit: row.unit, item_type: row.item_type
+        });
       }
 
       try {
@@ -2886,7 +2904,7 @@ router.put('/indents/:id', (req, res) => {
                   document_type, document_number, status, sales_bill_pending, items_json, notes)
                VALUES (NULL, ?, ?, 'store', ?, 'challan', ?, 'pending', ?, ?, ?)`
             ).run(id, issueNoteId, today, issueNoteNumber, billable ? 1 : 0,
-                  JSON.stringify(storeItems), 'Material issued from store');
+              JSON.stringify(storeItems), 'Material issued from store');
             // Remember the challan id so the approval response can hand it
             // back and the approver can print the Store Issue Challan straight
             // from the approval step (mam 2026-06-23).
@@ -2914,11 +2932,11 @@ router.put('/indents/:id', (req, res) => {
               l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP,
               l2_admin_override=?, l2_assigned_approver=?
               WHERE id=?`).run(
-                req.user.id,
-                isRaiserOverride ? 1 : 0,
-                isRaiserOverride ? originalRaiserName : null,
-                id
-              );
+              req.user.id,
+              isRaiserOverride ? 1 : 0,
+              isRaiserOverride ? originalRaiserName : null,
+              id
+            );
             const auditDetails = {
               stage: 'raiser_approval',
               stage_label: 'Raiser approval',
@@ -2981,7 +2999,7 @@ router.put('/indents/:id', (req, res) => {
                       document_number, status, sales_bill_pending, items_json, notes)
                    VALUES (NULL, ?, 'rgp', ?, 'challan', ?, 'pending', 0, ?, ?)`
                 ).run(id, gpDate, gpNum, JSON.stringify(gpItems),
-                      'RGP returnable gate pass — auto-generated on approval');
+                  'RGP returnable gate pass — auto-generated on approval');
 
                 // Deduct RGP material from office stock (mam 2026-06-06: "if
                 // approved rgp from store then why not decrease"). Greedy across
@@ -3013,7 +3031,7 @@ router.put('/indents/:id', (req, res) => {
                     const rate = +b.avg_rate || 0;
                     decRgp.run(take, b.id);
                     mvRgp.run(b.warehouse_id, r.item_master_id, take, rate, take * rate,
-                              gpNum, `RGP issued to site for indent #${id} (${gpNum})`, req.user.id);
+                      gpNum, `RGP issued to site for indent #${id} (${gpNum})`, req.user.id);
                     remaining -= take;
                   }
                 }
@@ -3346,7 +3364,7 @@ router.post('/indents/:id/reset-store-issue', (req, res) => {
   const l2On = l2Enabled(db);
   const canReset = isAdminActor
     || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id))
-    ||          gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id);  // L2 — always (safeguard)
+    || gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id);  // L2 — always (safeguard)
   if (!canReset) return res.status(403).json({ error: 'Only an admin, the L2 approver, or (while L2 is off) the L1 approver can reset a store issue. Approvers are set in ⚙ Workflow Settings.' });
 
   const children = db.prepare("SELECT * FROM indent_items WHERE indent_id=? AND source='store'").all(id);
@@ -3373,7 +3391,7 @@ router.post('/indents/:id/reset-store-issue', (req, res) => {
             `INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, notes, created_by)
              VALUES (?,?,'IN',?,?,?,'ISSUE_REVERSAL',?,?,?)`
           ).run(mv.warehouse_id, mv.item_master_id, +mv.quantity, +mv.rate, +mv.quantity * +mv.rate, noteNumber,
-                `Reversed store issue ${noteNumber} — re-approve of indent #${id}`, req.user.id);
+            `Reversed store issue ${noteNumber} — re-approve of indent #${id}`, req.user.id);
         }
       }
       // 2. Merge each store child back into its parent (or flip a converted
@@ -3797,10 +3815,12 @@ router.get('/vendor-po', (req, res) => {
     ...(ankurUser ? [ankurUser] : []),
     ...poL2
   ];
-  const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
-                     pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2],
-                     pending_coo: cooUser ? `${cooUser.name} (${cooUser.email})` : (cooStandins.map(a => a.name).join(', ') || 'COO (coo@securedengineers.com)'),
-                     pending_cmd: mdUser ? `${mdUser.name} (${mdUser.email})` : 'MD (director@securedengineers.com · Ankur Kaplesh)' };
+  const poNameOf = {
+    pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
+    pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2],
+    pending_coo: cooUser ? `${cooUser.name} (${cooUser.email})` : (cooStandins.map(a => a.name).join(', ') || 'COO (coo@securedengineers.com)'),
+    pending_cmd: mdUser ? `${mdUser.name} (${mdUser.email})` : 'MD (director@securedengineers.com · Ankur Kaplesh)'
+  };
   for (const r of rows) {
     if (r.po_approval === 'pending_coo') {
       r.po_pending_approver = poNameOf.pending_coo;
@@ -3812,7 +3832,7 @@ router.get('/vendor-po', (req, res) => {
       r.po_pending_approver = (r.po_approval === 'pending_l1' || r.po_approval === 'pending_l2')
         ? poNameOf[r.po_approval] : null;
       r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
-                                : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
+        : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
     }
     const stored = +r.total_amount || 0;
     const live = +r.display_total || 0;
@@ -4204,7 +4224,7 @@ router.post('/vendor-po/:id/delivery-notes', needsApprove, (req, res) => {
     if (!items.length) return { status: 409, error: 'Link this PO to its material items before creating a delivery note.' };
     const { nextSequence } = require('../db/nextSequence');
     const date = istToday();
-    const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0,4)}/`, { pad: 4 });
+    const number = nextSequence(db, 'delivery_notes', 'document_number', `DC/${date.slice(0, 4)}/`, { pad: 4 });
     const saved = db.prepare(`INSERT INTO delivery_notes (vendor_po_id,document_type,document_number,delivery_date,status,items_json,notes)
       VALUES (?,'challan',?,?,'pending',?,?)`).run(po.id, number, date, JSON.stringify(items), `Created for PO delivery-note printing by user ${req.user.id}`);
     return { status: 201, delivery_notes: [{ id: saved.lastInsertRowid, document_number: number }] };
@@ -4256,7 +4276,7 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   // exists by name (mam 2026-06-30: "address, GSTIN missing"). Only fills the
   // gaps and prefers a bb that actually has a GSTIN / address.
   if ((!data.client_company || !data.client_gstin || !data.client_address) &&
-      (data.indent_site_name || data.indent_client_name || data.client_company)) {
+    (data.indent_site_name || data.indent_client_name || data.client_company)) {
     const tryNames = [data.client_company, data.indent_site_name, data.indent_client_name].filter(Boolean);
     const findBb = db.prepare(`
       SELECT bb.company_name, bb.client_name, bb.client_contact, bb.client_email,
@@ -4278,18 +4298,18 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
     for (const name of tryNames) {
       const bb = findBb.get(name, name, name, name);
       if (bb && bb.company_name) {
-        data.client_company     = data.client_company     || bb.company_name;
+        data.client_company = data.client_company || bb.company_name;
         data.client_person_name = data.client_person_name || bb.client_name;
-        data.client_phone       = data.client_phone       || bb.client_contact;
-        data.client_email       = data.client_email       || bb.client_email;
-        data.client_address     = data.client_address     || bb.billing_address;
-        data.site_address       = data.site_address       || bb.shipping_address;
-        data.client_state       = data.client_state       || bb.state;
-        data.client_district    = data.client_district    || bb.district;
-        data.client_gstin       = data.client_gstin       || bb.gstin;
-        data.client_state_code  = data.client_state_code  || bb.state_code;
-        data.bb_project_name    = data.bb_project_name    || bb.project_name;
-        data.bb_lead_no         = data.bb_lead_no         || bb.lead_no;
+        data.client_phone = data.client_phone || bb.client_contact;
+        data.client_email = data.client_email || bb.client_email;
+        data.client_address = data.client_address || bb.billing_address;
+        data.site_address = data.site_address || bb.shipping_address;
+        data.client_state = data.client_state || bb.state;
+        data.client_district = data.client_district || bb.district;
+        data.client_gstin = data.client_gstin || bb.gstin;
+        data.client_state_code = data.client_state_code || bb.state_code;
+        data.bb_project_name = data.bb_project_name || bb.project_name;
+        data.bb_lead_no = data.bb_lead_no || bb.lead_no;
         if (data.client_gstin && data.client_address) break;
       }
     }
@@ -4881,7 +4901,7 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   for (const linkedId of linkedIds) {
     const linkedIndent = db.prepare('SELECT * FROM indents WHERE id=?').get(linkedId);
     if (raiserApproval.usesRaiserApproval(linkedIndent)
-        && !raiserApproval.isApprovedByRaiserOrAdmin(db, linkedIndent)) {
+      && !raiserApproval.isApprovedByRaiserOrAdmin(db, linkedIndent)) {
       return res.status(409).json({ error: 'The original raiser or an admin must approve this reviewed indent before a Vendor PO can be created.' });
     }
   }
@@ -4988,7 +5008,7 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         WHERE i.id = ?
       `).get(indent_id);
       if (sRow?.address) site_address = sRow.address;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   try {
@@ -5003,8 +5023,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
             payment_terms, credit_days, freight_terms, freight_amount, gst_pct, created_by, po_approval, site_address)
          VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1', ?)`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
-            pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null, site_address);
+        pmtType, pmtAmount, pmtNotes, pmtStatus,
+        payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null, site_address);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -5032,7 +5052,7 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
     res.status(201).json({ id: vpoId, po_number: poNum, total_amount: totalAmount, lines: lines.length, file_path: filePath });
   } catch (err) {
     // Clean up orphaned upload if the DB insert failed (e.g. unique-constraint on po_number)
-    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) { } }
     if (String(err.message || '').includes('UNIQUE')) {
       return res.status(409).json({ error: `PO Number "${poNum}" already exists` });
     }
@@ -5320,241 +5340,241 @@ router.get('/vendor-po/:id/comparison-sheet', async (req, res) => {
       `).all(po.indent_id);
     }
 
-  // Cost estimate evaluation
-  let costEval = null;
-  try {
-    costEval = evaluatePoCostEstimate(db, id);
-  } catch (_) {}
+    // Cost estimate evaluation
+    let costEval = null;
+    try {
+      costEval = evaluatePoCostEstimate(db, id);
+    } catch (_) { }
 
-  // Helper to enrich a single item with online market benchmarks and internal historical rates
-  const enrichItem = async (it) => {
-    const rawName = it.master_name || it.description || it.indent_description || '';
-    const size = it.indent_size || it.master_size || '';
-    const make = it.indent_make || it.master_make || '';
-    const spec = it.specification || '';
-    const cleanQ = extractCleanProcurementQuery(rawName, size, make, spec) || rawName;
+    // Helper to enrich a single item with online market benchmarks and internal historical rates
+    const enrichItem = async (it) => {
+      const rawName = it.master_name || it.description || it.indent_description || '';
+      const size = it.indent_size || it.master_size || '';
+      const make = it.indent_make || it.master_make || '';
+      const spec = it.specification || '';
+      const cleanQ = extractCleanProcurementQuery(rawName, size, make, spec) || rawName;
 
-    let marketData = {
-      query: cleanQ,
-      moglix: [],
-      indiamart: [],
-      summary: null,
-      directLinks: {
-        moglix: `https://www.moglix.com/search?controller=search&s=${encodeURIComponent(cleanQ)}`,
-        indiamart: `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(cleanQ)}`,
-        amazon: `https://www.amazon.in/s?k=${encodeURIComponent(cleanQ)}`,
-        industrybuying: `https://www.industrybuying.com/search/?q=${encodeURIComponent(cleanQ)}`
+      let marketData = {
+        query: cleanQ,
+        moglix: [],
+        indiamart: [],
+        summary: null,
+        directLinks: {
+          moglix: `https://www.moglix.com/search?controller=search&s=${encodeURIComponent(cleanQ)}`,
+          indiamart: `https://dir.indiamart.com/search.mp?ss=${encodeURIComponent(cleanQ)}`,
+          amazon: `https://www.amazon.in/s?k=${encodeURIComponent(cleanQ)}`,
+          industrybuying: `https://www.industrybuying.com/search/?q=${encodeURIComponent(cleanQ)}`
+        }
+      };
+
+      try {
+        // 5-second per-item safety timeout so one hung socket can never stall the response
+        const fetchPromise = getMarketRates(cleanQ, { size, make, spec });
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 5000));
+        const res = await Promise.race([fetchPromise, timeoutPromise]);
+        if (res) marketData = res;
+      } catch (_) { }
+
+      // Internal SEPL PO history
+      let internalHist = { pastPoRates: [] };
+      try {
+        internalHist = getInternalHistoricalRates(cleanQ);
+      } catch (_) { }
+
+      const pastPoRates = (internalHist?.pastPoRates || []).filter(h => h.po_number !== po.po_number);
+
+      // Resolve benchmark rate
+      let estimatedRate = null;
+      let benchmarkSource = 'None';
+      if (+it.pp_rate > 0) {
+        estimatedRate = +it.pp_rate;
+        benchmarkSource = 'BOQ PP Rate';
+      } else if (+it.master_price > 0) {
+        estimatedRate = +it.master_price;
+        benchmarkSource = 'Item Master';
+      } else if (+it.marketing_rate > 0) {
+        estimatedRate = +it.marketing_rate;
+        benchmarkSource = 'AI Market Rate';
+      } else if (+it.final_rate > 0) {
+        estimatedRate = +it.final_rate;
+        benchmarkSource = 'Indent Final Quote';
       }
+
+      const actualRate = +it.actual_rate || 0;
+      const qty = +it.quantity || 0;
+      const actualAmount = Math.round((+it.actual_amount || (actualRate * qty)) * 100) / 100;
+
+      let varianceAmount = 0;
+      let variancePct = 0;
+      let isOverrun = false;
+      let isWithin = false;
+
+      if (estimatedRate > 0) {
+        varianceAmount = Math.round((actualRate - estimatedRate) * qty * 100) / 100;
+        variancePct = Math.round(((actualRate - estimatedRate) / estimatedRate) * 1000) / 10;
+        isOverrun = varianceAmount > 0;
+        isWithin = varianceAmount <= 0;
+      }
+
+      // Lowest online benchmark
+      const minOnline = marketData.summary?.lowestPrice || null;
+      let onlineVariancePct = null;
+      if (minOnline && minOnline > 0) {
+        onlineVariancePct = Math.round(((actualRate - minOnline) / minOnline) * 1000) / 10;
+      }
+
+      // Quotes collection summary
+      const quotesList = [
+        { num: 1, name: it.vendor1_name, rate: +it.vendor1_rate || 0, terms: it.vendor1_terms, credit_days: it.vendor1_credit_days, proof: it.vendor1_proof },
+        { num: 2, name: it.vendor2_name, rate: +it.vendor2_rate || 0, terms: it.vendor2_terms, credit_days: it.vendor2_credit_days, proof: it.vendor2_proof },
+        { num: 3, name: it.vendor3_name, rate: +it.vendor3_rate || 0, terms: it.vendor3_terms, credit_days: it.vendor3_credit_days, proof: it.vendor3_proof }
+      ].filter(q => q.rate > 0 && String(q.name || '').trim());
+
+      const minQuoteRate = quotesList.length > 0 ? Math.min(...quotesList.map(q => q.rate)) : null;
+
+      return {
+        id: it.id,
+        vendor_po_id: it.vendor_po_id,
+        indent_item_id: it.indent_item_id,
+        description: it.description || it.master_name,
+        master_name: it.master_name,
+        item_code: it.item_code,
+        specification: it.specification,
+        size,
+        make,
+        unit: it.unit || it.indent_unit || 'nos',
+        quantity: qty,
+        actual_rate: actualRate,
+        actual_amount: actualAmount,
+
+        // Benchmarks
+        estimated_rate: estimatedRate,
+        estimated_amount: estimatedRate ? Math.round(estimatedRate * qty * 100) / 100 : null,
+        benchmark_source: benchmarkSource,
+        variance_amount: varianceAmount,
+        variance_pct: variancePct,
+        is_overrun: isOverrun,
+        is_within: isWithin,
+
+        // Indent quotes
+        quotes: {
+          vendor1_name: it.vendor1_name,
+          vendor1_rate: it.vendor1_rate,
+          vendor1_terms: it.vendor1_terms,
+          vendor1_proof: it.vendor1_proof,
+          vendor2_name: it.vendor2_name,
+          vendor2_rate: it.vendor2_rate,
+          vendor2_terms: it.vendor2_terms,
+          vendor2_proof: it.vendor2_proof,
+          vendor3_name: it.vendor3_name,
+          vendor3_rate: it.vendor3_rate,
+          vendor3_terms: it.vendor3_terms,
+          vendor3_proof: it.vendor3_proof,
+          final_vendor_name: it.final_vendor_name,
+          final_rate: it.final_rate,
+          final_proof: it.final_proof,
+          min_quote_rate: minQuoteRate,
+          all_quotes: quotesList
+        },
+
+        // Online Data
+        online: {
+          query: cleanQ,
+          lowest_price: minOnline,
+          average_price: marketData.summary?.averagePrice || null,
+          highest_price: marketData.summary?.highestPrice || null,
+          sample_count: marketData.summary?.sampleCount || 0,
+          moglix: (marketData.moglix || []).slice(0, 3),
+          indiamart: (marketData.indiamart || []).slice(0, 3),
+          direct_links: marketData.directLinks,
+          variance_pct_vs_online: onlineVariancePct
+        },
+
+        // Historical rates
+        history: pastPoRates.slice(0, 3),
+
+        // Compatibility aliases
+        marketData: {
+          query: cleanQ,
+          lowestPrice: minOnline,
+          averagePrice: marketData.summary?.averagePrice || null,
+          moglix: (marketData.moglix || []).slice(0, 3),
+          indiamart: (marketData.indiamart || []).slice(0, 3),
+          directLinks: marketData.directLinks,
+          summary: marketData.summary
+        },
+        pastPoRates: pastPoRates.slice(0, 3),
+        estimatedRate: estimatedRate,
+        variancePct: variancePct
+      };
     };
 
-    try {
-      // 5-second per-item safety timeout so one hung socket can never stall the response
-      const fetchPromise = getMarketRates(cleanQ, { size, make, spec });
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 5000));
-      const res = await Promise.race([fetchPromise, timeoutPromise]);
-      if (res) marketData = res;
-    } catch (_) {}
-
-    // Internal SEPL PO history
-    let internalHist = { pastPoRates: [] };
-    try {
-      internalHist = getInternalHistoricalRates(cleanQ);
-    } catch (_) {}
-
-    const pastPoRates = (internalHist?.pastPoRates || []).filter(h => h.po_number !== po.po_number);
-
-    // Resolve benchmark rate
-    let estimatedRate = null;
-    let benchmarkSource = 'None';
-    if (+it.pp_rate > 0) {
-      estimatedRate = +it.pp_rate;
-      benchmarkSource = 'BOQ PP Rate';
-    } else if (+it.master_price > 0) {
-      estimatedRate = +it.master_price;
-      benchmarkSource = 'Item Master';
-    } else if (+it.marketing_rate > 0) {
-      estimatedRate = +it.marketing_rate;
-      benchmarkSource = 'AI Market Rate';
-    } else if (+it.final_rate > 0) {
-      estimatedRate = +it.final_rate;
-      benchmarkSource = 'Indent Final Quote';
+    // Process items in chunks of 3 to prevent socket contention and ensure rapid, stable execution
+    const enrichedItems = [];
+    const chunkSize = 3;
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      const chunkResults = await Promise.all(chunk.map(it => enrichItem(it)));
+      enrichedItems.push(...chunkResults);
     }
 
-    const actualRate = +it.actual_rate || 0;
-    const qty = +it.quantity || 0;
-    const actualAmount = Math.round((+it.actual_amount || (actualRate * qty)) * 100) / 100;
+    // Aggregated Summary
+    const totalActual = enrichedItems.reduce((s, it) => s + it.actual_amount, 0);
+    let totalEstimated = 0;
+    let estimatedItemsCount = 0;
+    let totalOnline = 0;
+    let onlineItemsCount = 0;
 
-    let varianceAmount = 0;
-    let variancePct = 0;
-    let isOverrun = false;
-    let isWithin = false;
-
-    if (estimatedRate > 0) {
-      varianceAmount = Math.round((actualRate - estimatedRate) * qty * 100) / 100;
-      variancePct = Math.round(((actualRate - estimatedRate) / estimatedRate) * 1000) / 10;
-      isOverrun = varianceAmount > 0;
-      isWithin = varianceAmount <= 0;
+    for (const it of enrichedItems) {
+      if (it.estimated_amount != null) {
+        totalEstimated += it.estimated_amount;
+        estimatedItemsCount++;
+      }
+      if (it.online.lowest_price != null) {
+        totalOnline += (it.online.lowest_price * it.quantity);
+        onlineItemsCount++;
+      }
     }
 
-    // Lowest online benchmark
-    const minOnline = marketData.summary?.lowestPrice || null;
-    let onlineVariancePct = null;
-    if (minOnline && minOnline > 0) {
-      onlineVariancePct = Math.round(((actualRate - minOnline) / minOnline) * 1000) / 10;
+    const level = poLevelOf(po.po_approval);
+    const canApprove = level ? canApprovePoLevel(db, req.user.id, level) : false;
+    let approvers = [];
+    if (level === 'coo') {
+      const coo = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'coo@securedengineers.com' OR role = 'coo' LIMIT 1").get();
+      approvers = [coo ? `${coo.name} (${coo.email})` : 'COO (coo@securedengineers.com)'];
+    } else if (level === 'cmd') {
+      const md = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'director@securedengineers.com' OR LOWER(name) LIKE '%ankur%' LIMIT 1").get();
+      approvers = [md ? `${md.name} (${md.email})` : 'MD (director@securedengineers.com)'];
+    } else if (level) {
+      approvers = poApproversFor(db, level).map(a => a.name);
     }
 
-    // Quotes collection summary
-    const quotesList = [
-      { num: 1, name: it.vendor1_name, rate: +it.vendor1_rate || 0, terms: it.vendor1_terms, credit_days: it.vendor1_credit_days, proof: it.vendor1_proof },
-      { num: 2, name: it.vendor2_name, rate: +it.vendor2_rate || 0, terms: it.vendor2_terms, credit_days: it.vendor2_credit_days, proof: it.vendor2_proof },
-      { num: 3, name: it.vendor3_name, rate: +it.vendor3_rate || 0, terms: it.vendor3_terms, credit_days: it.vendor3_credit_days, proof: it.vendor3_proof }
-    ].filter(q => q.rate > 0 && String(q.name || '').trim());
-
-    const minQuoteRate = quotesList.length > 0 ? Math.min(...quotesList.map(q => q.rate)) : null;
-
-    return {
-      id: it.id,
-      vendor_po_id: it.vendor_po_id,
-      indent_item_id: it.indent_item_id,
-      description: it.description || it.master_name,
-      master_name: it.master_name,
-      item_code: it.item_code,
-      specification: it.specification,
-      size,
-      make,
-      unit: it.unit || it.indent_unit || 'nos',
-      quantity: qty,
-      actual_rate: actualRate,
-      actual_amount: actualAmount,
-
-      // Benchmarks
-      estimated_rate: estimatedRate,
-      estimated_amount: estimatedRate ? Math.round(estimatedRate * qty * 100) / 100 : null,
-      benchmark_source: benchmarkSource,
-      variance_amount: varianceAmount,
-      variance_pct: variancePct,
-      is_overrun: isOverrun,
-      is_within: isWithin,
-
-      // Indent quotes
-      quotes: {
-        vendor1_name: it.vendor1_name,
-        vendor1_rate: it.vendor1_rate,
-        vendor1_terms: it.vendor1_terms,
-        vendor1_proof: it.vendor1_proof,
-        vendor2_name: it.vendor2_name,
-        vendor2_rate: it.vendor2_rate,
-        vendor2_terms: it.vendor2_terms,
-        vendor2_proof: it.vendor2_proof,
-        vendor3_name: it.vendor3_name,
-        vendor3_rate: it.vendor3_rate,
-        vendor3_terms: it.vendor3_terms,
-        vendor3_proof: it.vendor3_proof,
-        final_vendor_name: it.final_vendor_name,
-        final_rate: it.final_rate,
-        final_proof: it.final_proof,
-        min_quote_rate: minQuoteRate,
-        all_quotes: quotesList
+    res.json({
+      po,
+      items: enrichedItems,
+      summary: {
+        total_items: enrichedItems.length,
+        total_actual_amount: totalActual,
+        total_estimated_amount: totalEstimated,
+        estimated_items_count: estimatedItemsCount,
+        total_online_amount: totalOnline,
+        online_items_count: onlineItemsCount,
+        savings_vs_estimated: totalEstimated > 0 ? (totalEstimated - totalActual) : 0,
+        savings_vs_estimated_pct: totalEstimated > 0 ? Math.round(((totalEstimated - totalActual) / totalEstimated) * 1000) / 10 : 0,
+        savings_vs_online: totalOnline > 0 ? (totalOnline - totalActual) : 0,
+        savings_vs_online_pct: totalOnline > 0 ? Math.round(((totalOnline - totalActual) / totalOnline) * 1000) / 10 : 0,
+        cost_status: costEval?.cost_status || (totalActual > totalEstimated && totalEstimated > 0 ? 'cost_overrun' : 'within_estimate'),
+        reason: costEval?.reason || null
       },
-
-      // Online Data
-      online: {
-        query: cleanQ,
-        lowest_price: minOnline,
-        average_price: marketData.summary?.averagePrice || null,
-        highest_price: marketData.summary?.highestPrice || null,
-        sample_count: marketData.summary?.sampleCount || 0,
-        moglix: (marketData.moglix || []).slice(0, 3),
-        indiamart: (marketData.indiamart || []).slice(0, 3),
-        direct_links: marketData.directLinks,
-        variance_pct_vs_online: onlineVariancePct
-      },
-
-      // Historical rates
-      history: pastPoRates.slice(0, 3),
-
-      // Compatibility aliases
-      marketData: {
-        query: cleanQ,
-        lowestPrice: minOnline,
-        averagePrice: marketData.summary?.averagePrice || null,
-        moglix: (marketData.moglix || []).slice(0, 3),
-        indiamart: (marketData.indiamart || []).slice(0, 3),
-        directLinks: marketData.directLinks,
-        summary: marketData.summary
-      },
-      pastPoRates: pastPoRates.slice(0, 3),
-      estimatedRate: estimatedRate,
-      variancePct: variancePct
-    };
-  };
-
-  // Process items in chunks of 3 to prevent socket contention and ensure rapid, stable execution
-  const enrichedItems = [];
-  const chunkSize = 3;
-  for (let i = 0; i < items.length; i += chunkSize) {
-    const chunk = items.slice(i, i + chunkSize);
-    const chunkResults = await Promise.all(chunk.map(it => enrichItem(it)));
-    enrichedItems.push(...chunkResults);
-  }
-
-  // Aggregated Summary
-  const totalActual = enrichedItems.reduce((s, it) => s + it.actual_amount, 0);
-  let totalEstimated = 0;
-  let estimatedItemsCount = 0;
-  let totalOnline = 0;
-  let onlineItemsCount = 0;
-
-  for (const it of enrichedItems) {
-    if (it.estimated_amount != null) {
-      totalEstimated += it.estimated_amount;
-      estimatedItemsCount++;
-    }
-    if (it.online.lowest_price != null) {
-      totalOnline += (it.online.lowest_price * it.quantity);
-      onlineItemsCount++;
-    }
-  }
-
-  const level = poLevelOf(po.po_approval);
-  const canApprove = level ? canApprovePoLevel(db, req.user.id, level) : false;
-  let approvers = [];
-  if (level === 'coo') {
-    const coo = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'coo@securedengineers.com' OR role = 'coo' LIMIT 1").get();
-    approvers = [coo ? `${coo.name} (${coo.email})` : 'COO (coo@securedengineers.com)'];
-  } else if (level === 'cmd') {
-    const md = db.prepare("SELECT name, email FROM users WHERE LOWER(email) = 'director@securedengineers.com' OR LOWER(name) LIKE '%ankur%' LIMIT 1").get();
-    approvers = [md ? `${md.name} (${md.email})` : 'MD (director@securedengineers.com)'];
-  } else if (level) {
-    approvers = poApproversFor(db, level).map(a => a.name);
-  }
-
-  res.json({
-    po,
-    items: enrichedItems,
-    summary: {
-      total_items: enrichedItems.length,
-      total_actual_amount: totalActual,
-      total_estimated_amount: totalEstimated,
-      estimated_items_count: estimatedItemsCount,
-      total_online_amount: totalOnline,
-      online_items_count: onlineItemsCount,
-      savings_vs_estimated: totalEstimated > 0 ? (totalEstimated - totalActual) : 0,
-      savings_vs_estimated_pct: totalEstimated > 0 ? Math.round(((totalEstimated - totalActual) / totalEstimated) * 1000) / 10 : 0,
-      savings_vs_online: totalOnline > 0 ? (totalOnline - totalActual) : 0,
-      savings_vs_online_pct: totalOnline > 0 ? Math.round(((totalOnline - totalActual) / totalOnline) * 1000) / 10 : 0,
-      cost_status: costEval?.cost_status || (totalActual > totalEstimated && totalEstimated > 0 ? 'cost_overrun' : 'within_estimate'),
-      reason: costEval?.reason || null
-    },
-    approval: {
-      can_approve: canApprove,
-      pending_level: level,
-      pending_stage: po.po_approval,
-      pending_approvers: approvers,
-      is_approved: po.po_approval === 'approved',
-      is_rejected: po.po_approval === 'rejected'
-    }
-  });
+      approval: {
+        can_approve: canApprove,
+        pending_level: level,
+        pending_stage: po.po_approval,
+        pending_approvers: approvers,
+        is_approved: po.po_approval === 'approved',
+        is_rejected: po.po_approval === 'rejected'
+      }
+    });
   } catch (err) {
     console.error('[comparison-sheet] error:', err);
     res.status(500).json({ error: err.message || 'Failed to load PO comparison sheet' });
@@ -5585,18 +5605,18 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
   const set = (k, v) => { sets.push(`${k}=?`); params.push(v); };
 
   // Legacy fields (kept for backwards compat with status / advance toggle)
-  if (b.status !== undefined)        set('status', b.status);
-  if (b.advance_paid !== undefined)  set('advance_paid', b.advance_paid ? 1 : 0);
+  if (b.status !== undefined) set('status', b.status);
+  if (b.advance_paid !== undefined) set('advance_paid', b.advance_paid ? 1 : 0);
 
   // New editable header fields (mam's full-edit modal)
-  if (b.po_date !== undefined)               set('po_date', b.po_date || null);
+  if (b.po_date !== undefined) set('po_date', b.po_date || null);
   if (b.expected_receipt_date !== undefined) set('expected_receipt_date', b.expected_receipt_date || null);
   // delay_reason deliberately NOT handled here — this PUT is auth-only, and
   // the audit (2026-07-31) flagged that any logged-in user could erase the
   // accountability record. It lives on the gated PATCH /vendor-po/:id/delay-reason.
-  if (b.remarks !== undefined)               set('remarks', b.remarks || null);
-  if (b.advance_required !== undefined)      set('advance_required', +b.advance_required || 0);
-  if (b.site_address !== undefined)          set('site_address', b.site_address ? String(b.site_address).trim() : null);
+  if (b.remarks !== undefined) set('remarks', b.remarks || null);
+  if (b.advance_required !== undefined) set('advance_required', +b.advance_required || 0);
+  if (b.site_address !== undefined) set('site_address', b.site_address ? String(b.site_address).trim() : null);
 
   // Payment-before-material (internal — mam 2026-05-27). Edited via the
   // same form; if the user switches type from 'advance' → 'no_advance'
@@ -5614,7 +5634,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
     }
   }
   if (b.payment_block_amount !== undefined) set('payment_block_amount', +b.payment_block_amount > 0 ? +b.payment_block_amount : null);
-  if (b.payment_block_notes !== undefined)  set('payment_block_notes', b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null);
+  if (b.payment_block_notes !== undefined) set('payment_block_notes', b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null);
 
   // Freight terms + charge (mam 2026-06-12) — printed on the PO and folded
   // into the recomputed total below.
@@ -5936,45 +5956,49 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
 
 // Purchase Bills (paginated + search + date range + backward-compat)
 function attachDeliveryBalance(db, row) {
-  Object.assign(row, purchaseBilling.financials(db,row));
-  const match = require('../lib/purchaseBillMatching').review(db,row);
-  row.match_status=match.status; row.match_hold=match.hold_amount; row.payable_now=match.payable_now;
-  row.linked_pos=db.prepare('SELECT vp.id,vp.po_number FROM purchase_bill_pos bp JOIN vendor_pos vp ON vp.id=bp.vendor_po_id WHERE bp.purchase_bill_id=?').all(row.id);
+  Object.assign(row, purchaseBilling.financials(db, row));
+  const match = require('../lib/purchaseBillMatching').review(db, row);
+  row.match_status = match.status; row.match_hold = match.hold_amount; row.payable_now = match.payable_now;
+  row.linked_pos = db.prepare('SELECT vp.id,vp.po_number FROM purchase_bill_pos bp JOIN vendor_pos vp ON vp.id=bp.vendor_po_id WHERE bp.purchase_bill_id=?').all(row.id);
 
   if (row.delivery_mode === 'partial' && row.vendor_po_id) {
     row.pending_delivery_lines = require('../lib/partialDeliveries').balanceItems(db, row.vendor_po_id).filter(it => it.remaining_qty > 0).length;
   }
 }
-router.get('/purchase-bills/:id/matching', requirePermission('procurement','view'), (req,res)=>{
-  const db=getDb(), bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
-  if(!bill)return res.status(404).json({error:'Purchase bill not found'});
-  res.json({...require('../lib/purchaseBillMatching').review(db,bill),bill_number:bill.bill_number});
+router.get('/purchase-bills/:id/matching', requirePermission('procurement', 'view'), (req, res) => {
+  const db = getDb(), bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'Purchase bill not found' });
+  res.json({ ...require('../lib/purchaseBillMatching').review(db, bill), bill_number: bill.bill_number });
 });
-router.post('/purchase-bills/:id/accept-rate', needsApprove, (req,res)=>{
-  const db=getDb(), bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
-  if(!bill)return res.status(404).json({error:'Purchase bill not found'});
-  try { res.json(require('../lib/purchaseBillMatching').approveRate(db,bill,req.user.id,req.body.reason)); }
-  catch(e){res.status(400).json({error:e.message});}
+router.post('/purchase-bills/:id/accept-rate', needsApprove, (req, res) => {
+  const db = getDb(), bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'Purchase bill not found' });
+  try { res.json(require('../lib/purchaseBillMatching').approveRate(db, bill, req.user.id, req.body.reason)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
-router.get('/vendor-po/:id/matching', requirePermission('procurement','view'), (req,res)=>{
-  const result=require('../lib/purchaseBillMatching').poProgress(getDb(),+req.params.id);
-  if(!result)return res.status(404).json({error:'PO not found'});
-  res.json({pos:[result]});
+router.get('/vendor-po/:id/matching', requirePermission('procurement', 'view'), (req, res) => {
+  const result = require('../lib/purchaseBillMatching').poProgress(getDb(), +req.params.id);
+  if (!result) return res.status(404).json({ error: 'PO not found' });
+  res.json({ pos: [result] });
 });
-router.get('/purchase-bills/:id/delivery-balance' , (req, res) => {
+router.get('/purchase-bills/:id/delivery-balance', (req, res) => {
   const db = getDb();
   const bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
   if (!bill || bill.delivery_mode !== 'partial') return res.status(400).json({ error: 'No staged delivery for this bill' });
-  res.json({ items: require('../lib/partialDeliveries').balanceItems(db, bill.vendor_po_id),
-    history: db.prepare("SELECT dn.document_number, dn.delivery_date, dn.items_json, pb.bill_number, pb.total_amount, pb.file_path AS bill_file_path FROM delivery_notes dn LEFT JOIN purchase_bills pb ON pb.id=dn.balance_purchase_bill_id WHERE dn.vendor_po_id=? AND dn.document_type='challan' ORDER BY dn.id").all(bill.vendor_po_id) });
+  res.json({
+    items: require('../lib/partialDeliveries').balanceItems(db, bill.vendor_po_id),
+    history: db.prepare("SELECT dn.document_number, dn.delivery_date, dn.items_json, pb.bill_number, pb.total_amount, pb.file_path AS bill_file_path FROM delivery_notes dn LEFT JOIN purchase_bills pb ON pb.id=dn.balance_purchase_bill_id WHERE dn.vendor_po_id=? AND dn.document_type='challan' ORDER BY dn.id").all(bill.vendor_po_id)
+  });
 });
 router.post('/purchase-bills/:id/balance-delivery', needsApprove, vendorPoUpload.single('file'), (req, res) => {
-  const discardUpload = () => { if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} } };
+  const discardUpload = () => { if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) { } } };
   const date = String(req.body.delivery_date || '');
   try {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > istToday()) throw new Error('Enter a valid delivery date, no later than today');
-    const body = { ...req.body, items: typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items,
-      bill_file_path: req.file ? `/uploads/${req.file.filename}` : null };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date > istToday()) throw new Error('Enter a valid delivery date, no later than today');
+    const body = {
+      ...req.body, items: typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items,
+      bill_file_path: req.file ? `/uploads/${req.file.filename}` : null
+    };
     const result = require('../lib/partialDeliveries').recordBalance(getDb(), +req.params.id, body, date, req.user.id);
     if (result.existing || !result.balance_purchase_bill_id) discardUpload();
     res.json(result);
@@ -6153,21 +6177,21 @@ router.get('/purchase-bills/followup', (req, res) => {
   res.json(rows);
 });
 
-router.get('/purchase-bills/eligible', (req,res)=>{
-  const db=getDb(),vendor=+req.query.vendor_id;
-  const legacy=+req.query.reconcile_bill_id||0;
-  const pos=db.prepare('SELECT id FROM vendor_pos WHERE vendor_id=? AND COALESCE(cancelled,0)=0 ORDER BY id DESC').all(vendor).map(p=>purchaseBilling.poState(db,p.id,legacy));
-  res.json({pos:pos.filter(p=>p.items.some(i=>i.billable_qty>0)||p.reconciliation_required),debits:purchaseBilling.eligibleDebits(db,vendor)});
+router.get('/purchase-bills/eligible', (req, res) => {
+  const db = getDb(), vendor = +req.query.vendor_id;
+  const legacy = +req.query.reconcile_bill_id || 0;
+  const pos = db.prepare('SELECT id FROM vendor_pos WHERE vendor_id=? AND COALESCE(cancelled,0)=0 ORDER BY id DESC').all(vendor).map(p => purchaseBilling.poState(db, p.id, legacy));
+  res.json({ pos: pos.filter(p => p.items.some(i => i.billable_qty > 0) || p.reconciliation_required), debits: purchaseBilling.eligibleDebits(db, vendor) });
 });
-router.post('/purchase-bills/:id/reconcile',needsApprove,vendorPoUpload.single('file'),(req,res)=>{
+router.post('/purchase-bills/:id/reconcile', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   try {
-    const bill=getDb().prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
-    if(!bill)throw Error('Bill not found');
-    const body={...req.body,items:typeof req.body.items==='string'?JSON.parse(req.body.items):req.body.items,debit_ids:[]};
-    const result=purchaseBilling.saveBill(getDb(),body,req.user.id,req.file?`/uploads/${req.file.filename}`:bill.file_path,+req.params.id);
-    if(req.file)getDb().prepare('UPDATE purchase_bills SET file_path=? WHERE id=?').run(`/uploads/${req.file.filename}`,bill.id);
+    const bill = getDb().prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+    if (!bill) throw Error('Bill not found');
+    const body = { ...req.body, items: typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items, debit_ids: [] };
+    const result = purchaseBilling.saveBill(getDb(), body, req.user.id, req.file ? `/uploads/${req.file.filename}` : bill.file_path, +req.params.id);
+    if (req.file) getDb().prepare('UPDATE purchase_bills SET file_path=? WHERE id=?').run(`/uploads/${req.file.filename}`, bill.id);
     res.json(result);
-  } catch(e){if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}res.status(400).json({error:e.message});}
+  } catch (e) { if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) { } res.status(400).json({ error: e.message }); }
 });
 
 // Per-item PO qty vs RECEIVED qty for a Vendor PO — feeds the Bill-upload
@@ -6215,17 +6239,17 @@ router.get('/vendor-po/:id/bill-items', (req, res) => {
 // is attached it still works — mam sometimes captures a bill without a scan.
 router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
-  if(b.items) {
+  if (b.items) {
     try {
-      const body={...b,items:typeof b.items==='string'?JSON.parse(b.items):b.items,debit_ids:typeof b.debit_ids==='string'?JSON.parse(b.debit_ids):b.debit_ids};
-      const result=purchaseBilling.saveBill(getDb(),body,req.user.id,req.file?`/uploads/${req.file.filename}`:null);
-      if(result.existing&&req.file)fs.unlinkSync(req.file.path);
+      const body = { ...b, items: typeof b.items === 'string' ? JSON.parse(b.items) : b.items, debit_ids: typeof b.debit_ids === 'string' ? JSON.parse(b.debit_ids) : b.debit_ids };
+      const result = purchaseBilling.saveBill(getDb(), body, req.user.id, req.file ? `/uploads/${req.file.filename}` : null);
+      if (result.existing && req.file) fs.unlinkSync(req.file.path);
       return res.status(201).json(result);
-    }catch(e){if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}return res.status(400).json({error:e.message});}
+    } catch (e) { if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) { } return res.status(400).json({ error: e.message }); }
   }
-  if(b.vendor_po_id && getDb().prepare('SELECT 1 FROM purchase_bill_pos WHERE vendor_po_id=? LIMIT 1').get(+b.vendor_po_id)) {
-    if(req.file)try{fs.unlinkSync(req.file.path);}catch(_){}
-    return res.status(400).json({error:'This PO already has a bill. Use Add Bill for its remaining unbilled quantities, or Balance pending · Receive for a later delivery.'});
+  if (b.vendor_po_id && getDb().prepare('SELECT 1 FROM purchase_bill_pos WHERE vendor_po_id=? LIMIT 1').get(+b.vendor_po_id)) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) { }
+    return res.status(400).json({ error: 'This PO already has a bill. Use Add Bill for its remaining unbilled quantities, or Balance pending · Receive for a later delivery.' });
   }
   if (!req.file) return res.status(400).json({ error: 'Bill file is required — upload the vendor bill' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
@@ -6236,7 +6260,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   const gst_amount = +b.gst_amount || 0;
   const freight_amount = Number(b.freight_amount || 0);
   if (!Number.isFinite(freight_amount) || freight_amount < 0) {
-    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) { } }
     return res.status(400).json({ error: 'Freight amount must be a valid non-negative number' });
   }
   const total_amount = Math.round((amount + gst_amount + freight_amount) * 100) / 100;
@@ -6262,7 +6286,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     const db = getDb();
     const staged = b.delivery_mode === 'partial';
     let submitted = [];
-    try { submitted = JSON.parse(b.received_items || '[]'); } catch (_) {}
+    try { submitted = JSON.parse(b.received_items || '[]'); } catch (_) { }
     if (vendor_po_id && db.prepare("SELECT id FROM purchase_bills WHERE vendor_po_id=? AND delivery_mode='partial'").get(vendor_po_id)) {
       return res.status(400).json({ error: 'This PO already has staged deliveries. Use Record balance delivery on its purchase bill.' });
     }
@@ -6364,7 +6388,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
             `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
              VALUES (?, 'rejected', ?, ?, ?, ?, ?, ?, 'open', ?)`
           ).run(dnNum, vendor_po_id, vendor_id || po?.vendor_id || null, r.lastInsertRowid, Math.round(billVal * 100) / 100,
-                'Auto-raised on bill entry: material REJECTED.', JSON.stringify(items), req.user?.id || null);
+            'Auto-raised on bill entry: material REJECTED.', JSON.stringify(items), req.user?.id || null);
           autoRejectDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: Math.round(billVal * 100) / 100 };
         }
       } catch (e) { console.error('[auto-reject-debit] failed (bill saved anyway):', e.message); }
@@ -6394,8 +6418,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
             `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
              VALUES (?, 'extra_rate', ?, ?, ?, ?, ?, ?, 'open', ?)`
           ).run(dnNum, vendor_po_id, vendor_id || po.vendor_id || null, r.lastInsertRowid, variance,
-                `Auto-raised on bill entry: vendor billed ₹${Math.round(billVal).toLocaleString('en-IN')} vs PO ₹${Math.round(poVal).toLocaleString('en-IN')} (excess ₹${Math.round(variance).toLocaleString('en-IN')}).`,
-                JSON.stringify(items), req.user?.id || null);
+            `Auto-raised on bill entry: vendor billed ₹${Math.round(billVal).toLocaleString('en-IN')} vs PO ₹${Math.round(poVal).toLocaleString('en-IN')} (excess ₹${Math.round(variance).toLocaleString('en-IN')}).`,
+            JSON.stringify(items), req.user?.id || null);
           autoDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: variance };
         }
       } catch (e) { console.error('[auto-debit] failed (bill saved anyway):', e.message); }
@@ -6423,7 +6447,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
           ).all(vendor_po_id);
           const recv = {};
           for (const dn of db.prepare("SELECT items_json FROM delivery_notes WHERE vendor_po_id=? AND items_json IS NOT NULL").all(vendor_po_id)) {
-            try { for (const x of (JSON.parse(dn.items_json) || [])) if (x.vendor_po_item_id != null) recv[x.vendor_po_item_id] = (recv[x.vendor_po_item_id] || 0) + (+x.received_qty || 0); } catch (_) {}
+            try { for (const x of (JSON.parse(dn.items_json) || [])) if (x.vendor_po_item_id != null) recv[x.vendor_po_item_id] = (recv[x.vendor_po_item_id] || 0) + (+x.received_qty || 0); } catch (_) { }
           }
           const lines = []; let amt = 0;
           for (const it of poItems) {
@@ -6442,7 +6466,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
               `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
                VALUES (?, 'short_supply', ?, ?, ?, ?, ?, ?, 'open', ?)`
             ).run(dnNum, vendor_po_id, vendor_id || po2?.vendor_id || null, r.lastInsertRowid, Math.round(amt * 100) / 100,
-                  'Auto-raised on bill entry: short supply (received less than ordered).', JSON.stringify(lines), req.user?.id || null);
+              'Auto-raised on bill entry: short supply (received less than ordered).', JSON.stringify(lines), req.user?.id || null);
             autoShortDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: Math.round(amt * 100) / 100 };
 
             // Email the vendor about the short supply (mam 2026-06-04).
@@ -6460,7 +6484,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
                     <p>The following material against our PO <b>${po3?.po_number || ''}</b> was received <b>short</b> of the ordered quantity. Please arrange to supply the shortfall at the earliest, or confirm a credit.</p>
                     <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse"><tr><th align="left">Item</th><th align="right">Short Qty</th></tr>${rowsHtml}</table>
                     <p>Regards,<br/>Secured Engineers Pvt. Ltd.</p>`,
-                }).catch(() => {});
+                }).catch(() => { });
                 vendorMailed = true;
               }
             } catch (_) { /* email is best-effort */ }
@@ -6486,16 +6510,16 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       vendor_mailed: vendorMailed,
     });
   } catch (err) {
-    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) { } }
     res.status(500).json({ error: err.message });
   }
 });
 
 router.delete('/purchase-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
-  const db=getDb(),bill=db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
-  if(bill && purchaseBilling.financials(db,bill).paid_amount>0)return res.status(400).json({error:'A bill with recorded payments cannot be deleted'});
-  if(db.prepare('SELECT 1 FROM debit_notes WHERE purchase_bill_id=?').get(req.params.id))return res.status(400).json({error:'Resolve linked debit notes before deleting this bill'});
-  db.transaction(()=>{
+  const db = getDb(), bill = db.prepare('SELECT * FROM purchase_bills WHERE id=?').get(req.params.id);
+  if (bill && purchaseBilling.financials(db, bill).paid_amount > 0) return res.status(400).json({ error: 'A bill with recorded payments cannot be deleted' });
+  if (db.prepare('SELECT 1 FROM debit_notes WHERE purchase_bill_id=?').get(req.params.id)) return res.status(400).json({ error: 'Resolve linked debit notes before deleting this bill' });
+  db.transaction(() => {
     db.prepare('UPDATE delivery_notes SET balance_purchase_bill_id=NULL WHERE balance_purchase_bill_id=?').run(req.params.id);
     db.prepare('DELETE FROM purchase_bills WHERE id=?').run(req.params.id);
   })();
@@ -6605,7 +6629,7 @@ router.post('/debit-notes', requirePermission('procurement', 'create'), (req, re
        (dn_number, type, vendor_po_id, vendor_id, grn_id, purchase_bill_id, amount, reason, items_json, status, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
   ).run(dnNum, type, vendor_po_id, po.vendor_id, b.grn_id || null, b.purchase_bill_id || null,
-        Math.round(amount * 100) / 100, b.reason || null, JSON.stringify(items), req.user?.id || null);
+    Math.round(amount * 100) / 100, b.reason || null, JSON.stringify(items), req.user?.id || null);
   res.status(201).json({ id: r.lastInsertRowid, dn_number: dnNum, amount });
 });
 
@@ -6636,7 +6660,7 @@ router.get('/debit-notes/:id/print', (req, res) => {
   ).get(req.params.id);
   if (!dn) return res.status(404).json({ error: 'Debit note not found' });
   let items = [];
-  try { items = JSON.parse(dn.items_json || '[]'); } catch (_) {}
+  try { items = JSON.parse(dn.items_json || '[]'); } catch (_) { }
   res.json({ dn, items });
 });
 
@@ -6712,8 +6736,8 @@ router.get('/po-pipeline', (req, res) => {
     // "was late Nd" vs today (audit 2026-07-31).
     r.delay_days = !exp ? null
       : recIso ? Math.round((new Date(recIso) - new Date(exp)) / 86400000)
-      : receivedSomehow ? null
-      : Math.round((new Date(todayIso) - new Date(exp)) / 86400000);
+        : receivedSomehow ? null
+          : Math.round((new Date(todayIso) - new Date(exp)) / 86400000);
     r.is_late = r.delay_days !== null && r.delay_days > 0;
   }
   res.json(rows);
@@ -6731,14 +6755,14 @@ router.get('/delivery-notes', (req, res) => {
   }
   if (bill_status && bill_status !== 'all') rows = rows.filter(row => row.sales_bill_status === bill_status);
   if (from || to) rows = rows.filter(row => (row.receiving_documents || []).some(receipt => {
-    const date = String(receipt.received_at || '').slice(0,10);
+    const date = String(receipt.received_at || '').slice(0, 10);
     return date && (!from || date >= from) && (!to || date <= to);
   }));
   const query = String(q || search || '').trim().toLowerCase();
   if (query) rows = rows.filter(row => [row.document_number, row.vendor_po_number, row.site_name, row.company_name,
-    row.indent_number, row.stock_issue_number, row.from_warehouse_name, row.source === 'store' ? 'From Store' : '',
-    row.vendor_name, row.received_by_name, row.raised_by_name,
-    ...row.sales_bill_documents.map(doc => doc.number), ...row.purchase_bills.map(bill => bill.bill_number)]
+  row.indent_number, row.stock_issue_number, row.from_warehouse_name, row.source === 'store' ? 'From Store' : '',
+  row.vendor_name, row.received_by_name, row.raised_by_name,
+  ...row.sales_bill_documents.map(doc => doc.number), ...row.purchase_bills.map(bill => bill.bill_number)]
     .some(value => String(value || '').toLowerCase().includes(query)));
   const pageNum = parseInt(page, 10), limitNum = parseInt(limit, 10);
   if (!isExport && pageNum > 0 && limitNum > 0) {
@@ -6869,7 +6893,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   try {
     const ctx = rentalDispatch.context(getDb(), { poId: Number(b.vendor_po_id) || null });
     if (ctx.items.length || String(ctx.indent?.indent_category || '').trim().toLowerCase() === 'rental') {
-      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch { } }
       if (b.document_type !== 'challan') return res.status(400).json({ error: 'Rental dispatch requires a delivery challan' });
       // Confirm, save item periods, and create rental enquiries in one transaction.
       const result = rentalDispatch.create(getDb(), +b.vendor_po_id, b, req.user);
@@ -6878,11 +6902,11 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
     let requestedItems = b.items;
     if (typeof requestedItems === 'string') { try { requestedItems = JSON.parse(requestedItems); } catch { requestedItems = []; } }
     if (b.rental_items || (Array.isArray(requestedItems) && requestedItems.some(it => String(it?.item_type || '').toUpperCase() === 'RENTAL'))) {
-      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch { } }
       return res.status(400).json({ error: 'No linked rental items on this Vendor PO' });
     }
   } catch (error) {
-    if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch { } }
     return res.status(error.status || 500).json({ error: error.message });
   }
   // File is OPTIONAL on create. Mam's flow: ERP generates the document
@@ -6932,7 +6956,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   // the form lets mam tweak qty/rate/disc per row before generating.
   let itemsJson = null;
   if (Array.isArray(b.items) && b.items.length) {
-    try { itemsJson = JSON.stringify(b.items.filter(it => it && it.include !== false)); } catch (_) {}
+    try { itemsJson = JSON.stringify(b.items.filter(it => it && it.include !== false)); } catch (_) { }
   } else if (typeof b.items === 'string' && b.items.trim()) {
     itemsJson = b.items;
   }
@@ -6991,7 +7015,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
 
     res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type, sales_bill_pending: salesBillPending });
   } catch (err) {
-    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) { } }
     res.status(500).json({ error: err.message });
   }
 });
@@ -7035,6 +7059,96 @@ router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.singl
   ).run(sales_bill_number, sbFilePath, req.params.id);
   res.json({ ok: true, sales_bill_number, sales_bill_file_path: sbFilePath });
 });
+
+// TSK-0784: Bill cut hoke stamp lagke or CRM ke sign hoke usse Ajmer Sir SOTYN pe upload karenge and then saman jayega
+router.post('/delivery-notes/:id/lovely-signed-bill', (req, res, next) => {
+  const isAjmerOrGodown = req.user.id === 1001444 || (req.user.name && /ajmer/i.test(req.user.name)) || (req.user.department && /plant|machinery|store|godown|warehouse/i.test(req.user.department));
+  const isAdmin = req.user.role === 'admin';
+  if (isAjmerOrGodown || isAdmin) return next();
+  requirePermission('procurement', 'edit')(req, res, next);
+}, vendorPoUpload.single('file'), (req, res) => {
+  const db = getDb();
+  const dnId = +req.params.id;
+  const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(dnId);
+  if (!dn) return res.status(404).json({ error: 'Dispatch / Delivery Note not found' });
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please upload the bill file bearing the company stamp and CRM’s signature.' });
+  }
+
+  let filePath;
+  try {
+    const safeName = (req.file.originalname || 'lovely-signed-bill').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const newName = 'lovely-signed-' + Date.now() + '-' + safeName;
+    const newPath = path.join(path.dirname(req.file.path), newName);
+    fs.renameSync(req.file.path, newPath);
+    filePath = '/uploads/' + newName;
+  } catch (e) {
+    filePath = '/uploads/' + req.file.filename;
+  }
+
+  const notes = String(req.body?.notes || '').trim().slice(0, 500);
+
+  db.prepare(`
+    UPDATE delivery_notes SET
+      lovely_signed_bill_file = ?,
+      lovely_signed_bill_uploaded_by = ?,
+      lovely_signed_bill_uploaded_at = CURRENT_TIMESTAMP,
+      lovely_signed_bill_notes = ?,
+      saman_dispatched = 1,
+      saman_dispatched_at = CURRENT_TIMESTAMP,
+      saman_dispatched_by = ?
+    WHERE id = ?
+  `).run(filePath, req.user.id, notes || null, req.user.id, dnId);
+
+  // Notify CRM (1001443) and Admin
+  try {
+    const insertNotif = db.prepare(`
+      INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+      VALUES (?, 'lovely_signed_bill', ?, ?, '/procurement?tab=dispatch', 'in_app', ?)
+    `);
+    const docNo = dn.document_number || ('DN #' + dn.id);
+    insertNotif.run(
+      1001443,
+      'Signed & Stamped Bill Uploaded by Ajmer Sir',
+      'Ajmer Sir has uploaded your signed & stamped bill for ' + docNo + '. Saman (material) is now cleared and recorded for dispatch.',
+      'lovely-signed-' + dnId + '-' + Date.now()
+    );
+  } catch (err) {
+    console.warn('[lovely-signed-bill notification failed]', err.message);
+  }
+
+  res.json({
+    success: true,
+    message: 'CRM signed and stamped bill uploaded successfully by Ajmer Sir. Saman dispatch cleared and recorded.',
+    lovely_signed_bill_file: filePath,
+    lovely_signed_bill_uploaded_at: new Date().toISOString(),
+    lovely_signed_bill_uploaded_by_name: req.user.name,
+    saman_dispatched: 1
+  });
+});
+
+// Authorize / verify saman dispatch gate (TSK-0784)
+router.post('/delivery-notes/:id/dispatch-saman', (req, res) => {
+  const db = getDb();
+  const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
+  if (!dn) return res.status(404).json({ error: 'Dispatch / Delivery Note not found' });
+  if (!dn.lovely_signed_bill_file) {
+    return res.status(400).json({
+      error: 'Cannot dispatch saman: Bill cut hoke stamp lagke or CRM ke sign hoke SOTYN pe Ajmer sir dwara upload hona mandatory hai (TSK-0784).',
+      needs_lovely_signed_bill: true
+    });
+  }
+  db.prepare(`
+    UPDATE delivery_notes SET
+      saman_dispatched = 1,
+      saman_dispatched_at = CURRENT_TIMESTAMP,
+      saman_dispatched_by = ?
+    WHERE id = ?
+  `).run(req.user.id, dn.id);
+  res.json({ success: true, message: 'Material (saman) dispatch cleared.' });
+});
+
 
 // Tally bill against an indent's DELIVERY BILL — upload only (mam
 // 2026-09-12: "that pdf against upload tally bill"). The delivery-bill PDF is
@@ -7082,15 +7196,15 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.array('
   const files = [];
   let saved = false;
   const cleanup = () => {
-    for (const file of uploaded) { try { fs.unlinkSync(file.path); } catch (_) {} }
-    for (const file of files) { try { fs.unlinkSync(path.join(uploadDir, path.basename(file))); } catch (_) {} }
+    for (const file of uploaded) { try { fs.unlinkSync(file.path); } catch (_) { } }
+    for (const file of files) { try { fs.unlinkSync(path.join(uploadDir, path.basename(file))); } catch (_) { } }
   };
   try {
     const existing = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
     if (!existing) { cleanup(); return res.status(404).json({ error: 'Dispatch not found' }); }
     const today = require('../lib/istDate').istToday();
     const date = b.received_at || today;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date || date > today) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date > today) {
       cleanup(); return res.status(400).json({ error: 'Enter a valid receiving date, no later than today.' });
     }
     const po = existing.vendor_po_id ? db.prepare('SELECT expected_receipt_date,delay_reason FROM vendor_pos WHERE id=?').get(existing.vendor_po_id) : null;
@@ -7111,14 +7225,14 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.array('
     if (result.existing) cleanup();
     saved = true;
     if (!result.existing) {
-      if (existing.vendor_po_id && String(b.delay_reason || '').trim()) db.prepare('UPDATE vendor_pos SET delay_reason=?,delay_reason_by=?,delay_reason_at=CURRENT_TIMESTAMP WHERE id=?').run(String(b.delay_reason).trim(),req.user.id,existing.vendor_po_id);
+      if (existing.vendor_po_id && String(b.delay_reason || '').trim()) db.prepare('UPDATE vendor_pos SET delay_reason=?,delay_reason_by=?,delay_reason_at=CURRENT_TIMESTAMP WHERE id=?').run(String(b.delay_reason).trim(), req.user.id, existing.vendor_po_id);
       require('../lib/challanBilling').syncChallanBilling(db, req.params.id);
-      try { require('../lib/dispatchToMb').syncDispatchToMb(db, req.params.id, req.user); } catch (error) { console.error('[receive] MB sync failed:',error.message); }
+      try { require('../lib/dispatchToMb').syncDispatchToMb(db, req.params.id, req.user); } catch (error) { console.error('[receive] MB sync failed:', error.message); }
       try {
         const approvers = require('../lib/dispatchReceiving').receivingApprovers(db);
         const insert = db.prepare('INSERT INTO notifications(user_id,type,title,body,link_url,channel_sent,dedupe_key) VALUES (?,?,?,?,?,?,?)');
-        for (const user of approvers.filter(u => u.id !== req.user.id)) insert.run(user.id,'dispatch_receiving','Receiving awaiting approval',req.user.name + ' uploaded receiving for ' + (existing.document_number || existing.id),'/dispatch-receiving','in_app','delivery-receipt-' + result.id + '-' + user.id);
-      } catch (error) { console.error('[receive] approval notification failed:',error.message); }
+        for (const user of approvers.filter(u => u.id !== req.user.id)) insert.run(user.id, 'dispatch_receiving', 'Receiving awaiting approval', req.user.name + ' uploaded receiving for ' + (existing.document_number || existing.id), '/dispatch-receiving', 'in_app', 'delivery-receipt-' + result.id + '-' + user.id);
+      } catch (error) { console.error('[receive] approval notification failed:', error.message); }
     }
     res.json({ ...result, message: result.status === 'partial' ? 'Partial receiving saved; balance remains pending' : 'Receiving saved', auto_debit: null });
   } catch (error) {
@@ -7138,8 +7252,10 @@ router.get('/vendor-po/:id/rental-dispatch-items', requirePermission('procuremen
 router.get('/delivery-notes/:id/rental-dispatch', requirePermission('procurement', 'view'), (req, res) => {
   try {
     const ctx = rentalDispatch.context(getDb(), { noteId: +req.params.id });
-    res.json({ items: ctx.items, revision: ctx.note.rental_revision, confirmed_at: ctx.note.rental_confirmed_at,
-      indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name });
+    res.json({
+      items: ctx.items, revision: ctx.note.rental_revision, confirmed_at: ctx.note.rental_confirmed_at,
+      indent_number: ctx.indent?.indent_number, site_name: ctx.indent?.site_name
+    });
   } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
 });
 
@@ -7154,7 +7270,7 @@ router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req
   // un-receive a dispatch that site staff marked received meanwhile
   // (review 2026-09-05). `received` itself is set by the receive flow.
   const { status, notes } = req.body || {};
-  if (status && !['received','partial'].includes(status) && getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
+  if (status && !['received', 'partial'].includes(status) && getDb().prepare('SELECT id FROM purchase_bill_items WHERE delivery_note_id=? LIMIT 1').get(req.params.id)) return res.status(400).json({ error: 'This receipt is allocated to a purchase invoice.' });
   const sets = []; const params = [];
   if (status !== undefined) {
     if (!['pending', 'received', 'partial', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
@@ -7269,7 +7385,7 @@ function computeClientPoItems(db, vendorPoId, isSalesBill) {
           if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
         }
       }
-    } catch (_) {}
+    } catch (_) { }
     const r2 = n => Math.round((+n || 0) * 100) / 100;
     for (const r of rows) {
       let boq = +r.rate || 0;
@@ -7391,7 +7507,7 @@ function _clientPoItemsUnusedTail() {
           if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
         }
       }
-    } catch (_) {}
+    } catch (_) { }
     const r2 = n => Math.round((+n || 0) * 100) / 100;
     for (const r of rows) {
       let boq = +r.rate || 0;
@@ -7544,7 +7660,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
            GROUP BY poi.business_book_id
            ORDER BY n DESC LIMIT 1`).get(dn.vendor_po_id);
         if (bbRow && bbRow.id) bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbRow.id);
-      } catch (_) {}
+      } catch (_) { }
     }
     if (!bb) {
       const nm = String(dn.client_company || dn.site_name || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
@@ -7556,23 +7672,23 @@ router.get('/delivery-notes/:id/print', (req, res) => {
                 OR UPPER(TRIM(COALESCE(project_name,''))) = UPPER(?)
                 OR UPPER(TRIM(COALESCE(client_name,'')))  = UPPER(?)
              ORDER BY id DESC LIMIT 1`).get(nm, nm, nm);
-        } catch (_) {}
+        } catch (_) { }
       }
     }
     if (bb) {
       // Order wins; keep existing value only where the order's field is blank.
-      dn.bb_delivery_terms  = bb.payment_against_delivery;
-      dn.client_company     = bb.company_name   || dn.client_company;
-      dn.client_person_name = bb.client_name    || dn.client_person_name;
-      dn.client_phone       = bb.client_contact || dn.client_phone;
-      dn.client_email       = bb.client_email   || dn.client_email;
-      dn.client_address     = bb.billing_address|| dn.client_address;
-      dn.site_address       = bb.shipping_address || dn.site_address;
-      dn.client_state       = bb.state          || dn.client_state;
-      dn.client_state_code  = bb.state_code      || dn.client_state_code;
-      dn.client_gstin       = bb.gstin          || dn.client_gstin;
-      dn.bb_lead_no         = bb.lead_no         || dn.bb_lead_no;
-      if (!dn.site_name)    dn.site_name = bb.project_name;
+      dn.bb_delivery_terms = bb.payment_against_delivery;
+      dn.client_company = bb.company_name || dn.client_company;
+      dn.client_person_name = bb.client_name || dn.client_person_name;
+      dn.client_phone = bb.client_contact || dn.client_phone;
+      dn.client_email = bb.client_email || dn.client_email;
+      dn.client_address = bb.billing_address || dn.client_address;
+      dn.site_address = bb.shipping_address || dn.site_address;
+      dn.client_state = bb.state || dn.client_state;
+      dn.client_state_code = bb.state_code || dn.client_state_code;
+      dn.client_gstin = bb.gstin || dn.client_gstin;
+      dn.bb_lead_no = bb.lead_no || dn.bb_lead_no;
+      if (!dn.site_name) dn.site_name = bb.project_name;
     }
   }
 
@@ -7604,7 +7720,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
                   if (!itemSpec && im.specification) itemSpec = im.specification;
                   if (!itemSize && im.size) itemSize = im.size;
                 }
-              } catch (_) {}
+              } catch (_) { }
             }
             if (!itemName && dn.indent_id) {
               try {
@@ -7621,7 +7737,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
                   if (!itemSpec && im.specification) itemSpec = im.specification;
                   if (!itemSize && im.size) itemSize = im.size;
                 }
-              } catch (_) {}
+              } catch (_) { }
             }
             return {
               description: it.description || '',
@@ -7791,10 +7907,10 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const itemCode = it.item_code || '';
     const itemCellHtml = (itemName || itemCode)
       ? `<div>` +
-        (itemName ? `<div style="font-weight:bold;color:#111">${esc(itemName)}</div>` : '') +
-        (subItemDetail ? `<div style="font-size:9.5px;color:#444">${esc(subItemDetail)}</div>` : '') +
-        (itemCode ? `<div style="font-size:9px;color:#666;font-family:monospace">[${esc(itemCode)}]</div>` : '') +
-        `</div>`
+      (itemName ? `<div style="font-weight:bold;color:#111">${esc(itemName)}</div>` : '') +
+      (subItemDetail ? `<div style="font-size:9.5px;color:#444">${esc(subItemDetail)}</div>` : '') +
+      (itemCode ? `<div style="font-size:9px;color:#666;font-family:monospace">[${esc(itemCode)}]</div>` : '') +
+      `</div>`
       : '';
     return `<tr><td class="num">${idx + 1}</td><td>${itemCellHtml}</td><td>${esc(desc)}</td><td class="num">${esc(it.hsn_code || it.item_code || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
@@ -7858,11 +7974,11 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const docTitle = isSalesBill
     ? 'TAX INVOICE / SALES BILL'
     : dn.source === 'store' ? 'STORE ISSUE CHALLAN'
-    : dn.source === 'rgp' ? 'RGP GATE PASS — DELIVERY CHALLAN'
-    : 'DELIVERY NOTE';
+      : dn.source === 'rgp' ? 'RGP GATE PASS — DELIVERY CHALLAN'
+        : 'DELIVERY NOTE';
   // Use the stored document_number (auto-generated INV/YYYY/#### or
   // DC/YYYY/####); only fall back to id-based if somehow blank.
-  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${String(dn.delivery_date || dn.created_at || 'LEGACY').slice(0,4)}/${dn.id}`);
+  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${String(dn.delivery_date || dn.created_at || 'LEGACY').slice(0, 4)}/${dn.id}`);
   const dnNum = dn.document_number || docNo;
 
   // Best-effort state-name → GST state code lookup. Used when business_book
@@ -7922,7 +8038,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png'),
       path.join(__dirname, '..', '..', 'client', 'dist', 'sepl-logo.png'),
     ]) { if (fs.existsSync(lp)) { logoDataUri = `data:image/png;base64,${fs.readFileSync(lp).toString('base64')}`; break; } }
-  } catch (_) {}
+  } catch (_) { }
 
   const headerBlock = `
     <div class="header">
@@ -7932,8 +8048,8 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     </div>
     <div class="companyblock">
       ${logoDataUri
-        ? `<img src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." style="height:46px;width:auto;display:block;margin:0 auto 4px" />`
-        : `<h1>SECURED ENGINEERS PVT. LTD</h1>`}
+      ? `<img src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." style="height:46px;width:auto;display:block;margin:0 auto 4px" />`
+      : `<h1>SECURED ENGINEERS PVT. LTD</h1>`}
       <div class="addr"><b>HO:</b> 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003 &nbsp;|&nbsp; <b>Noida:</b> 91, Springboard, Sector 2, Noida (UP)</div>
       <div class="tag">PAN-INDIA PRESENCE : <b>LUDHIANA | NOIDA | BANGALORE | MUMBAI</b> — ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</div>
     </div>
@@ -8505,10 +8621,10 @@ router.post('/item-rates', needsApprove, (req, res) => {
   if (block) return res.status(block.status).json({ error: block.error });
 
   const existing = db.prepare('SELECT id FROM indent_item_rates WHERE indent_item_id=?').get(iiId);
-  const fields = ['vendor1_name','vendor1_rate','vendor1_terms','vendor1_credit_days','vendor1_proof',
-                  'vendor2_name','vendor2_rate','vendor2_terms','vendor2_credit_days','vendor2_proof',
-                  'vendor3_name','vendor3_rate','vendor3_terms','vendor3_credit_days','vendor3_proof',
-                  'final_proof'];
+  const fields = ['vendor1_name', 'vendor1_rate', 'vendor1_terms', 'vendor1_credit_days', 'vendor1_proof',
+    'vendor2_name', 'vendor2_rate', 'vendor2_terms', 'vendor2_credit_days', 'vendor2_proof',
+    'vendor3_name', 'vendor3_rate', 'vendor3_terms', 'vendor3_credit_days', 'vendor3_proof',
+    'final_proof'];
   // Mark status 'quoted' once any vendor rate is set
   const anyRate = [b.vendor1_rate, b.vendor2_rate, b.vendor3_rate].some(v => Number(v) > 0);
 
@@ -8668,8 +8784,8 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
 
   // TSK-0851: WhatsApp / Gmail screenshot proof check
   const winningProof = (final_vendor_name === q.vendor1_name ? q.vendor1_proof :
-                        final_vendor_name === q.vendor2_name ? q.vendor2_proof :
-                        final_vendor_name === q.vendor3_name ? q.vendor3_proof : null) || b.final_proof;
+    final_vendor_name === q.vendor2_name ? q.vendor2_proof :
+      final_vendor_name === q.vendor3_name ? q.vendor3_proof : null) || b.final_proof;
 
   // Only the authenticated admin role may finalize without three quotations and proof
   if (req.user.role !== 'admin') {
@@ -8895,7 +9011,7 @@ router.post('/upload-boq-for-site', requirePermission('procurement', 'create'), 
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const siteName = String(req.body?.site_name || '').trim();
   if (!siteName) {
-    try { fs.unlinkSync(req.file.path); } catch (e) {}
+    try { fs.unlinkSync(req.file.path); } catch (e) { }
     return res.status(400).json({ error: 'site_name is required' });
   }
 
@@ -8918,7 +9034,7 @@ router.post('/upload-boq-for-site', requirePermission('procurement', 'create'), 
     if (viaBB?.id) bbId = viaBB.id;
   }
   if (!bbId) {
-    try { fs.unlinkSync(req.file.path); } catch (e) {}
+    try { fs.unlinkSync(req.file.path); } catch (e) { }
     return res.status(404).json({ error: `No Business Book entry found matching "${siteName}"` });
   }
 
@@ -8990,16 +9106,18 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
     };
     const kpis = {
       indents: kpi('SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ?',
-                   'SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND date(created_at) < ?'),
+        'SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND date(created_at) < ?'),
       pos: kpi("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ?",
-               "SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ? AND date(created_at) < ?"),
+        "SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ? AND date(created_at) < ?"),
       received: kpi('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?',
-                    'SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ? AND date(created_at) < ?'),
+        'SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ? AND date(created_at) < ?'),
       bills: kpi('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?',
-                 'SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ? AND date(created_at) < ?'),
+        'SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ? AND date(created_at) < ?'),
       debit_open: { value: cnt("SELECT COUNT(*) c FROM debit_notes WHERE COALESCE(status,'open') NOT IN ('settled','closed','cancelled')"), prev: null },
-      awaiting_dispatch: { value: cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
-                                        AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`), prev: null },
+      awaiting_dispatch: {
+        value: cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                                        AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`), prev: null
+      },
     };
 
     // ── Overdue processes, measured in HOURS (mam 2026-08-28) ───────────
@@ -9318,30 +9436,44 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
         ${BASE} AND ${cond} ORDER BY created_at DESC, pi.id DESC LIMIT ${limit}`);
 
     const pipeline = [
-      { key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
+      {
+        key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
         cards: all(`SELECT po.id AS rid, po.business_book_id AS bb,
                            COALESCE(po.po_number, 'PO #' || po.id) AS ref, COALESCE(bb.company_name, bb.client_name, '—') AS title,
                            'planning pending' AS owner, po.created_at
                       FROM purchase_orders po LEFT JOIN business_book bb ON bb.id = po.business_book_id
                      WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)
-                     ORDER BY po.created_at DESC LIMIT 50`) },
-      { key: 'enquiry', label: 'Rate Enquiry', sop: 'S2', total: enquiryPend,
+                     ORDER BY po.created_at DESC LIMIT 50`)
+      },
+      {
+        key: 'enquiry', label: 'Rate Enquiry', sop: 'S2', total: enquiryPend,
         pct: pctOf(comparePend + finalisePend + locked, enquiryPend + comparePend + finalisePend + locked),
-        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 0`, `'0/3 quotes — send enquiry'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
-      { key: 'compare', label: 'Rate Comparison', sop: 'S3', total: comparePend,
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 0`, `'0/3 quotes — send enquiry'`, `COALESCE(${RATE_UPDATED}, po.created_at)`)
+      },
+      {
+        key: 'compare', label: 'Rate Comparison', sop: 'S3', total: comparePend,
         pct: pctOf(finalisePend + locked, comparePend + finalisePend + locked),
-        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, `${SLOTS} || '/3 quotes — awaited'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
-      { key: 'finalise', label: 'Finalise Vendor', sop: 'S4', total: finalisePend,
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, `${SLOTS} || '/3 quotes — awaited'`, `COALESCE(${RATE_UPDATED}, po.created_at)`)
+      },
+      {
+        key: 'finalise', label: 'Finalise Vendor', sop: 'S4', total: finalisePend,
         pct: pctOf(locked, finalisePend + locked),
-        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 3`, `'3/3 quotes — finalise vendor'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
-      { key: 'md_lock', label: 'Rate Lock / MD', sop: 'S5', total: aboveMd,
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 3`, `'3/3 quotes — finalise vendor'`, `COALESCE(${RATE_UPDATED}, po.created_at)`)
+      },
+      {
+        key: 'md_lock', label: 'Rate Lock / MD', sop: 'S5', total: aboveMd,
         pct: pctOf(lockedWithin, locked),
-        cards: itemCards(ABOVE, `'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate || ' — MD sir'`, FINALIZED_AT) },
-      { key: 'contract', label: 'Rate Contract', sop: 'S6', total: locked,
+        cards: itemCards(ABOVE, `'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate || ' — MD sir'`, FINALIZED_AT)
+      },
+      {
+        key: 'contract', label: 'Rate Contract', sop: 'S6', total: locked,
         pct: pctOf(locked, locked + finalisePend + comparePend + enquiryPend),
-        cards: itemCards(FINAL, `COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} || ' · locked'`, FINALIZED_AT) },
-      { key: 'long_delivery', label: 'Long Delivery — Order Today', sop: 'S7', total: longDelivery, pct: null,
-        cards: itemCards(`COALESCE(im.long_delivery,0) = 1`, `'order today'`, `po.created_at`) },
+        cards: itemCards(FINAL, `COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} || ' · locked'`, FINALIZED_AT)
+      },
+      {
+        key: 'long_delivery', label: 'Long Delivery — Order Today', sop: 'S7', total: longDelivery, pct: null,
+        cards: itemCards(`COALESCE(im.long_delivery,0) = 1`, `'order today'`, `po.created_at`)
+      },
     ];
 
     // Alerts: S1 packages waiting >24h, S3 3-day comparison clock, S5 MD list.
@@ -9369,13 +9501,17 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     if (longDelivery > 0) tasks.push({ text: `Order ${longDelivery} long-delivery item(s) TODAY`, tag: 'S7' });
 
     const dists = [
-      { title: 'Items by Rate Stage', data: [
-        { label: 'Enquiry pending', c: enquiryPend }, { label: 'Comparing', c: comparePend },
-        { label: 'Ready to finalise', c: finalisePend }, { label: 'Contract locked', c: locked },
-      ].filter(x => x.c > 0) },
-      { title: 'Rate Lock vs Estimate', data: [
-        { label: 'Within estimate', c: lockedWithin }, { label: 'Above — MD sir', c: aboveMd },
-      ].filter(x => x.c > 0) },
+      {
+        title: 'Items by Rate Stage', data: [
+          { label: 'Enquiry pending', c: enquiryPend }, { label: 'Comparing', c: comparePend },
+          { label: 'Ready to finalise', c: finalisePend }, { label: 'Contract locked', c: locked },
+        ].filter(x => x.c > 0)
+      },
+      {
+        title: 'Rate Lock vs Estimate', data: [
+          { label: 'Within estimate', c: lockedWithin }, { label: 'Above — MD sir', c: aboveMd },
+        ].filter(x => x.c > 0)
+      },
     ];
 
     const activity = [
@@ -9432,9 +9568,11 @@ router.get('/rate-enquiry/:indentId', requirePermission('procurement', 'view'), 
                                  OR COALESCE(ir.vendor3_rate,0) > 0 OR COALESCE(ir.final_rate,0) > 0))
        ORDER BY ii.id`).all(req.params.indentId);
     res.json({
-      indent: { id: ind.id, indent_number: ind.indent_number, site_name: ind.site_name,
-                client_name: ind.client_name, lead_no: ind.lead_no, indent_date: ind.indent_date,
-                raised_by: ind.raised_by_name || ind.raised_by },
+      indent: {
+        id: ind.id, indent_number: ind.indent_number, site_name: ind.site_name,
+        client_name: ind.client_name, lead_no: ind.lead_no, indent_date: ind.indent_date,
+        raised_by: ind.raised_by_name || ind.raised_by
+      },
       items,
     });
   } catch (err) {
@@ -9596,9 +9734,9 @@ router.put('/rates-items/quotes/:itemMasterId', requirePermission('procurement',
                           THEN COALESCE(rate_contracts.finalized_at, CURRENT_TIMESTAMP) END,
         updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
     .run(mid, txt(b.vendor1_name), num(b.vendor1_rate), txt(b.vendor1_proof),
-         txt(b.vendor2_name), num(b.vendor2_rate), txt(b.vendor2_proof),
-         txt(b.vendor3_name), num(b.vendor3_rate), txt(b.vendor3_proof),
-         finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
+      txt(b.vendor2_name), num(b.vendor2_rate), txt(b.vendor2_proof),
+      txt(b.vendor3_name), num(b.vendor3_rate), txt(b.vendor3_proof),
+      finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
   res.json({ ok: true, locked: finalRate != null });
 });
 
@@ -9726,13 +9864,15 @@ router.get('/vendor-scorecard', requirePermission('procurement', 'view'), (req, 
     }
     out.sort((x, y) => y.weighted - x.weighted);
     out.forEach((o, i) => { o.rank = i + 1; });
-    res.json({ months, weights: WEIGHTS, rows: out,
+    res.json({
+      months, weights: WEIGHTS, rows: out,
       tiers: [
         { tier: 'Platinum', range: '85 – 100', reward: 'First right of refusal, largest volume share' },
         { tier: 'Gold', range: '70 – 84', reward: 'Priority allocation, fast-track for new items' },
         { tier: 'Silver', range: '55 – 69', reward: 'Standard business' },
         { tier: 'Bronze', range: 'Below 55', reward: 'Reduced volume, improvement plan, on notice' },
-      ] });
+      ]
+    });
   } catch (err) {
     console.error('vendor-scorecard error', err);
     res.status(500).json({ error: err.message });

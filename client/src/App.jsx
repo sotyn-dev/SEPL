@@ -132,8 +132,10 @@ const NDAPrint = lazy(() => import('./pages/NDAPrint'));
 const EmploymentAgreementPrint = lazy(() => import('./pages/EmploymentAgreementPrint'));
 const PublicOffer = lazy(() => import('./pages/PublicOffer'));
 const PublicEmployeeFill = lazy(() => import('./pages/PublicEmployeeFill'));
+const PublicVendorRegistration = lazy(() => import('./pages/PublicVendorRegistration'));
 const Induction = lazy(() => import('./pages/Induction'));
 const Training = lazy(() => import('./pages/Training'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -153,6 +155,10 @@ function ModuleRoute({ module, children }) {
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
   const hasAccess = module === 'project_dashboard'
     ? canView('project_dashboard') || canView('business_book') || canView('procurement') || canView('orders') || canView('dpr')
+    : (module === 'ar_ap_tracker' || module === 'cashflow')
+    ? canView('ar_ap_tracker') || canView('cashflow')
+    : (module === 'leads' || module === 'crm_funnel')
+    ? canView('leads') || canView('crm_funnel')
     : canView(module);
   if (!hasAccess) return (
     <div className="flex flex-col items-center justify-center h-96 text-gray-400">
@@ -216,6 +222,9 @@ export default function App() {
         {/* Mam (2026-08-17): public employee self-fill form — employee fills
           their own details via a shared token link, no login. */}
         <Route path="/employee-fill/:token" element={<PublicEmployeeFill />} />
+        {/* TSK-1052: Public vendor self-registration link — NO login required */}
+        <Route path="/vendor-onboarding" element={<PublicVendorRegistration />} />
+        <Route path="/register-vendor" element={<Navigate to="/vendor-onboarding" replace />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD
@@ -236,21 +245,29 @@ export default function App() {
             can complete their training. */}
           <Route path="induction" element={<Induction />} />
           <Route path="training" element={<Training />} />
-          {/* 4 Critical Systems */}
-          {/* Cash Flow page deleted (mam 2026-09-03) — /cashflow now lands on the
-            Cash Flow Tracker, which is where the money question is answered.
-            The cash_flow_daily ledger tables are UNTOUCHED: Bank
-            reconciliation, Collections and Business Book still write to them. */}
+          {/* 4 Critical Systems (TSK-0397: Fix blank-screen routing) */}
+          {/* Cash Flow / Cash Flow Tracker */}
+          <Route path="cash-flow-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+          <Route path="cash-flow" element={<Navigate to="/cash-flow-tracker" replace />} />
           <Route path="cashflow" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cash" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cashflow-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cash-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cash-flow-forecast" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cash-flow-daily" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="cash-flow-management" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="ar-ap-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
           <Route path="bank" element={<ModuleRoute module="cashflow"><Bank /></ModuleRoute>} />
           <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
           <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
+
+          {/* Collection Engine / SOP-16 (TSK-0397) */}
           <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
-          {/* AR/AP Tracker → Cash Flow Tracker (mam 2026-09-03). New canonical
-            path; the old one redirects so War Room deep links and anyone's
-            bookmarks keep working. */}
-          <Route path="cash-flow-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
-          <Route path="ar-ap-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
+          <Route path="collection-engine" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
+          <Route path="collections-engine" element={<Navigate to="/collection-engine" replace />} />
+          <Route path="collection" element={<Navigate to="/collections" replace />} />
+          <Route path="sop16" element={<Navigate to="/collection-engine" replace />} />
+          <Route path="sop-16" element={<Navigate to="/collection-engine" replace />} />
           {/* WhatsApp is open to all signed-in users — access is by group
             membership, not the site_chat module permission (mam 2026-06-19).
             ModuleGate is the global on/off switch, NOT a permission check — it's
@@ -276,7 +293,15 @@ export default function App() {
           <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
           <Route path="compliance" element={<ComplianceDashboard />} />
           {/* Other Modules */}
+          {/* Sales Funnel / Leads (TSK-0397) */}
           <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
+          <Route path="sales-funnel" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
+          <Route path="salesfunnel" element={<Navigate to="/sales-funnel" replace />} />
+          <Route path="sales" element={<Navigate to="/sales-funnel" replace />} />
+          <Route path="sales-tracking" element={<Navigate to="/sales-funnel" replace />} />
+          <Route path="funnel" element={<Navigate to="/sales-funnel" replace />} />
+          <Route path="crm-sales-funnel" element={<Navigate to="/crm-funnel" replace />} />
+          <Route path="solar-sales-funnel" element={<Navigate to="/solar-funnel" replace />} />
           <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
           <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
           <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
@@ -352,8 +377,18 @@ export default function App() {
           <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
           <Route path="sotyn-leads" element={<ModuleRoute module="sotyn_leads"><SotynLeads /></ModuleRoute>} />
           <Route path="vendor-registration" element={<ModuleRoute module="vendor_registration"><VendorRegistration /></ModuleRoute>} />
+          {/* Cheque FMS (TSK-0397) */}
           <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
+          <Route path="cheque-fms" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
+          <Route path="chequefms" element={<Navigate to="/cheque-fms" replace />} />
+          <Route path="cheques-fms" element={<Navigate to="/cheque-fms" replace />} />
+          <Route path="cheque" element={<Navigate to="/cheques" replace />} />
+          {/* In-app 404 Catch-All Route (TSK-0397) */}
+          <Route path="*" element={<NotFound />} />
         </Route>
+
+        {/* Global Standalone 404 Catch-All Route (TSK-0397) */}
+        <Route path="*" element={<NotFound standalone />} />
       </Routes>
     </Suspense>
   );

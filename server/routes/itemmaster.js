@@ -64,6 +64,8 @@ for (const col of [
   'approved_by INTEGER',
   'approved_at DATETIME',
   "approval_status TEXT DEFAULT 'approved'",
+  'ai_audit_notes TEXT',
+  'ai_reviewed_at DATETIME',
 ]) {
   try { getDb().exec(`ALTER TABLE item_master ADD COLUMN ${col}`); } catch (_) {}
 }
@@ -490,12 +492,12 @@ router.patch('/:id/price', requirePermission('item_master', 'edit'), (req, res) 
   res.json({ message: 'Price updated', current_price: price });
 });
 
-// ─── Item approval (mam 2026-06-16) ───────────────────────────────────
-// Only an Admin (e.g. Ankur Kaplesh) can approve / reject a pending item.
-// Approving stamps who & when; rejecting keeps the row (filterable) so it
-// can be corrected or deleted, but it's flagged out of the trusted set.
+// ─── Item approval (TSK-0470 - Ankur Kaplesh: "item approval must be from AI agent only") ─
+// Approvals are handled strictly by the AI Agent (audits nomenclature, duplicates, UOM, specs & price).
+const { auditItemWithAi, getAiAgentUserId } = require('../lib/itemAiApproval');
+
 const adminOnly = (req, res, next) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an Admin can approve items' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an Admin can trigger item approval audits' });
   next();
 };
 
@@ -505,39 +507,85 @@ router.get('/approval/pending-count', (req, res) => {
   res.json({ pending: n });
 });
 
-// Approve everything currently pending — convenience for clearing a backlog.
-router.post('/approval/approve-all', adminOnly, (req, res) => {
-  const r = getDb().prepare(`UPDATE item_master
-       SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
-     WHERE approval_status='pending'`).run(req.user.id);
-  res.json({ message: `Approved ${r.changes} item(s)`, approved: r.changes });
+// Approve/Audit everything currently pending using the AI Agent
+router.post('/approval/approve-all', adminOnly, async (req, res) => {
+  try {
+    const db = getDb();
+    const pending = db.prepare("SELECT id FROM item_master WHERE approval_status='pending'").all();
+    if (!pending.length) {
+      return res.json({ message: 'No items currently pending approval', approved: 0, rejected: 0 });
+    }
+    let approved = 0, rejected = 0;
+    const details = [];
+    for (const p of pending) {
+      try {
+        const verdict = await auditItemWithAi(p, db);
+        if (verdict.approved) approved++; else rejected++;
+        details.push({ id: p.id, approved: verdict.approved, reason: verdict.reason });
+      } catch (err) {
+        rejected++;
+        details.push({ id: p.id, approved: false, reason: err.message });
+      }
+    }
+    res.json({
+      message: `AI Agent audited ${pending.length} item(s): ${approved} approved, ${rejected} rejected`,
+      approved,
+      rejected,
+      details
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'AI Agent audit failed: ' + err.message });
+  }
 });
 
-router.post('/:id/approve', adminOnly, (req, res) => {
-  const db = getDb();
-  const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Not found' });
-  db.prepare(`UPDATE item_master
-                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP
-               WHERE id=?`).run(req.user.id, req.params.id);
-  res.json({ message: 'Item approved', approval_status: 'approved' });
+// Single item audit & approval by AI Agent
+router.post('/:id/approve', adminOnly, async (req, res) => {
+  try {
+    const db = getDb();
+    const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const verdict = await auditItemWithAi(item, db);
+    res.json({
+      message: verdict.reason,
+      approval_status: verdict.approved ? 'approved' : 'rejected',
+      verdict
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'AI Agent audit failed: ' + err.message });
+  }
 });
 
-// Rejecting REQUIRES a remark (mam 2026-09-05: "when reject need to enter
-// remarks") so the person who entered the item knows what to correct.
+router.post('/:id/ai-audit', adminOnly, async (req, res) => {
+  try {
+    const db = getDb();
+    const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const verdict = await auditItemWithAi(item, db);
+    res.json({
+      message: verdict.reason,
+      approval_status: verdict.approved ? 'approved' : 'rejected',
+      verdict
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'AI Agent audit failed: ' + err.message });
+  }
+});
+
+// Rejecting with mandatory remark (stamped with AI Agent / Admin audit record)
 router.post('/:id/reject', adminOnly, (req, res) => {
   const db = getDb();
   const reason = String(req.body?.reason || '').trim();
   if (!reason) return res.status(400).json({ error: 'Rejection remark is required' });
   const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
+  const aiUserId = getAiAgentUserId(db) || req.user.id;
   db.prepare(`UPDATE item_master
-                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=?, updated_at=CURRENT_TIMESTAMP
-               WHERE id=?`).run(req.user.id, reason, req.params.id);
+                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=?, ai_audit_notes=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(aiUserId, reason, reason, req.params.id);
   res.json({ message: 'Item rejected', approval_status: 'rejected', rejection_reason: reason });
 });
 
-router.post('/', requirePermission('item_master', 'create'), (req, res) => {
+router.post('/', requirePermission('item_master', 'create'), async (req, res) => {
   const b = req.body || {};
   if (!b.item_name) return res.status(400).json({ error: 'Item name required' });
 
@@ -589,11 +637,25 @@ router.post('/', requirePermission('item_master', 'create'), (req, res) => {
     (b.pipe_length_m === '' || b.pipe_length_m == null) ? null : (+b.pipe_length_m || null),
     price > 0 ? new Date().toISOString() : null,
     price > 0 ? req.user.id : null,
-    isAdmin ? 'approved' : 'pending',
-    isAdmin ? req.user.id : null,
-    isAdmin ? new Date().toISOString() : null,
+    'pending',
+    null,
+    null
   );
-  res.status(201).json({ id: r.lastInsertRowid, item_code: code, approval_status: isAdmin ? 'approved' : 'pending' });
+  const newId = r.lastInsertRowid;
+  // TSK-0470: Trigger immediate AI Agent audit upon creation
+  let aiVerdict = null;
+  try {
+    aiVerdict = await auditItemWithAi({ id: newId }, getDb());
+  } catch (err) {
+    console.warn('[itemmaster] immediate AI audit failed, item remains pending:', err.message);
+  }
+  const finalStatus = aiVerdict?.approved ? 'approved' : (aiVerdict ? 'rejected' : 'pending');
+  res.status(201).json({
+    id: newId,
+    item_code: code,
+    approval_status: finalStatus,
+    ai_verdict: aiVerdict
+  });
 });
 
 router.put('/:id', requirePermission('item_master', 'edit'), (req, res) => {
