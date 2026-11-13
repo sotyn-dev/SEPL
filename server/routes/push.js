@@ -65,6 +65,17 @@ router.post('/unsubscribe', (req, res) => {
   try {
     const { endpoint } = req.body;
     if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+
+    // Check if user notification policy is strictly enforced
+    if (req.user.role !== 'admin') {
+      try {
+        const ctrl = getDb().prepare('SELECT strictly_enforced FROM user_notification_controls WHERE user_id = ?').get(req.user.id);
+        if (ctrl && ctrl.strictly_enforced === 1) {
+          return res.status(403).json({ error: 'Push notifications are strictly mandatory for your account and cannot be disabled.' });
+        }
+      } catch (_) {}
+    }
+
     getDb().prepare(`UPDATE push_subscriptions SET active=0 WHERE endpoint=? AND user_id=?`)
       .run(endpoint, req.user.id);
     res.json({ message: 'Unsubscribed' });
@@ -91,6 +102,25 @@ router.post('/test', async (req, res) => {
       body: req.body?.message || 'If you can read this, push notifications are working on this device 🎉',
       url: '/site-chat',
       tag: 'test',
+    });
+    res.json(r);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin test push to a specific employee (verifies their registered devices)
+router.post('/admin/test-employee/:user_id', adminOnly, async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.user_id);
+    if (!targetUserId) return res.status(400).json({ error: 'Target user_id required' });
+
+    const r = await pushToUser(targetUserId, {
+      type: 'chat_push_test',
+      title: 'SEPL Admin Test Alert',
+      body: req.body?.message || 'Admin test: Your device push notifications are active and verified ✓',
+      url: '/site-chat',
+      tag: 'admin_test',
     });
     res.json(r);
   } catch (err) {

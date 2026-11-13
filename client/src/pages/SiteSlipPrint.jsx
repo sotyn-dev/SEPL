@@ -44,7 +44,7 @@ export default function SiteSlipPrint() {
 
   const isTransfer = slip.slip_type === 'transfer';
   const isIssue = slip.slip_type === 'issue';
-  const title = isTransfer ? 'SITE STORE MATERIAL TRANSFER / RETURN SLIP' : isIssue ? 'SITE STORE ISSUE SLIP' : 'SITE STORE RETURN SLIP';
+  const title = isTransfer ? 'SITE STORE MATERIAL TRANSFER / RETURN SLIP (SOP-10.5)' : isIssue ? 'SITE STORE ISSUE SLIP — AREA-WISE (SOP-10.1)' : 'SITE STORE RETURN SLIP (SOP-10.5)';
   const rows = slip.items || [];
   const padded = [...rows];
   while (padded.length < 8) padded.push(null);
@@ -83,12 +83,24 @@ export default function SiteSlipPrint() {
         {/* Parties */}
         <div className="grid grid-cols-2 border-b border-gray-300 text-[10.5px]">
           <div className="px-3 py-1.5 border-r border-gray-200">
-            <span className="text-gray-500">{isTransfer ? 'Carrier / Transferred By: ' : isIssue ? 'Issued To (Sr. Site Engineer / Team): ' : 'Returned By: '}</span>
+            <span className="text-gray-500">{isTransfer ? 'Carrier / Transferred By: ' : isIssue ? 'Issued To (Site Engineer / Team): ' : 'Returned By: '}</span>
             <b>{slip.issued_to || '—'}</b>
           </div>
           <div className="px-3 py-1.5">
-            <span className="text-gray-500">Store In-charge (Jr. Site Engineer): </span>
-            <b>{slip.created_by_name || '—'}</b>
+            <span className="text-gray-500">Store In-charge (Ajmer / Store Keeper): </span>
+            <b>{slip.created_by_name || 'Ajmer'}</b>
+          </div>
+        </div>
+
+        {/* SOP-10 Work Area & Governance Block */}
+        <div className="grid grid-cols-2 border-b border-gray-300 text-[10.5px] bg-slate-50">
+          <div className="px-3 py-1.5 border-r border-gray-200">
+            <span className="text-gray-500">Work Area / Zone (SOP-10.1 Area-Wise): </span>
+            <b className="text-red-700 font-bold">{slip.work_area || 'General Work Area'}</b>
+          </div>
+          <div className="px-3 py-1.5 flex items-center justify-between">
+            <span className="text-gray-500">SOP-10 Owner: </span>
+            <span className="font-semibold text-gray-700">PM Adarsh Kumar</span>
           </div>
         </div>
 
@@ -123,10 +135,10 @@ export default function SiteSlipPrint() {
         {/* Rule strip */}
         <div className="px-3 py-1.5 bg-amber-50 border-b border-gray-300 text-[9.5px] text-amber-800 font-semibold">
           {isTransfer
-            ? 'SPOS RULE: Inter-store transfer of materials between site store and central/site warehouse. Automatically updates stock balance in both warehouses.'
+            ? 'SOP-10.5 RULE: Surplus / left-over material returned to store or transferred to another site — never wasted. Automatically updates stock balance in both warehouses.'
             : isIssue
-              ? 'SPOS RULE: Material leaves the site store ONLY on this slip. Unused balance MUST return in the evening on a Return Slip — net consumption feeds the DPR automatically.'
-              : 'SPOS RULE: Returned quantity goes back into site-store stock. Issued − Returned = today\'s consumption, auto-recorded in the DPR.'}
+              ? 'SOP-10.1 RULE: Material issued from site store area-wise against mobile slip. Daily report compares issued vs installed vs BOQ (SOP-10.3). Unused material MUST return on evening return slip.'
+              : 'SOP-10.5 RULE: Left-over material returned to store. Net consumption = Issued − Returned auto-fills the DPR. Physical count verified monthly (SOP-10.4).'}
         </div>
 
         {/* Signatures */}

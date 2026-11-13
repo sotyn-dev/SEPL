@@ -829,8 +829,53 @@ try {
   } else if (info && !info.sql.includes('to_warehouse_id')) {
     db.exec(`ALTER TABLE site_store_slips ADD COLUMN to_warehouse_id INTEGER REFERENCES warehouses(id)`);
   }
+  // SOP-10: Material use at site (owner: Project Manager — Adarsh Kumar)
+  // S1: Material issued against work area — mobile slip (area-wise, not project-wise)
+  const slipCols = db.prepare("PRAGMA table_info(site_store_slips)").all();
+  if (!slipCols.some(c => c.name === 'work_area')) {
+    db.exec(`ALTER TABLE site_store_slips ADD COLUMN work_area TEXT DEFAULT 'General Work Area'`);
+  }
 } catch (e) {
   console.warn('[dpr] site_store_slips migration notice:', e.message);
+}
+
+// ── SOP-10 Database Schema (SOP-10.4 Monthly Physical Count Sheets) ─────────
+try {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS site_store_count_sheets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER NOT NULL REFERENCES sites(id),
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+      count_date DATE NOT NULL,
+      month_year TEXT NOT NULL,
+      conducted_by TEXT NOT NULL,
+      verified_by TEXT,
+      status TEXT DEFAULT 'submitted' CHECK(status IN ('draft', 'submitted', 'verified')),
+      remarks TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_count_sheets_site ON site_store_count_sheets(site_id, month_year);
+
+    CREATE TABLE IF NOT EXISTS site_store_count_sheet_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      count_sheet_id INTEGER NOT NULL REFERENCES site_store_count_sheets(id) ON DELETE CASCADE,
+      item_master_id INTEGER NOT NULL REFERENCES item_master(id),
+      item_name TEXT,
+      unit TEXT,
+      system_qty REAL NOT NULL DEFAULT 0,
+      physical_qty REAL NOT NULL DEFAULT 0,
+      variance_qty REAL NOT NULL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      variance_value REAL DEFAULT 0,
+      reason_remarks TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_count_sheet_items_sheet ON site_store_count_sheet_items(count_sheet_id);
+  `);
+} catch (e) {
+  console.warn('[dpr] site_store_count_sheets migration notice:', e.message);
 }
 // Three-shift DPR (mam 2026-08-03: "make three time dpr method … or suggest
 // something more innovative"): ONE daily DPR per site, but every child row
@@ -2113,10 +2158,11 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
         const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
         shift = (h >= 9 && h < 18) ? 'day' : (h >= 18 && h < 22) ? 'evening' : 'night';
       }
+      const areaVal = String(req.body.work_area || req.body.floor_zone || 'General Work Area').trim() || 'General Work Area';
       const r = db.prepare(`
-        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, to_warehouse_id, slip_date, issued_to, notes, created_by, shift)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`)
-        .run(slipNumber, slip_type, site_id, store.id, targetStore ? targetStore.id : null, dateIso, String(issued_to).trim(), notes || null, req.user.id, shift);
+        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, to_warehouse_id, slip_date, issued_to, notes, created_by, shift, work_area)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(slipNumber, slip_type, site_id, store.id, targetStore ? targetStore.id : null, dateIso, String(issued_to).trim(), notes || null, req.user.id, shift, areaVal);
       slipId = r.lastInsertRowid;
       const insItem = db.prepare('INSERT INTO site_store_slip_items (slip_id, item_master_id, item_name, unit, quantity, rate) VALUES (?,?,?,?,?,?)');
       const upBal = db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
@@ -2227,6 +2273,9 @@ router.get('/sites/:site_id/consumption', requirePermission('dpr', 'view'), (req
     res.status(500).json({ error: e.message });
   }
 });
+
+// ─── SOP-10: Material use at site (Owner: Project Manager — Adarsh Kumar) ───
+require('./sop10')(router);
 
 // Submit MEPF DPR
 router.post('/', (req, res) => {
