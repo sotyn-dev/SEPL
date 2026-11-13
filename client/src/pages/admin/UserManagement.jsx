@@ -9,7 +9,8 @@ import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone, FiFilter } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone, FiFilter, FiBell } from 'react-icons/fi';
+import AdminNotificationControlModal from '../../components/AdminNotificationControlModal';
 import DataCompletion from '../../components/DataCompletion';
 import StaffTypeFilter from '../../components/StaffTypeFilter';
 import { STAFF_TYPES, staffTypeLabel, matchesStaffType } from '../../utils/staffType';
@@ -46,6 +47,7 @@ export default function UserManagement() {
   const [resetUser, setResetUser] = useState(null);        // user being reset
   const [resetInput, setResetInput] = useState('');        // optional custom password typed by admin
   const [revealedPassword, setRevealedPassword] = useState(null); // { user, password } shown once after reset
+  const [notifControlModal, setNotifControlModal] = useState(false);
 
   const load = () => {
     api.get('/auth/users?include_inactive=1').then(r => {
@@ -388,6 +390,7 @@ export default function UserManagement() {
           <p className="text-sm text-gray-500">Create users and assign roles to control access</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <button onClick={() => setNotifControlModal(true)} className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2 text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100" title="Audit and control push subscriptions and notification policies for employees"><FiBell size={15} /> Push & Notifications</button>
           <button onClick={async () => {
             try {
               const r = await api.get('/auth/users/export.xlsx', { responseType: 'blob', params: { staff_type: staffType } });
@@ -1039,6 +1042,11 @@ export default function UserManagement() {
           <p className="text-[10px] text-amber-700 text-center">Tell the user to change their password after login.</p>
         </div>
       </Modal>
+
+      <AdminNotificationControlModal
+        isOpen={notifControlModal}
+        onClose={() => setNotifControlModal(false)}
+      />
     </div>
   );
 }

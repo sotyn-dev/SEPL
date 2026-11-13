@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiX, FiBell, FiCheck, FiSmartphone, FiShield, FiSliders } from 'react-icons/fi';
+import { FiX, FiBell, FiCheck, FiSmartphone, FiShield, FiSliders, FiLock } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { enablePushNotifications, getPermissionState, pushSupported } from '../lib/push';
@@ -14,6 +14,7 @@ const CATEGORIES = [
 
 export default function NotificationSettingsModal({ isOpen, onClose }) {
   const [prefs, setPrefs] = useState({});
+  const [isStrictlyEnforced, setIsStrictlyEnforced] = useState(false);
   const [loading, setLoading] = useState(true);
   const [permState, setPermState] = useState('default');
   const [enablingPush, setEnablingPush] = useState(false);
@@ -28,10 +29,13 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
     try {
       setLoading(true);
       const res = await api.get('/notifications/preferences');
-      setPrefs(res.data || {});
+      const data = res.data || {};
+      setIsStrictlyEnforced(Boolean(data._is_strictly_enforced));
+      setPrefs(data);
     } catch (_) {
       // Defaults if not set
       setPrefs({});
+      setIsStrictlyEnforced(false);
     } finally {
       setLoading(false);
     }
@@ -48,9 +52,19 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
 
   const handleToggle = async (catKey, channel) => {
     const current = prefs[catKey] || { in_app: true, push: true, email: false };
+    const nextVal = !current[channel];
+
+    // If strictly enforced, block turning off
+    if (isStrictlyEnforced && !nextVal) {
+      toast.error('Notification settings are strictly locked by company administration.', {
+        icon: '🔒'
+      });
+      return;
+    }
+
     const updated = {
       ...current,
-      [channel]: !current[channel]
+      [channel]: nextVal
     };
 
     setPrefs(prev => ({ ...prev, [catKey]: updated }));
@@ -64,7 +78,7 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
       });
       toast.success('Preference updated');
     } catch (err) {
-      toast.error('Failed to update preference');
+      toast.error(err.response?.data?.error || 'Failed to update preference');
       loadPrefs();
     }
   };
@@ -112,6 +126,18 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
         </div>
 
         <div className="p-4 overflow-y-auto space-y-4 text-xs">
+          {/* Strictly Enforced Policy Banner */}
+          {isStrictlyEnforced && (
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-lg space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-indigo-900 text-xs">
+                <FiLock className="text-indigo-600" /> Mandatory Company Policy Enforced
+              </div>
+              <p className="text-[11px] text-indigo-700 leading-relaxed">
+                Your notification channels and push alerts are strictly locked ON by administration to ensure operational compliance.
+              </p>
+            </div>
+          )}
+
           {/* Device Push Status Banner */}
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
             <div className="flex items-center justify-between">
@@ -143,9 +169,16 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
 
           {/* Channel Matrix */}
           <div>
-            <h4 className="font-semibold text-gray-800 mb-2 flex items-center gap-1.5">
-              <FiShield size={13} className="text-gray-500" /> Channel Preferences
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-semibold text-gray-800 flex items-center gap-1.5">
+                <FiShield size={13} className="text-gray-500" /> Channel Preferences
+              </h4>
+              {isStrictlyEnforced && (
+                <span className="text-[10px] text-indigo-700 font-bold flex items-center gap-1">
+                  <FiLock size={10} /> Locked ON
+                </span>
+              )}
+            </div>
             
             <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
               <div className="bg-gray-50 px-3 py-2 flex items-center justify-between font-semibold text-gray-500 text-[10px] uppercase tracking-wider">
@@ -168,17 +201,23 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
                       <input
                         type="checkbox"
                         checked={setting.in_app !== false}
+                        disabled={isStrictlyEnforced && setting.in_app !== false}
                         onChange={() => handleToggle(cat.key, 'in_app')}
-                        className="rounded text-blue-600 focus:ring-blue-500 h-4 w-4 cursor-pointer"
-                        title="In-app notification bar"
+                        className={`rounded text-blue-600 focus:ring-blue-500 h-4 w-4 ${
+                          isStrictlyEnforced ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                        }`}
+                        title={isStrictlyEnforced ? 'Locked by company administration' : 'In-app notification bar'}
                       />
                       {/* Push Toggle */}
                       <input
                         type="checkbox"
                         checked={setting.push !== false}
+                        disabled={isStrictlyEnforced && setting.push !== false}
                         onChange={() => handleToggle(cat.key, 'push')}
-                        className="rounded text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-                        title="Browser / Mobile push notification"
+                        className={`rounded text-indigo-600 focus:ring-indigo-500 h-4 w-4 ${
+                          isStrictlyEnforced ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
+                        }`}
+                        title={isStrictlyEnforced ? 'Locked by company administration' : 'Browser / Mobile push notification'}
                       />
                     </div>
                   </div>
@@ -202,4 +241,3 @@ export default function NotificationSettingsModal({ isOpen, onClose }) {
     </div>
   );
 }
-

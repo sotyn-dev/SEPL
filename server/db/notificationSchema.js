@@ -22,7 +22,15 @@ function initializeNotificationSchema(db) {
         email INTEGER DEFAULT 0,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id, category)
-      )
+      );
+
+      CREATE TABLE IF NOT EXISTS user_notification_controls (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        strictly_enforced INTEGER DEFAULT 0,
+        push_mandated INTEGER DEFAULT 1,
+        enforced_by INTEGER REFERENCES users(id),
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // High performance indices

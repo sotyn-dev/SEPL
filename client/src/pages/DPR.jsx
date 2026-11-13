@@ -13,6 +13,7 @@ import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCir
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 import MonthlyDprRegister from '../components/MonthlyDprRegister';
+import Sop10MaterialModal from '../components/Sop10MaterialModal';
 
 // IST calendar date + Monday snap — SPOS rules run on India wall-clock
 // (audit 2026-07-31: UTC dates misjudged everything between 00:00 and
@@ -1373,9 +1374,12 @@ export default function DPR() {
               {/* Morning Manpower — contractor attendance punch (mam 2026-06-22) */}
               <button onClick={openMorningManpower}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiUsers /> Morning Manpower</button>
-              {/* Site-store Issue/Return slips — the jr. engineer's GRN counter (mam 2026-07-31) */}
+              {/* Site-store Issue/Return slips — SOP-10 (owner: Project Manager — Adarsh Kumar) */}
               <button onClick={() => openSlipModal(form.site_id || '')}
-                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue / Return / Transfer</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"
+                title="Material use at site (SOP-10 · Owner: PM Adarsh Kumar)">
+                <FiPackage /> Store Issue / Return (SOP-10)
+              </button>
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiList /> Attendance Records</button>
@@ -2955,202 +2959,19 @@ export default function DPR() {
         </div>
       </Modal>
 
-      {/* Site-store Issue/Return slip counter (mam 2026-07-31): jr. site
-          engineer issues material on a numbered ISU slip (stock OUT now),
-          takes back the evening balance on an RTN slip (stock IN). Net
-          consumption auto-fills the DPR. Every slip prints as a GRN bill. */}
-      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return / Transfer (GRN Slip)" wide>
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="label">Site *</label>
-              <select className="select" value={slipSite}
-                onChange={e => {
-                  const sId = e.target.value;
-                  setSlipSite(sId);
-                  loadSlipRows(sId, slipType, slipDate);
-                  loadDestWarehouses(sId);
-                }}>
-                <option value="">— Pick site —</option>
-                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Type *</label>
-              <div className="flex rounded border overflow-hidden">
-                <button type="button" onClick={() => { setSlipType('issue'); loadSlipRows(slipSite, 'issue', slipDate); }}
-                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
-                  🌅 Morning Issue
-                </button>
-                <button type="button" onClick={() => { setSlipType('return'); loadSlipRows(slipSite, 'return', slipDate); }}
-                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
-                  🌇 Evening Return
-                </button>
-                <button type="button" onClick={() => { setSlipType('transfer'); loadSlipRows(slipSite, 'transfer', slipDate); if (!destWarehouses.length && slipSite) loadDestWarehouses(slipSite); }}
-                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'transfer' ? 'bg-purple-700 text-white' : 'bg-white text-gray-600'}`}>
-                  🚚 Return / Transfer
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="label">Date</label>
-              <input type="date" className="input" value={slipDate}
-                onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
-            </div>
-          </div>
-
-          {slipType === 'transfer' && (
-            <div className="bg-purple-50 border border-purple-200 rounded p-2.5">
-              <label className="label text-purple-900 font-semibold mb-1">
-                Destination Store / Warehouse (Transfer or Return to) *
-              </label>
-              <select
-                className="select bg-white"
-                value={slipToWarehouse}
-                onChange={e => setSlipToWarehouse(e.target.value)}
-              >
-                <option value="">— Pick destination store / warehouse —</option>
-                {destWarehouses.map(w => {
-                  const isOffice = w.type === 'office' || w.warehouse_type === 'office';
-                  return (
-                    <option key={w.id} value={w.id}>
-                      {isOffice ? '🏢 ' : '🏗️ '}
-                      {w.name} {isOffice ? '(Central / Office Store)' : `(Site Store — ${w.site_name || 'Site'})`}
-                    </option>
-                  );
-                })}
-              </select>
-              <div className="text-[11px] text-purple-700 mt-1">
-                {(() => {
-                  const sel = destWarehouses.find(w => String(w.id) === String(slipToWarehouse));
-                  const isOffice = sel?.type === 'office' || sel?.warehouse_type === 'office';
-                  if (isOffice) {
-                    return `✓ Material will be returned & added directly into Office Store inventory (${sel.name}).`;
-                  } else if (sel) {
-                    return `✓ Material will be transferred & added directly into ${sel.site_name || sel.name} site store inventory.`;
-                  }
-                  return 'Surplus or idle materials will be deducted from this site store and added to the destination warehouse.';
-                })()}
-              </div>
-            </div>
-          )}
-
-          {/* Shift tag (mam 2026-07-31: 3-shift method) — auto from IST clock */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] text-gray-500 font-semibold">Shift:</span>
-            {[['day', '🌅 Morning 9–6'], ['evening', '🌆 Evening 6–10'], ['night', '🌙 Night 10–2']].map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setSlipShift(k)}
-                className={`text-[11px] px-2 py-1 rounded border font-semibold ${slipShift === k ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>{l}</button>
-            ))}
-          </div>
-
-          <div>
-            <label className="label">
-              {slipType === 'issue'
-                ? 'Issued To (Sr. Site Engineer / team) *'
-                : slipType === 'transfer'
-                  ? 'Carrier / Transferred By (Driver / Person carrying material) *'
-                  : 'Returned By *'}
-            </label>
-            <input className="input" list="slip-person-suggestions"
-              placeholder={slipType === 'transfer' ? 'Driver / person name or vehicle info…' : 'Type a name or pick from the team…'}
-              value={slipTo} onChange={e => setSlipTo(e.target.value)} />
-            <datalist id="slip-person-suggestions">
-              {(users || []).map(u => <option key={u.id} value={u.name} />)}
-            </datalist>
-          </div>
-
-          {slipSite && slipRows.length === 0 && (
-            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              {slipType === 'issue' ? (
-                <>
-                  <b>This site's store has no stock yet</b> — item names appear here from the site store's inventory. Fill it in any of 3 ways (Inventory module):
-                  <ul className="list-disc ml-4 mt-1 space-y-0.5">
-                    <li><b>Opening Stock (item-wise)</b> — record material already lying at site.</li>
-                    <li><b>Issue / Transfer (OUT)</b> — move stock office store → this site's store.</li>
-                    <li><b>Receive a PO</b> into this site's store warehouse (Dispatch &amp; Receiving → Mark Received → pick the site warehouse).</li>
-                  </ul>
-                </>
-              ) : slipType === 'transfer' ? (
-                'This site store has no stock available to transfer or return.'
-              ) : (
-                'Nothing outstanding to return — no material issued (and not yet returned) on this date.'
-              )}
-            </div>
-          )}
-          {slipRows.length > 0 && (
-            <div className="overflow-x-auto">
-              <NumberedTable className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-500 border-b">
-                    <th className="text-left py-1 pr-2">Material</th>
-                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' || slipType === 'transfer' ? 'In Store' : 'Outstanding'}</th>
-                    {slipType === 'issue' && <th className="text-right py-1 px-2 whitespace-nowrap">Aaj Ka Plan</th>}
-                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">
-                      {slipType === 'issue' ? 'Issue Qty (suggested)' : slipType === 'transfer' ? 'Transfer Qty' : 'Return Qty'}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {slipRows.map((r, i) => (
-                    <tr key={r.item_master_id} className="border-b">
-                      <td className="py-1 pr-2 min-w-[150px] break-words">
-                        {r.name} <span className="text-gray-400 whitespace-nowrap">({r.unit})</span>
-                        {r.age_status === 'orange' && <span title={`${r.age_days} din se store mein pada hai (15 allowed)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300">🟠 {r.age_days}d</span>}
-                        {r.age_status === 'red' && <span title={`${r.age_days} din se store mein pada hai (max 30!)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-red-50 text-red-700 border-red-300">🔴 {r.age_days}d</span>}
-                      </td>
-                      <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{r.cap}</td>
-                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700 whitespace-nowrap">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
-                      <td className="py-1 pl-2 text-right min-w-[100px]">
-                        <input type="number" min="0" max={r.cap} step="0.01"
-                          disabled={slipType === 'issue' && r.cap <= 0}
-                          title={slipType === 'issue' && r.cap <= 0 ? 'Store mein 0 hai — pehle stock lao (Opening Stock / transfer / PO receive)' : ''}
-                          className={`input text-xs text-right w-full ${slipType === 'issue' && r.cap <= 0 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''} ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''} ${slipType === 'issue' && +r.qty > 0 && +r.qty === +r.planned_today ? 'bg-blue-50' : ''}`}
-                          value={r.qty} placeholder="0"
-                          onChange={e => setSlipRows(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </NumberedTable>
-            </div>
-          )}
-
-          <div>
-            <label className="label">Notes</label>
-            <input className="input" value={slipNotes} onChange={e => setSlipNotes(e.target.value)} placeholder="Optional — e.g. 3rd floor riser work" />
-          </div>
-
-          {/* Today's register — reprint any slip */}
-          {slipsToday.length > 0 && (
-            <div className="bg-gray-50 border rounded p-2">
-              <div className="text-[11px] font-semibold text-gray-600 mb-1">Slips on {slipDate}</div>
-              {slipsToday.map(s => (
-                <div key={s.id} className="flex flex-wrap items-center gap-2 text-[11px] py-0.5">
-                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : s.slip_type === 'transfer' ? 'text-purple-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
-                  <span>{s.shift === 'evening' ? '🌆' : s.shift === 'night' ? '🌙' : '🌅'}</span>
-                  <span className="text-gray-500">
-                    {s.slip_type === 'issue'
-                      ? `Issue → ${s.issued_to}`
-                      : s.slip_type === 'transfer'
-                        ? `Transfer 🚚 ${s.to_warehouse_name ? `→ ${s.to_warehouse_name}` : ''} (${s.issued_to})`
-                        : `Return ← ${s.issued_to}`}
-                  </span>
-                  <span className="text-gray-400">· {(s.items || []).length} item(s)</span>
-                  <a className="text-blue-700 hover:underline font-medium" href={`/site-slip/${s.id}/print`} target="_blank" rel="noreferrer">Print</a>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2 border-t">
-            <button onClick={() => setSlipModal(false)} className="btn btn-secondary">Close</button>
-            <button onClick={saveSlip} disabled={slipBusy || !slipSite} className="btn btn-primary">
-              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : slipType === 'transfer' ? 'Save Transfer Slip & Print' : 'Save Return Slip & Print'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      {/* SOP-10: Material use at site (Owner: Project Manager — Adarsh Kumar) */}
+      {slipModal && (
+        <Sop10MaterialModal
+          isOpen={slipModal}
+          onClose={() => setSlipModal(false)}
+          initialSiteId={slipSite || form.site_id}
+          sites={sites}
+          users={users}
+          onSlipCreated={() => {
+            if (form.site_id) loadStoreStock(form.site_id);
+          }}
+        />
+      )}
 
       {/* SPOS (mam 2026-07-29): PM's queue of weekly plans awaiting approval */}
       <Modal isOpen={pendingPlansModal} onClose={() => setPendingPlansModal(false)} title="Weekly Plans — Pending PM Approval">

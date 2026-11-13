@@ -638,6 +638,54 @@ const MODULE_DEFS = {
     },
   },
 
+  // ── SOP-10 (Material Use at Site — 5 Stages & Functional Roles) ─────────────
+  // Owner: Project Manager (Adarsh Kumar), Store Keeper (Ajmer), Site Engineer.
+  sop_10: {
+    label: 'SOP-10 (Material Use at Site)',
+    steps: [
+      { key: 's1_issue', label: 'S1: Area-Wise Mobile Issue Slip (Ajmer)' },
+      { key: 's2_install', label: 'S2: Daily Installation Report (Site Eng)' },
+      { key: 's3_flag', label: 'S3: Difference Flag Rule Card (ERP Auto)' },
+      { key: 's4_count', label: 'S4: Monthly Physical Count Sheet (Store + PM)' },
+      { key: 's5_return', label: 'S5: Return / Transfer Note (Never Wasted)' },
+      { key: 'store_keeper', label: 'Store Keeper (Ajmer)' },
+      { key: 'pm_lead', label: 'Project Manager (PM) — Adarsh Kumar' },
+      { key: 'site_eng', label: 'Site Engineer' },
+    ],
+    rows(db, { allRecords = false } = {}) {
+      return safeAll(db, `
+        SELECT s.id, s.name, s.client_name, s.site_engineer_id, s.created_at,
+               (SELECT slip_date FROM site_store_slips WHERE site_id=s.id AND slip_type='issue' ORDER BY id DESC LIMIT 1) AS last_issue_date,
+               (SELECT report_date FROM dpr WHERE site_id=s.id ORDER BY report_date DESC LIMIT 1) AS last_dpr_date,
+               (SELECT count_date FROM site_store_count_sheets WHERE site_id=s.id ORDER BY id DESC LIMIT 1) AS last_count_date,
+               (SELECT slip_date FROM site_store_slips WHERE site_id=s.id AND slip_type IN ('return','transfer') ORDER BY id DESC LIMIT 1) AS last_transfer_date
+          FROM sites s
+         WHERE COALESCE(s.status, 'active') = 'active'
+         ORDER BY s.id DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
+        const stamps = {
+          s1_issue: r.last_issue_date || null,
+          s2_install: r.last_dpr_date || null,
+          s3_flag: r.last_dpr_date || null,
+          s4_count: r.last_count_date || null,
+          s5_return: r.last_transfer_date || null,
+        };
+        let current_key = 's1_issue';
+        if (stamps.s1_issue) current_key = 's2_install';
+        if (stamps.s2_install) current_key = 's3_flag';
+        if (stamps.s4_count) current_key = 's5_return';
+        return {
+          id: r.id,
+          title: r.name,
+          subtitle: r.client_name || 'Active Site',
+          created_at: r.created_at,
+          owner_id: r.site_engineer_id || null,
+          stamps,
+          current_key,
+        };
+      });
+    },
+  },
+
   // ── Sales Billing (per-bill lifecycle: Raise → Approve → Send → Paid) ──────
   // Step times come from sales_bill_status_log (approved/sent/paid changed_at),
   // with sent_at as a fallback for Send. Each step is owned by whoever performed

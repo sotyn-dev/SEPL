@@ -9,7 +9,7 @@ import {
   FiCheckCircle, FiXCircle, FiClock, FiAlertTriangle, FiFileText,
   FiExternalLink, FiChevronRight, FiCheck, FiX, FiShield, FiRefreshCw,
   FiUser, FiCalendar, FiArrowRight, FiInfo, FiChevronDown, FiChevronUp,
-  FiDownload
+  FiDownload, FiCheckSquare
 } from 'react-icons/fi';
 
 export function parseProofUrls(raw) {
@@ -332,18 +332,18 @@ export default function ExecutiveApprovalCenter({ isDark = false }) {
             <FiShield size={20} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-amber-200 font-semibold">
                 Direct Approval Queue
               </span>
-            </div>
-            <h2 className="text-lg font-bold leading-tight flex items-center gap-2">
-              <span>Approvals Awaiting Your Sign-off</span>
               {hasAnyItems && (
-                <span className="bg-rose-500 text-white text-xs font-black px-2 py-0.5 rounded-full animate-bounce">
+                <span className="whitespace-nowrap flex-shrink-0 bg-rose-500 text-white text-[10px] sm:text-xs font-black px-2 py-0.5 rounded-full shadow-2xs">
                   {data.totalCount} Pending
                 </span>
               )}
+            </div>
+            <h2 className="text-base sm:text-lg font-bold leading-tight mt-0.5">
+              Approvals Awaiting Your Sign-off
             </h2>
           </div>
         </div>
@@ -1007,12 +1007,12 @@ export function ExecutiveApprovalHeaderButton() {
           window.location.href = '/#executive-approvals';
         }
       }}
-      className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-extrabold bg-gradient-to-r from-amber-500/15 to-rose-500/15 text-amber-800 hover:from-amber-500/25 hover:to-rose-500/25 border border-amber-300 rounded-full transition-all shadow-2xs"
+      className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 text-xs font-bold bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300 rounded-full transition-all shadow-2xs whitespace-nowrap flex-shrink-0"
       title={`${count} tasks/tickets created by you awaiting approval`}
     >
-      <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-      <span className="hidden sm:inline">Approvals</span>
-      <span className="bg-rose-600 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full shadow-inner">
+      <FiCheckSquare className="text-amber-700 w-3.5 h-3.5 flex-shrink-0" />
+      <span className="hidden md:inline font-semibold">Approvals</span>
+      <span className="bg-rose-600 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
         {count}
       </span>
     </button>
