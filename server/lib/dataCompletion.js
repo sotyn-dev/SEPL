@@ -37,7 +37,7 @@ const MODULES = {
       gst: { label: 'GST', cond: "TRIM(COALESCE(gst,''))<>''" },
       make: { label: 'Make', cond: "TRIM(COALESCE(make,''))<>''" },
       rate: { label: 'Rate', cond: 'COALESCE(current_price,0)>0' },
-      vendor: { label: 'Vendor', cond: 'vendor_id IS NOT NULL' },
+      // vendor is optional (mam 2026-11-14)
       source_type: { label: 'Source', cond: "TRIM(COALESCE(source_type,''))<>''" },
       bill_po_number: { label: 'Bill/PO No', cond: "TRIM(COALESCE(bill_po_number,''))<>''" },
       bill_po_date: { label: 'Bill/PO Date', cond: "TRIM(COALESCE(bill_po_date,''))<>''" },
