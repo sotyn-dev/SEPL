@@ -37,7 +37,7 @@ export default function EnablePushButton() {
     try {
       const pRes = await api.get('/notifications/preferences');
       setStrictlyEnforced(Boolean(pRes.data?._is_strictly_enforced));
-    } catch (_) {}
+    } catch (_) { }
 
     // Check if a subscription exists for this device
     try {
@@ -96,11 +96,10 @@ export default function EnablePushButton() {
     <div className="sm:relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className={`p-2 rounded-xl transition flex-shrink-0 relative ${
-          state === 'on'
+        className={`p-2 rounded-xl transition flex-shrink-0 relative ${state === 'on'
             ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200'
             : 'text-gray-500 hover:bg-gray-100'
-        }`}
+          }`}
         title={state === 'on' ? 'Push ON for this device' : 'Push OFF — click to enable'}
         aria-label={state === 'on' ? 'Push notifications on — manage' : 'Push notifications off — enable'}
       >
@@ -159,13 +158,12 @@ export default function EnablePushButton() {
                     <FiSmartphone className="text-gray-500" size={14} /> This Device
                   </span>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
-                      state === 'on'
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${state === 'on'
                         ? 'bg-emerald-100 text-emerald-800'
                         : state === 'denied'
-                        ? 'bg-rose-100 text-rose-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
                   >
                     {state === 'on' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />}
                     {state === 'on' ? 'Push Active' : state === 'denied' ? 'Blocked' : 'Disabled'}

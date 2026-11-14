@@ -239,7 +239,7 @@ export default function ItemMaster() {
     if (form.current_price === '' || form.current_price == null) missing.push('Rate');
     // Full pricing traceability (mam 2026-06-15): every rate must carry its
     // source — Vendor, Source Type, Bill/PO Number, Bill/PO Date.
-    if (!form.vendor_id) missing.push('Vendor');
+    // Vendor is optional: if (!form.vendor_id) missing.push('Vendor');
     if (!String(form.source_type || '').trim()) missing.push('Source Type');
     if (!String(form.bill_po_number || '').trim()) missing.push('Bill/PO Number');
     if (!String(form.bill_po_date || '').trim()) missing.push('Bill/PO Date');
@@ -1064,7 +1064,7 @@ export default function ItemMaster() {
                   on save. Number() also strips a leading 0 (018 → 18). */}
               <div><label className="label">Rate (₹) *</label><input className="input" type="number" min="0" step="0.01" value={form.current_price ?? ''} onChange={e => F('current_price', e.target.value === '' ? '' : Number(e.target.value))} /></div>
               <div>
-                <label className="label">Vendor (link) *</label>
+                <label className="label">Vendor (link)</label>
                 <SearchableSelect
                   options={vendors.map(v => ({ id: v.id, label: v.name, ...v }))}
                   value={form.vendor_id || null}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
@@ -173,9 +174,9 @@ export default function CandidateJoiningAlertModal() {
     `Hello ${currentCandidate.name}, greetings from Secured Engineers Pvt. Ltd. (SEPL)! We are looking forward to welcoming you on your scheduled joining date (${formatJoiningDate(currentCandidate.joining_date)}) for the role of ${currentCandidate.position}. Please feel free to reach out to HR if you need any assistance.`
   );
 
-  return (
+  const modal = (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-slate-900/75 backdrop-blur-xs animate-fadeIn"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-slate-900/75 backdrop-blur-xs animate-fadeIn"
       onClick={() => setIsOpen(false)}
     >
       <div
@@ -395,6 +396,10 @@ export default function CandidateJoiningAlertModal() {
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined'
+    ? createPortal(modal, document.body)
+    : modal;
 }
 
 // Header notification pill button

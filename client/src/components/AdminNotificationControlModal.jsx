@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FiX,
   FiBell,
@@ -40,9 +41,13 @@ export default function AdminNotificationControlModal({ isOpen, onClose }) {
   const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      loadMatrix();
-    }
+    if (!isOpen) return;
+    loadMatrix();
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
 
   const loadMatrix = async () => {
@@ -297,9 +302,9 @@ export default function AdminNotificationControlModal({ isOpen, onClose }) {
 
   if (!isOpen) return null;
 
-  return (
+  const modal = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-fade-in"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-fade-in"
       onClick={onClose}
     >
       <div
@@ -776,4 +781,8 @@ export default function AdminNotificationControlModal({ isOpen, onClose }) {
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined'
+    ? createPortal(modal, document.body)
+    : modal;
 }
